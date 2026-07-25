@@ -8,6 +8,7 @@ export interface Bookmark {
   username: string
   authType: AuthType
   privateKeyPath: string
+  jumpBookmarkId: string
   note: string
   hasSavedCredential: boolean
   createdAt: string
@@ -20,6 +21,8 @@ export interface ConnectInput {
   bookmarkId: string
   credential?: string
   rememberCredential?: boolean
+  jumpCredential?: string
+  rememberJumpCredential?: boolean
 }
 
 export type SessionStatus = 'connecting' | 'connected' | 'disconnected' | 'error'
@@ -49,6 +52,40 @@ export interface DirectoryEntry {
   modifiedAt: number
 }
 
+export type TerminalBackgroundFit = 'cover' | 'contain' | 'stretch' | 'tile'
+export type AppIconId = 'ssh' | 'classic' | 'neon' | 'light'
+
+export interface AppIconOption {
+  id: AppIconId
+  name: string
+  dataUrl: string
+}
+
+export interface AppIconSettings {
+  selected: AppIconId
+  options: AppIconOption[]
+}
+
+export interface TerminalSettings {
+  fontFamily: string
+  fontSize: number
+  foregroundColor: string
+  backgroundColor: string
+  backgroundOpacity: number
+  backgroundImagePath: string
+  backgroundImageFit: TerminalBackgroundFit
+}
+
+export const DEFAULT_TERMINAL_SETTINGS: TerminalSettings = {
+  fontFamily: 'Cascadia Mono, SFMono-Regular, Consolas, monospace',
+  fontSize: 14,
+  foregroundColor: '#e8eaed',
+  backgroundColor: '#111315',
+  backgroundOpacity: 1,
+  backgroundImagePath: '',
+  backgroundImageFit: 'cover'
+}
+
 export type TransferDirection = 'upload' | 'download'
 export type TransferStatus = 'queued' | 'scanning' | 'running' | 'conflict' | 'completed' | 'failed' | 'cancelled' | 'interrupted'
 export type ConflictResolution = 'overwrite' | 'skip' | 'rename'
@@ -56,6 +93,7 @@ export type ConflictResolution = 'overwrite' | 'skip' | 'rename'
 export interface TransferTask {
   id: string
   sessionId: string
+  bookmarkId: string
   direction: TransferDirection
   sourcePath: string
   destinationPath: string
@@ -84,6 +122,7 @@ export interface TransferRequest {
 }
 
 export interface AppApi {
+  platform: NodeJS.Platform
   bookmarks: {
     list(): Promise<Bookmark[]>
     save(input: BookmarkInput & { id?: string }): Promise<Bookmark>
@@ -96,10 +135,13 @@ export interface AppApi {
     disconnect(id: string): Promise<void>
     write(id: string, data: string): void
     resize(id: string, cols: number, rows: number): void
+    flow(id: string, paused: boolean): void
     hostKeyDecision(id: string, accept: boolean): void
   }
   files: {
     home(): Promise<string>
+    parentLocal(path: string): Promise<string>
+    remoteHome(sessionId: string): Promise<string>
     listLocal(path: string): Promise<DirectoryEntry[]>
     listRemote(sessionId: string, path: string): Promise<DirectoryEntry[]>
     choosePrivateKey(): Promise<string | null>
@@ -108,13 +150,23 @@ export interface AppApi {
     list(): Promise<TransferTask[]>
     enqueue(request: TransferRequest): Promise<TransferTask[]>
     cancel(id: string): Promise<void>
-    retry(id: string): Promise<void>
+    retry(id: string, sessionId: string): Promise<void>
     clearCompleted(): Promise<void>
     resolveConflict(id: string, resolution: ConflictResolution, applyToBatch: boolean): void
   }
   state: {
     getOpenBookmarks(): Promise<string[]>
     setOpenBookmarks(ids: string[]): Promise<void>
+    getSidebarCollapsed(): Promise<boolean>
+    setSidebarCollapsed(collapsed: boolean): Promise<void>
+  }
+  settings: {
+    getTerminal(): Promise<TerminalSettings>
+    saveTerminal(settings: TerminalSettings): Promise<TerminalSettings>
+    chooseTerminalBackground(): Promise<string | null>
+    loadTerminalBackground(path: string): Promise<string>
+    getAppIcons(): Promise<AppIconSettings>
+    setAppIcon(icon: AppIconId): Promise<AppIconId>
   }
   onEvent(listener: (event: AppEvent) => void): () => void
 }

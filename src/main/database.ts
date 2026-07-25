@@ -16,7 +16,8 @@ export class AppDatabase {
       CREATE TABLE IF NOT EXISTS bookmarks (
         id TEXT PRIMARY KEY, name TEXT NOT NULL, host TEXT NOT NULL, port INTEGER NOT NULL,
         username TEXT NOT NULL, authType TEXT NOT NULL, privateKeyPath TEXT NOT NULL DEFAULT '',
-        note TEXT NOT NULL DEFAULT '', createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL
+        jumpBookmarkId TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '',
+        createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS credentials (bookmarkId TEXT PRIMARY KEY, encrypted TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS known_hosts (
@@ -25,13 +26,45 @@ export class AppDatabase {
       );
       CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS transfers (
-        id TEXT PRIMARY KEY, sessionId TEXT NOT NULL, direction TEXT NOT NULL,
+        id TEXT PRIMARY KEY, sessionId TEXT NOT NULL, bookmarkId TEXT NOT NULL DEFAULT '', direction TEXT NOT NULL,
         sourcePath TEXT NOT NULL, destinationPath TEXT NOT NULL, displayName TEXT NOT NULL,
         status TEXT NOT NULL, bytesTotal INTEGER NOT NULL, bytesTransferred INTEGER NOT NULL,
         speed REAL NOT NULL, error TEXT, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL
       );
     `)
+    this.migrate()
     this.db.prepare("UPDATE transfers SET status = 'interrupted', error = '应用上次退出时传输未完成', updatedAt = ? WHERE status IN ('queued','scanning','running','conflict')").run(new Date().toISOString())
+  }
+
+  private migrate(): void {
+    let version = (this.db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
+    if (version < 1) {
+      const columns = this.db.prepare('PRAGMA table_info(bookmarks)').all() as { name: string }[]
+      this.db.exec('BEGIN')
+      try {
+        if (!columns.some((column) => column.name === 'jumpBookmarkId')) {
+          this.db.exec("ALTER TABLE bookmarks ADD COLUMN jumpBookmarkId TEXT NOT NULL DEFAULT ''")
+        }
+        this.db.exec('PRAGMA user_version = 1; COMMIT')
+        version = 1
+      } catch (error) {
+        this.db.exec('ROLLBACK')
+        throw error
+      }
+    }
+    if (version < 2) {
+      const columns = this.db.prepare('PRAGMA table_info(transfers)').all() as { name: string }[]
+      this.db.exec('BEGIN')
+      try {
+        if (!columns.some((column) => column.name === 'bookmarkId')) {
+          this.db.exec("ALTER TABLE transfers ADD COLUMN bookmarkId TEXT NOT NULL DEFAULT ''")
+        }
+        this.db.exec('PRAGMA user_version = 2; COMMIT')
+      } catch (error) {
+        this.db.exec('ROLLBACK')
+        throw error
+      }
+    }
   }
 
   listBookmarks(): Bookmark[] {
@@ -50,16 +83,16 @@ export class AppDatabase {
     const bookmark: Bookmark = {
       id: input.id ?? randomUUID(), name: input.name.trim(), host: input.host.trim(),
       port: input.port, username: input.username.trim(), authType: input.authType,
-      privateKeyPath: input.privateKeyPath.trim(), note: input.note.trim(),
+      privateKeyPath: input.privateKeyPath.trim(), jumpBookmarkId: input.jumpBookmarkId.trim(), note: input.note.trim(),
       hasSavedCredential: existing?.hasSavedCredential ?? false,
       createdAt: existing?.createdAt ?? now, updatedAt: now
     }
-    this.db.prepare(`INSERT INTO bookmarks (id,name,host,port,username,authType,privateKeyPath,note,createdAt,updatedAt)
-      VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,host=excluded.host,
+    this.db.prepare(`INSERT INTO bookmarks (id,name,host,port,username,authType,privateKeyPath,jumpBookmarkId,note,createdAt,updatedAt)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,host=excluded.host,
       port=excluded.port,username=excluded.username,authType=excluded.authType,
-      privateKeyPath=excluded.privateKeyPath,note=excluded.note,updatedAt=excluded.updatedAt`).run(
+      privateKeyPath=excluded.privateKeyPath,jumpBookmarkId=excluded.jumpBookmarkId,note=excluded.note,updatedAt=excluded.updatedAt`).run(
       bookmark.id, bookmark.name, bookmark.host, bookmark.port, bookmark.username,
-      bookmark.authType, bookmark.privateKeyPath, bookmark.note, bookmark.createdAt, bookmark.updatedAt
+      bookmark.authType, bookmark.privateKeyPath, bookmark.jumpBookmarkId, bookmark.note, bookmark.createdAt, bookmark.updatedAt
     )
     return bookmark
   }
@@ -108,10 +141,12 @@ export class AppDatabase {
   }
 
   saveTransfer(task: TransferTask): void {
-    this.db.prepare(`INSERT INTO transfers VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
-      destinationPath=excluded.destinationPath,status=excluded.status,bytesTotal=excluded.bytesTotal,
+    this.db.prepare(`INSERT INTO transfers
+      (id,sessionId,bookmarkId,direction,sourcePath,destinationPath,displayName,status,bytesTotal,bytesTransferred,speed,error,createdAt,updatedAt)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
+      sessionId=excluded.sessionId,bookmarkId=excluded.bookmarkId,destinationPath=excluded.destinationPath,status=excluded.status,bytesTotal=excluded.bytesTotal,
       bytesTransferred=excluded.bytesTransferred,speed=excluded.speed,error=excluded.error,updatedAt=excluded.updatedAt`).run(
-      task.id, task.sessionId, task.direction, task.sourcePath, task.destinationPath,
+      task.id, task.sessionId, task.bookmarkId, task.direction, task.sourcePath, task.destinationPath,
       task.displayName, task.status, task.bytesTotal, task.bytesTransferred, task.speed,
       task.error ?? null, task.createdAt, task.updatedAt
     )
