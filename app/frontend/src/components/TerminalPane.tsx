@@ -64,7 +64,7 @@ export function TerminalPane({ sessionId, visible, settings, backgroundImage, on
     searchAddon.current = search
     term.loadAddon(fit)
     term.loadAddon(search)
-    term.loadAddon(new WebLinksAddon((_event, uri) => { void window.api.system.openExternal(uri) }))
+    term.loadAddon(new WebLinksAddon((_event, uri) => { void window.api.system.openExternal(uri).catch((error) => console.warn('Failed to open terminal link', error)) }))
     term.open(container.current)
     fit.fit()
     terminal.current = term
@@ -79,11 +79,11 @@ export function TerminalPane({ sessionId, visible, settings, backgroundImage, on
         return false
       }
       if (commandKey && event.key.toLowerCase() === 'c' && term.hasSelection() && event.type === 'keydown') {
-        void window.api.system.writeClipboard(term.getSelection())
+        void window.api.system.writeClipboard(term.getSelection()).catch((error) => console.warn('Failed to copy terminal selection', error))
         return false
       }
       if (commandKey && event.key.toLowerCase() === 'v' && event.type === 'keydown') {
-        void window.api.system.readClipboard().then((text) => term.paste(text))
+        void window.api.system.readClipboard().then((text) => term.paste(text)).catch((error) => console.warn('Failed to paste into terminal', error))
         return false
       }
       return true

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowRight, Bookmark as BookmarkIcon, CircleHelp, CirclePlus, Edit3, Eye, EyeOff, FileInput, FolderOpen, Image as ImageIcon, KeyRound, Monitor, Moon, Network, Palette, PanelLeftClose, PanelLeftOpen, Plug, Power, Rocket, RotateCcw, Search, Server, Settings as SettingsIcon, SquareTerminal, Star, Sun, Trash2, X } from 'lucide-react'
+import { confirm as confirmDialog } from '@tauri-apps/plugin-dialog'
+import { ArrowRight, Bookmark as BookmarkIcon, CircleHelp, CirclePlus, Edit3, Eye, EyeOff, FileInput, FolderOpen, Image as ImageIcon, KeyRound, Minus, Monitor, Moon, Network, Palette, PanelLeftClose, PanelLeftOpen, Plug, Power, Rocket, RotateCcw, Search, Server, Settings as SettingsIcon, Square, SquareTerminal, Star, Sun, Trash2, X } from 'lucide-react'
 import { DEFAULT_TERMINAL_SETTINGS, type AppEvent, type AppIconId, type AppIconSettings, type Bookmark, type BookmarkInput, type ConflictResolution, type ConnectInput, type DeploymentDiffEntry, type DeploymentProfile, type HostKeyPrompt, type PortForwardProfile, type SessionStatus, type SshConfigPreview, type TerminalSettings, type TransferTask, type TunnelSummary, type UiTheme } from './types'
 import { TerminalPane } from './components/TerminalPane'
 import { SftpPane } from './components/SftpPane'
@@ -20,7 +21,7 @@ function clampSidebarWidth(width: number): number {
 }
 
 function errorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message.replace(/^Error invoking remote method '[^']+': Error: /, '')
+  if (error instanceof Error) return error.message
   return String(error)
 }
 
@@ -72,8 +73,8 @@ export function App(): React.JSX.Element {
     }).catch((error) => showError(errorMessage(error)))
   }, [])
 
-  useEffect(() => { if (stateRestored.current) void window.api.state.setOpenBookmarks(tabs.map((tab) => tab.bookmarkId)) }, [tabs])
-  useEffect(() => { if (stateRestored.current) void window.api.state.setSidebarCollapsed(sidebarCollapsed) }, [sidebarCollapsed])
+  useEffect(() => { if (stateRestored.current) void window.api.state.setOpenBookmarks(tabs.map((tab) => tab.bookmarkId)).catch((error) => showError(errorMessage(error))) }, [tabs])
+  useEffect(() => { if (stateRestored.current) void window.api.state.setSidebarCollapsed(sidebarCollapsed).catch((error) => showError(errorMessage(error))) }, [sidebarCollapsed])
 
   useEffect(() => {
     const media = window.matchMedia('(prefers-color-scheme: dark)')
@@ -149,7 +150,7 @@ export function App(): React.JSX.Element {
   }
 
   const closeTab = (tab: WorkspaceTab): void => {
-    if (tab.sessionId) void window.api.sessions.disconnect(tab.sessionId)
+    if (tab.sessionId) void window.api.sessions.disconnect(tab.sessionId).catch((error) => showError(errorMessage(error)))
     setTabs((current) => {
       const index = current.findIndex((item) => item.key === tab.key)
       const next = current.filter((item) => item.key !== tab.key)
@@ -159,7 +160,7 @@ export function App(): React.JSX.Element {
   }
 
   const removeBookmark = async (bookmark: Bookmark): Promise<void> => {
-    if (!window.confirm(`确定删除连接“${bookmark.name}”吗？`)) return
+    if (!await confirmDialog(`确定删除连接“${bookmark.name}”吗？`, { title: '删除连接', kind: 'warning' })) return
     try {
       await window.api.bookmarks.remove(bookmark.id)
       for (const tab of tabs.filter((item) => item.bookmarkId === bookmark.id)) closeTab(tab)
@@ -180,6 +181,18 @@ export function App(): React.JSX.Element {
     }
     try { await window.api.transfers.retry(task.id, tab.sessionId) }
     catch (error) { showError(errorMessage(error)) }
+  }
+
+  const cancelTransfer = async (task: TransferTask): Promise<void> => {
+    try { await window.api.transfers.cancel(task.id) }
+    catch (error) { showError(errorMessage(error)) }
+  }
+
+  const clearCompletedTransfers = async (): Promise<void> => {
+    try {
+      await window.api.transfers.clearCompleted()
+      setTransfers((current) => current.filter((item) => !['completed', 'cancelled'].includes(item.status)))
+    } catch (error) { showError(errorMessage(error)) }
   }
 
   useEffect(() => {
@@ -258,7 +271,7 @@ export function App(): React.JSX.Element {
     const next = clampSidebarWidth(width)
     sidebarWidthRef.current = next
     setSidebarWidth(next)
-    void window.api.state.setSidebarWidth(next)
+    void window.api.state.setSidebarWidth(next).catch((error) => showError(errorMessage(error)))
   }
 
   const startSidebarResize = (event: React.PointerEvent<HTMLDivElement>): void => {
@@ -277,7 +290,7 @@ export function App(): React.JSX.Element {
       window.removeEventListener('pointerup', finish)
       window.removeEventListener('pointercancel', finish)
       document.body.classList.remove('sidebar-resizing')
-      void window.api.state.setSidebarWidth(sidebarWidthRef.current)
+      void window.api.state.setSidebarWidth(sidebarWidthRef.current).catch((error) => showError(errorMessage(error)))
     }
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', finish)
@@ -293,11 +306,16 @@ export function App(): React.JSX.Element {
   }
 
   return <div className={`app-shell platform-${window.api.platform}`} data-theme={resolvedUiTheme} data-theme-mode={activeThemeMode}>
-    <header className="titlebar">
+    <header className="titlebar" data-tauri-drag-region="deep">
       <div className="app-brand">{selectedAppIcon ? <img className="app-logo" src={selectedAppIcon.dataUrl} alt="" /> : <span className="app-logo app-logo-fallback">&gt;_</span>}<span>SSH Client</span></div>
       <span className="titlebar-spacer" />
       <button className="icon-button titlebar-help" title="帮助 (F1)" aria-label="帮助" onClick={() => setHelpDialog(true)}><CircleHelp size={18} /></button>
       <button className="icon-button titlebar-settings" title="设置" aria-label="设置" onClick={() => setSettingsDialog(true)}><SettingsIcon size={18} /></button>
+      <div className="window-controls">
+        <button className="window-control" title="最小化" aria-label="最小化" onClick={() => void window.api.system.minimizeWindow().catch((error) => showError(errorMessage(error)))}><Minus size={16} /></button>
+        <button className="window-control" title="最大化或还原" aria-label="最大化或还原" onClick={() => void window.api.system.toggleMaximizeWindow().catch((error) => showError(errorMessage(error)))}><Square size={13} /></button>
+        <button className="window-control close" title="关闭" aria-label="关闭" onClick={() => void window.api.system.closeWindow().catch((error) => showError(errorMessage(error)))}><X size={17} /></button>
+      </div>
     </header>
     <div className={`main-layout ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`} style={{ '--sidebar-width': `${sidebarWidth}px` } as React.CSSProperties}>
       <aside className="sidebar">
@@ -341,7 +359,7 @@ export function App(): React.JSX.Element {
             </div><div className="session-actions">
             {workspaceView === 'files' && activeBookmark && activeTab?.sessionId && <button className="secondary-button" onClick={() => setDeploymentDialog(true)}><Rocket size={15} />部署</button>}
             {activeTab?.status === 'connected' && activeTab.sessionId && <button className="secondary-button" onClick={() => setTunnelDialog(true)}><Network size={15} />端口转发</button>}
-            {activeTab?.status === 'connected' && <button className="secondary-button" onClick={() => activeTab.sessionId && void window.api.sessions.disconnect(activeTab.sessionId)}><Power size={15} />断开</button>}
+            {activeTab?.status === 'connected' && <button className="secondary-button" onClick={() => activeTab.sessionId && void window.api.sessions.disconnect(activeTab.sessionId).catch((error) => showError(errorMessage(error)))}><Power size={15} />断开</button>}
           </div></div>
           <div className="session-stack">
             {tabs.map((tab) => { const bookmark = bookmarkMap.get(tab.bookmarkId); const reconnect = bookmark ? () => openBookmark(bookmark, { tabKey: tab.key }) : undefined; return <div key={tab.key} className={`session-view ${tab.key === activeKey ? 'active' : ''} ${workspaceView}`}>
@@ -350,7 +368,7 @@ export function App(): React.JSX.Element {
             </div> })}
           </div>
         </>}
-        {tabs.length > 0 && workspaceView === 'files' && <TransferPanel transfers={transfers} view={transferView} setView={setTransferView} onRetry={(task) => void retryTransfer(task)} onClear={async () => { await window.api.transfers.clearCompleted(); setTransfers((current) => current.filter((item) => !['completed', 'cancelled'].includes(item.status))) }} />}
+        {tabs.length > 0 && workspaceView === 'files' && <TransferPanel transfers={transfers} view={transferView} setView={setTransferView} onRetry={(task) => void retryTransfer(task)} onCancel={(task) => void cancelTransfer(task)} onClear={() => void clearCompletedTransfers()} />}
       </main>
     </div>
     {bookmarkDialog && <BookmarkDialog bookmark={bookmarkDialog === 'new' ? undefined : bookmarkDialog} connections={bookmarks} onClose={() => setBookmarkDialog(null)} onSaved={async () => { setBookmarkDialog(null); await reloadBookmarks() }} onError={showError} />}
@@ -470,7 +488,7 @@ function DeploymentDialog({ bookmark, sessionId, onClose, onError }: { bookmark:
     if (!diff) return
     const changed = diff.filter((item) => ['new', 'changed'].includes(item.status)).length
     const removals = profile.deleteExtraneous ? diff.filter((item) => item.status === 'remote-only').length : 0
-    if (!window.confirm(`将上传 ${changed} 个文件${removals ? `，并在上传全部成功后删除 ${removals} 个远端文件` : ''}。确定继续吗？`)) return
+    if (!await confirmDialog(`将上传 ${changed} 个文件${removals ? `，并在上传全部成功后删除 ${removals} 个远端文件` : ''}。确定继续吗？`, { title: '确认部署', kind: 'warning' })) return
     try { await window.api.deployments.execute(profile.id, sessionId); onClose() }
     catch (error) { onError(errorMessage(error)) }
   }
@@ -577,7 +595,7 @@ function Modal({ title, onClose, children, wide = false }: { title: string; onCl
   return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}><section className={`modal ${wide ? 'wide' : ''}`} role="dialog" aria-modal="true"><header><strong>{title}</strong><button className="icon-button" onClick={onClose}><X size={18} /></button></header>{children}</section></div>
 }
 
-function TransferPanel({ transfers, view, setView, onRetry, onClear }: { transfers: TransferTask[]; view: 'queue' | 'history'; setView(value: 'queue' | 'history'): void; onRetry(task: TransferTask): void; onClear(): void }): React.JSX.Element {
+function TransferPanel({ transfers, view, setView, onRetry, onCancel, onClear }: { transfers: TransferTask[]; view: 'queue' | 'history'; setView(value: 'queue' | 'history'): void; onRetry(task: TransferTask): void; onCancel(task: TransferTask): void; onClear(): void }): React.JSX.Element {
   const activeStatuses = ['queued', 'scanning', 'running', 'conflict']
   const shown = transfers.filter((item) => view === 'queue' ? activeStatuses.includes(item.status) || item.status === 'failed' : !activeStatuses.includes(item.status))
   const active = transfers.filter((item) => activeStatuses.includes(item.status))
@@ -589,7 +607,7 @@ function TransferPanel({ transfers, view, setView, onRetry, onClear }: { transfe
   return <section className="transfer-panel"><header><div className="transfer-tabs"><button className={view === 'queue' ? 'active' : ''} onClick={() => setView('queue')}>传输队列 <span>{active.length}</span></button><button className={view === 'history' ? 'active' : ''} onClick={() => setView('history')}>传输记录</button></div>{active.length > 0 && <div className="transfer-summary"><strong>{totalBytes ? Math.round(transferredBytes / totalBytes * 100) : 0}%</strong><span>{speedText}</span>{eta > 0 && <span>约 {eta >= 60 ? `${Math.ceil(eta / 60)} 分钟` : `${eta} 秒`}</span>}</div>}<button className="text-button" onClick={onClear}>清除已完成</button></header>
     <div className="transfer-list">{shown.length === 0 ? <div className="transfer-empty">{view === 'queue' ? '当前没有传输任务' : '暂无传输记录'}</div> : shown.slice(0, 40).map((task) => {
       const percent = task.bytesTotal ? Math.min(100, Math.round(task.bytesTransferred / task.bytesTotal * 100)) : 0
-      return <div className="transfer-row" key={task.id}><span className={`transfer-direction ${task.direction}`}>{task.direction === 'upload' ? '↑' : '↓'}</span><div className="transfer-info"><strong>{task.displayName}</strong><small>{task.error ?? `${task.sourcePath} → ${task.destinationPath}`}</small>{['running', 'scanning'].includes(task.status) && <div className="progress"><span style={{ width: `${percent}%` }} /></div>}</div><span className={`transfer-status ${task.status}`}>{task.status === 'running' ? `${percent}%` : ({ queued: '等待中', scanning: '扫描中', conflict: '等待确认', completed: '已完成', failed: '失败', cancelled: '已取消', interrupted: '已中断' } as Record<string, string>)[task.status]}</span><div className="transfer-actions">{activeStatuses.includes(task.status) && <button className="icon-button" title="取消" onClick={() => void window.api.transfers.cancel(task.id)}><X size={15} /></button>}{['failed', 'cancelled', 'interrupted'].includes(task.status) && <button className="text-button" onClick={() => onRetry(task)}>重试</button>}</div></div>
+      return <div className="transfer-row" key={task.id}><span className={`transfer-direction ${task.direction}`}>{task.direction === 'upload' ? '↑' : '↓'}</span><div className="transfer-info"><strong>{task.displayName}</strong><small>{task.error ?? `${task.sourcePath} → ${task.destinationPath}`}</small>{['running', 'scanning'].includes(task.status) && <div className="progress"><span style={{ width: `${percent}%` }} /></div>}</div><span className={`transfer-status ${task.status}`}>{task.status === 'running' ? `${percent}%` : ({ queued: '等待中', scanning: '扫描中', conflict: '等待确认', completed: '已完成', failed: '失败', cancelled: '已取消', interrupted: '已中断' } as Record<string, string>)[task.status]}</span><div className="transfer-actions">{activeStatuses.includes(task.status) && <button className="icon-button" title="取消" onClick={() => onCancel(task)}><X size={15} /></button>}{['failed', 'cancelled', 'interrupted'].includes(task.status) && <button className="text-button" onClick={() => onRetry(task)}>重试</button>}</div></div>
     })}</div>
   </section>
 }

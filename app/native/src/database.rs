@@ -1,8 +1,4 @@
-use std::{
-    fs,
-    path::{Path, PathBuf},
-    sync::Mutex,
-};
+use std::{fs, path::Path, sync::Mutex};
 
 use chrono::Utc;
 use keyring::Entry;
@@ -17,132 +13,8 @@ pub struct Database {
     credential_service: String,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn create_legacy(path: &Path, modern: bool, name: &str) {
-        let db = Connection::open(path).unwrap();
-        let bookmark_columns = if modern {
-            "jumpBookmarkId TEXT NOT NULL,note TEXT NOT NULL,groupName TEXT NOT NULL,favorite INTEGER NOT NULL,lastConnectedAt TEXT NOT NULL,keepaliveEnabled INTEGER NOT NULL,keepaliveIntervalSeconds INTEGER NOT NULL,keepaliveCountMax INTEGER NOT NULL,"
-        } else {
-            "note TEXT NOT NULL,"
-        };
-        db.execute_batch(&format!("CREATE TABLE bookmarks(id TEXT PRIMARY KEY,name TEXT NOT NULL,host TEXT NOT NULL,port INTEGER NOT NULL,username TEXT NOT NULL,authType TEXT NOT NULL,privateKeyPath TEXT NOT NULL,{bookmark_columns}createdAt TEXT NOT NULL,updatedAt TEXT NOT NULL);CREATE TABLE credentials(bookmarkId TEXT PRIMARY KEY,encrypted TEXT NOT NULL);CREATE TABLE known_hosts(host TEXT,port INTEGER,fingerprint TEXT);CREATE TABLE settings(key TEXT,value TEXT);CREATE TABLE transfers(id TEXT PRIMARY KEY,sessionId TEXT NOT NULL,{}direction TEXT NOT NULL,sourcePath TEXT NOT NULL,destinationPath TEXT NOT NULL,displayName TEXT NOT NULL,status TEXT NOT NULL,bytesTotal INTEGER NOT NULL,bytesTransferred INTEGER NOT NULL,speed REAL NOT NULL,error TEXT,createdAt TEXT NOT NULL,updatedAt TEXT NOT NULL);",if modern{"bookmarkId TEXT NOT NULL,"}else{""})).unwrap();
-        let now = "2026-01-01T00:00:00Z";
-        if modern {
-            db.execute(
-                "INSERT INTO bookmarks VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                params![
-                    "b1", name, "host", 22, "user", "password", "", "", "note", "group", 1, "", 1,
-                    15, 3, now, now
-                ],
-            )
-            .unwrap();
-            db.execute(
-                "INSERT INTO transfers VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                params![
-                    "t1",
-                    "s1",
-                    "b1",
-                    "upload",
-                    "/a",
-                    "/b",
-                    "a",
-                    "running",
-                    1,
-                    0,
-                    0.0,
-                    Option::<String>::None,
-                    now,
-                    now
-                ],
-            )
-            .unwrap();
-        } else {
-            db.execute(
-                "INSERT INTO bookmarks VALUES(?,?,?,?,?,?,?,?,?,?)",
-                params![
-                    "b1", name, "host", 22, "user", "password", "", "note", now, now
-                ],
-            )
-            .unwrap();
-            db.execute(
-                "INSERT INTO transfers VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                params![
-                    "t1",
-                    "s1",
-                    "upload",
-                    "/a",
-                    "/b",
-                    "a",
-                    "running",
-                    1,
-                    0,
-                    0.0,
-                    Option::<String>::None,
-                    now,
-                    now
-                ],
-            )
-            .unwrap();
-        }
-        db.execute("INSERT INTO credentials VALUES('b1','secret')", [])
-            .unwrap();
-    }
-
-    #[test]
-    fn imports_v0_without_secrets_and_applies_defaults() {
-        let temp = tempfile::tempdir().unwrap();
-        let legacy = temp.path().join("legacy.db");
-        create_legacy(&legacy, false, "old");
-        let db = Database::open(
-            &temp.path().join("new.db"),
-            &[legacy],
-            "test.credentials.v0",
-        )
-        .unwrap();
-        let bookmark = db.list_bookmarks().unwrap().remove(0);
-        assert_eq!(bookmark.name, "old");
-        assert_eq!(bookmark.keepalive_interval_seconds, 15);
-        assert!(!bookmark.has_saved_credential);
-        let transfer = db.list_transfers().unwrap().remove(0);
-        assert_eq!(transfer.status, TransferStatus::Interrupted);
-        assert!(transfer.bookmark_id.is_empty());
-        assert_eq!(
-            db.get_setting::<String>("tauriMigrationSource", String::new()),
-            "electron"
-        );
-    }
-
-    #[test]
-    fn prefers_first_migration_source() {
-        let temp = tempfile::tempdir().unwrap();
-        let preview = temp.path().join("tauri-preview.db");
-        let electron = temp.path().join("electron.db");
-        create_legacy(&preview, true, "preview");
-        create_legacy(&electron, true, "electron");
-        let db = Database::open(
-            &temp.path().join("new.db"),
-            &[preview, electron],
-            "test.credentials.priority",
-        )
-        .unwrap();
-        assert_eq!(db.list_bookmarks().unwrap().remove(0).name, "preview");
-        assert_eq!(
-            db.get_setting::<String>("tauriMigrationSource", String::new()),
-            "tauri-preview"
-        );
-    }
-}
-
 impl Database {
-    pub fn open(
-        path: &Path,
-        legacy_paths: &[PathBuf],
-        credential_service: &str,
-    ) -> Result<Self, String> {
-        let is_new = !path.exists();
+    pub fn open(path: &Path, credential_service: &str) -> Result<Self, String> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
@@ -152,11 +24,6 @@ impl Database {
             credential_service: credential_service.into(),
         };
         database.initialize()?;
-        if is_new {
-            if let Some(source) = legacy_paths.iter().find(|candidate| candidate.is_file()) {
-                database.import_legacy(source)?;
-            }
-        }
         Ok(database)
     }
 
@@ -183,31 +50,6 @@ impl Database {
             PRAGMA user_version = 5;
         "#))?;
         self.with_conn(|db| db.execute("UPDATE transfers SET status='interrupted', error='应用上次退出时传输未完成', updatedAt=? WHERE status IN ('queued','scanning','running','conflict')", [Utc::now().to_rfc3339()]).map(|_| ()))
-    }
-
-    fn import_legacy(&self, source: &Path) -> Result<(), String> {
-        let source = source.to_string_lossy().to_string();
-        self.with_conn(|db| {
-            db.execute("ATTACH DATABASE ? AS legacy", [&source])?;
-            let table_exists = |db: &Connection, table: &str| -> rusqlite::Result<bool> { db.query_row("SELECT EXISTS(SELECT 1 FROM legacy.sqlite_master WHERE type='table' AND name=?)", [table], |row| row.get(0)) };
-            let columns = |db: &Connection, table: &str| -> rusqlite::Result<Vec<String>> { let mut statement=db.prepare(&format!("PRAGMA legacy.table_info({table})"))?;statement.query_map([],|row|row.get(1))?.collect() };
-            let mut statements=vec!["BEGIN".to_string()];
-            if table_exists(db,"bookmarks")? { let c=columns(db,"bookmarks")?;let has=|name:&str|c.iter().any(|item|item==name);let value=|name:&str,fallback:&str|if has(name){name.to_string()}else{fallback.to_string()};statements.push(format!("INSERT OR REPLACE INTO bookmarks(id,name,host,port,username,authType,privateKeyPath,jumpBookmarkId,note,groupName,favorite,lastConnectedAt,keepaliveEnabled,keepaliveIntervalSeconds,keepaliveCountMax,createdAt,updatedAt) SELECT id,name,host,port,username,authType,privateKeyPath,{},{},{},{},{},{},{},{},createdAt,updatedAt FROM legacy.bookmarks",value("jumpBookmarkId","''"),value("note","''"),value("groupName","''"),value("favorite","0"),value("lastConnectedAt","''"),value("keepaliveEnabled","1"),value("keepaliveIntervalSeconds","15"),value("keepaliveCountMax","3"))); }
-            if table_exists(db,"known_hosts")? { statements.push("INSERT OR REPLACE INTO known_hosts SELECT host,port,fingerprint FROM legacy.known_hosts".into()); }
-            if table_exists(db,"settings")? { statements.push("INSERT OR REPLACE INTO settings SELECT key,value FROM legacy.settings".into()); }
-            if table_exists(db,"transfers")? { let c=columns(db,"transfers")?;let bookmark=if c.iter().any(|item|item=="bookmarkId"){"bookmarkId"}else{"''"};statements.push(format!("INSERT OR REPLACE INTO transfers(id,sessionId,bookmarkId,direction,sourcePath,destinationPath,displayName,status,bytesTotal,bytesTransferred,speed,error,createdAt,updatedAt) SELECT id,sessionId,{bookmark},direction,sourcePath,destinationPath,displayName,CASE WHEN status IN ('queued','scanning','running','conflict') THEN 'interrupted' ELSE status END,bytesTotal,bytesTransferred,speed,CASE WHEN status IN ('queued','scanning','running','conflict') THEN '迁移时任务未完成' ELSE error END,createdAt,updatedAt FROM legacy.transfers")); }
-            statements.push("COMMIT".into());
-            let result = db.execute_batch(&statements.join(";"));
-            if result.is_err() { let _ = db.execute_batch("ROLLBACK;"); }
-            let _ = db.execute_batch("DETACH DATABASE legacy;");
-            result
-        })?;
-        let origin = if source.contains("tauri-preview") {
-            "tauri-preview"
-        } else {
-            "electron"
-        };
-        self.set_setting("tauriMigrationSource", &origin)
     }
 
     fn with_conn<T>(

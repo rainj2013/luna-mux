@@ -1,4 +1,5 @@
 export type AuthType = 'password' | 'privateKey' | 'agent'
+export type Platform = 'darwin' | 'win32' | 'linux'
 
 export interface Bookmark {
   id: string
@@ -211,11 +212,14 @@ export interface TransferRequest {
 }
 
 export interface AppApi {
-  platform: NodeJS.Platform
+  platform: Platform
   system: {
     openExternal(url: string): Promise<void>
     readClipboard(): Promise<string>
     writeClipboard(text: string): Promise<void>
+    minimizeWindow(): Promise<void>
+    toggleMaximizeWindow(): Promise<void>
+    closeWindow(): Promise<void>
   }
   bookmarks: {
     list(): Promise<Bookmark[]>
@@ -246,7 +250,6 @@ export interface AppApi {
     preview(remote: boolean, sessionId: string | undefined, path: string, position: 'start' | 'end'): Promise<FilePreview>
     getFavorites(bookmarkId: string): Promise<{ local: string[]; remote: string[] }>
     setFavorites(bookmarkId: string, value: { local: string[]; remote: string[] }): Promise<void>
-    filePath(file: File): string
     chooseLocalDirectory(): Promise<string | null>
     choosePrivateKey(): Promise<string | null>
   }

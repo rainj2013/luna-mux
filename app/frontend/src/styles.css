@@ -10,6 +10,8 @@
 html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 button, input, select, textarea { font: inherit; letter-spacing: 0; }
 button { color: inherit; }
+.bootstrap-error { width: 100%; height: 100%; padding: 32px; display: grid; place-content: center; gap: 8px; color: #732525; background: #f7f7f7; font-family: "Segoe UI", "PingFang SC", sans-serif; }
+.bootstrap-error span { max-width: 680px; overflow-wrap: anywhere; color: #555; font: 12px/1.5 Consolas, monospace; }
 
 .app-shell {
   --app-bg: #f4f6f8;
@@ -85,9 +87,14 @@ button { color: inherit; }
 }
 .app-shell input, .app-shell select, .app-shell textarea { color: var(--text); background-color: var(--input-bg); }
 .app-shell ::selection { color: var(--text-strong); background: var(--accent-surface); }
-.titlebar { position: relative; -webkit-app-region: drag; display: flex; align-items: center; padding: 0 16px; background: var(--surface); border-bottom: 1px solid var(--border); user-select: none; }
-.titlebar .titlebar-help, .titlebar .titlebar-settings { -webkit-app-region: no-drag; flex: none; }
+.titlebar { position: relative; display: flex; align-items: center; padding: 0 16px; background: var(--surface); border-bottom: 1px solid var(--border); user-select: none; }
+.titlebar .titlebar-help, .titlebar .titlebar-settings { flex: none; }
 .titlebar-spacer { flex: 1; }
+.window-controls { align-self: stretch; display: none; margin: 0 -16px 0 6px; }
+.platform-win32 .window-controls { display: flex; }
+.window-control { width: 46px; height: 100%; padding: 0; display: grid; place-items: center; color: var(--text-muted); background: transparent; border: 0; border-radius: 0; cursor: default; }
+.window-control:hover { color: var(--text-strong); background: var(--surface-hover); }
+.window-control.close:hover { color: #fff; background: #c42b1c; }
 .app-brand { position: absolute; left: 50%; display: flex; align-items: center; gap: 10px; transform: translateX(-50%); font-size: 14px; font-weight: 600; }
 .app-logo { display: block; width: 26px; height: 26px; object-fit: contain; }
 .app-logo-fallback { display: grid; place-items: center; border-radius: 5px; color: white; background: #171b21; font: 700 11px/1 Consolas, monospace; }
@@ -181,6 +188,7 @@ body.sidebar-resizing { cursor: col-resize; user-select: none; }
 .file-browser { min-width: 0; min-height: 0; display: grid; grid-template-rows: 43px 38px 28px minmax(0, 1fr); }
 .file-browser:first-child { border-right: 1px solid var(--border); }
 .file-browser:last-child { border-left: 1px solid var(--border); }
+.file-browser.transfer-drop-target { box-shadow: inset 0 0 0 2px var(--accent); background: var(--accent-surface); }
 .file-toolbar { min-width: 0; padding: 5px 7px; display: flex; align-items: center; gap: 3px; border-bottom: 1px solid var(--border); }
 .file-toolbar strong { min-width: 46px; display: inline-flex; align-items: center; gap: 5px; font-size: 12px; }
 .file-toolbar form { min-width: 80px; flex: 1; }
@@ -204,6 +212,10 @@ body.sidebar-resizing { cursor: col-resize; user-select: none; }
 .file-virtual-space .file-row { position: absolute; top: 0; left: 0; width: 100%; }
 .file-row:hover { background: var(--surface-hover); }
 .file-row.selected { color: var(--accent-text); background: var(--accent-surface); }
+.file-row.transfer-folder-target { box-shadow: inset 0 0 0 1px var(--accent); background: var(--surface-active); }
+.is-file-dragging, .is-file-dragging * { cursor: grabbing !important; user-select: none !important; }
+.transfer-drag-ghost { position: fixed; z-index: 260; max-width: 240px; height: 30px; padding: 0 9px; display: flex; align-items: center; gap: 6px; color: var(--text-strong); background: var(--surface-raised); border: 1px solid var(--border-strong); border-radius: 6px; box-shadow: 0 6px 18px var(--shadow); pointer-events: none; }
+.transfer-drag-ghost span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 11px; }
 .file-name { min-width: 0; display: flex; align-items: center; gap: 6px; }
 .file-name svg { flex: none; }
 .file-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -279,6 +291,13 @@ body.sidebar-resizing { cursor: col-resize; user-select: none; }
 .modal.wide { width: min(760px, 100%); }
 .modal > header { height: 46px; padding: 0 12px 0 17px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); }
 .modal > header strong { font-size: 14px; }
+.file-operation-backdrop { z-index: 185; }
+.file-operation-dialog { width: min(400px, 100%); overflow: hidden; }
+.file-operation-form { padding: 17px; display: grid; gap: 12px; }
+.file-operation-form label { display: grid; gap: 6px; color: var(--text-muted); font-size: 11px; }
+.file-operation-form input { width: 100%; height: 34px; padding: 0 9px; border: 1px solid var(--border-strong); border-radius: 5px; outline: 0; }
+.file-operation-form input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--focus-ring); }
+.file-operation-form .dialog-actions { margin-top: 2px; }
 .help-backdrop { position: fixed; z-index: 190; inset: 0; display: grid; place-items: center; padding: 20px; background: var(--overlay); }
 .help-dialog { width: min(980px, 100%); height: min(720px, calc(100vh - 40px)); min-height: 0; display: grid; grid-template-rows: 50px minmax(0, 1fr); overflow: hidden; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface); box-shadow: 0 18px 54px var(--shadow); }
 .help-dialog > header { min-width: 0; padding: 0 12px 0 17px; display: flex; align-items: center; gap: 12px; border-bottom: 1px solid var(--border); }

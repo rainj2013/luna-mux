@@ -42,14 +42,6 @@ npm run dev
 
 `npm run dev` 会启动 Vite 前端和 Tauri 桌面应用。只启动或构建 Web 前端可使用 `npm run web:dev`、`npm run web:build`。
 
-## 数据迁移
-
-正式应用名为 `SSH Client`，标识符为 `com.local.sshclient`。
-
-首次创建正式 Tauri 数据库时，应用会优先复制旧 `SSH Client Tauri Preview` 的非敏感数据；如果不存在预览数据，再读取旧 Electron 版数据库。连接、设置、Host Key 和传输历史会迁移，来源数据库不会被修改。
-
-旧版密码不会迁移：Electron `safeStorage` 数据无法由 Rust 安全解密，Preview 凭据也属于不同的系统安全存储命名空间。首次连接时需要重新输入密码，之后可保存到当前应用的 Keychain 或 Credential Manager。
-
 ## 检查
 
 ```bash
@@ -99,4 +91,4 @@ npm run build:win
 npm run build:win:offline
 ```
 
-离线包体积更大，构建机首次打包仍需联网下载 Microsoft WebView2 离线安装器。发布前应在 Windows 真机验证普通包和离线包的安装、旧版迁移、覆盖安装、卸载及重启恢复。
+离线包体积更大，构建机首次打包仍需联网下载 Microsoft WebView2 离线安装器。发布前应在 Windows 真机验证普通包和离线包的安装、覆盖安装、卸载及重启恢复。

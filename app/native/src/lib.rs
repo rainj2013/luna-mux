@@ -10,13 +10,17 @@ mod tunnels;
 
 use std::{
     collections::HashSet,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
 };
 
 use commands::*;
 use database::Database;
 use sessions::SessionManager;
-use tauri::{Manager, RunEvent};
+use tauri::{Manager, RunEvent, Theme};
 use transfers::TransferManager;
 use tunnels::TunnelManager;
 
@@ -25,7 +29,18 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
-        .on_menu_event(|app, event| desktop::handle_menu(app, event.id().as_ref()));
+        .on_menu_event(|app, event| desktop::handle_menu(app, event.id().as_ref()))
+        .on_window_event(|window, event| {
+            #[cfg(target_os = "macos")]
+            if window.label() == "main" {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = (window, event);
+        });
     #[cfg(target_os = "macos")]
     let builder = builder.menu(desktop::menu);
     builder
@@ -34,20 +49,25 @@ pub fn run() {
                 .path()
                 .app_data_dir()
                 .map_err(|error| error.to_string())?;
-            let base = dirs::data_dir().unwrap_or_default();
-            let legacy = [
-                base.join("com.local.sshclient.tauri-preview")
-                    .join("ssh-client.db"),
-                base.join("ssh-client").join("ssh-client.db"),
-            ]
-            .into_iter()
-            .filter(|path| *path != data_dir.join("ssh-client.db"))
-            .collect::<Vec<_>>();
             let database = Arc::new(Database::open(
                 &data_dir.join("ssh-client.db"),
-                &legacy,
                 &format!("{}.credentials", app.config().identifier),
             )?);
+            let selected_theme = database.get_setting("uiTheme", models::UiTheme::System);
+            let window = app
+                .get_webview_window("main")
+                .ok_or_else(|| "找不到主窗口".to_string())?;
+            window
+                .set_theme(match selected_theme {
+                    models::UiTheme::System => None,
+                    models::UiTheme::Light => Some(Theme::Light),
+                    models::UiTheme::Dark => Some(Theme::Dark),
+                })
+                .map_err(|error| error.to_string())?;
+            #[cfg(target_os = "windows")]
+            window
+                .set_decorations(false)
+                .map_err(|error| error.to_string())?;
             let selected_icon = database.get_setting("appIcon", models::AppIconId::Ssh);
             app_icon::apply_at_startup(app.handle(), &selected_icon)?;
             let sessions = SessionManager::new(app.handle().clone(), database.clone());
@@ -60,6 +80,7 @@ pub fn run() {
                 transfers,
                 tunnels,
                 allowed_imports: Mutex::new(HashSet::new()),
+                exit_cleanup_started: AtomicBool::new(false),
             });
             Ok(())
         })
@@ -127,9 +148,13 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("failed to build SSH Client")
-        .run(|app, event| {
-            if matches!(event, RunEvent::ExitRequested { .. } | RunEvent::Exit) {
+        .run(|app, event| match event {
+            RunEvent::ExitRequested { api, code, .. } => {
                 let state = app.state::<AppState>();
+                if state.exit_cleanup_started.swap(true, Ordering::AcqRel) {
+                    return;
+                }
+                api.prevent_exit();
                 let sessions = state.sessions.clone();
                 let tunnels = state.tunnels.clone();
                 let ids = sessions
@@ -137,12 +162,26 @@ pub fn run() {
                     .into_iter()
                     .map(|item| item.id)
                     .collect::<Vec<_>>();
-                tauri::async_runtime::block_on(async move {
-                    for id in ids {
-                        tunnels.stop_session(&id).await;
-                    }
-                    sessions.disconnect_all().await;
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let cleanup = async {
+                        for id in ids {
+                            tunnels.stop_session(&id).await;
+                        }
+                        sessions.disconnect_all().await;
+                    };
+                    let _ = tokio::time::timeout(Duration::from_secs(5), cleanup).await;
+                    app.exit(code.unwrap_or(0));
                 });
             }
+            #[cfg(target_os = "macos")]
+            RunEvent::Reopen { .. } => {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.unminimize();
+                    let _ = window.set_focus();
+                }
+            }
+            _ => {}
         });
 }

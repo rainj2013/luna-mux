@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
+import { confirm as confirmDialog } from '@tauri-apps/plugin-dialog'
 import { ArrowLeft, ArrowRight, ArrowUp, ChevronLeft, ChevronRight, Eye, File, Folder, FolderPlus, Link, Pencil, Plug, RefreshCw, Search, Server, Star, Trash2, X } from 'lucide-react'
 import type { DirectoryEntry, FilePreview } from '../types'
 
 function remoteParentPath(path: string): string { return path === '/' ? '/' : path.slice(0, path.lastIndexOf('/')) || '/' }
-function errorMessage(error: unknown): string { return (error instanceof Error ? error.message : String(error)).replace(/^Error invoking remote method '[^']+': Error: /, '') }
+function errorMessage(error: unknown): string { return error instanceof Error ? error.message : String(error) }
 function entryName(path: string): string { return path.replace(/[\\/]$/, '').split(/[\\/]/).pop() ?? path }
 function childPath(directory: string, name: string, remote: boolean): string {
   if (remote) return directory === '/' ? `/${name}` : `${directory}/${name}`
@@ -24,7 +25,23 @@ interface BrowserProps {
   onPath(path: string): void; onBack(): void; onForward(): void; onParent(): void; onRefresh(): void;
   onSelect(path: string, additive: boolean, range: boolean, visiblePaths: string[]): void; onSelectAll(paths: string[]): void;
   onTransferDrop(paths: string[], sourceRemote: boolean): void; onPrefetch?(path: string): void;
+  onTransferDragStart(paths: string[], sourceRemote: boolean, event: React.PointerEvent<HTMLDivElement>): void;
+  transferDropActive: boolean; transferDropDirectory?: string;
   onToggleFavorite(): void; onCreateDirectory(): void; onRename(path: string): void; onDelete(paths: string[]): void; onPreview(path: string): void;
+}
+
+interface TransferDropTarget { remote: boolean; directory?: string }
+interface FileNameDialogState { mode: 'create' | 'rename'; remote: boolean; path?: string; value: string; error: string; submitting: boolean }
+
+function transferDropTargetAt(x: number, y: number): TransferDropTarget | null {
+  const element = document.elementFromPoint(x, y) as HTMLElement | null
+  const browser = element?.closest<HTMLElement>('[data-file-browser-side]')
+  if (!browser) return null
+  const row = element?.closest<HTMLElement>('[data-entry-kind="directory"]')
+  return {
+    remote: browser.dataset.fileBrowserSide === 'remote',
+    directory: row && browser.contains(row) ? row.dataset.entryPath : undefined
+  }
 }
 
 function FileBrowser(props: BrowserProps): React.JSX.Element {
@@ -54,18 +71,7 @@ function FileBrowser(props: BrowserProps): React.JSX.Element {
   const selectedEntries = shown.filter((entry) => props.selected.has(entry.path))
   const previewable = selectedEntries.length === 1 && selectedEntries[0]?.kind === 'file'
 
-  return <section ref={browser} className="file-browser" onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
-    event.preventDefault()
-    const raw = event.dataTransfer.getData('application/x-ssh-client-files')
-    if (!raw && props.remote && event.dataTransfer.files.length) {
-      const paths = [...event.dataTransfer.files].map((file) => window.api.files.filePath(file)).filter(Boolean)
-      if (paths.length) props.onTransferDrop(paths, false)
-      return
-    }
-    if (!raw) return
-    try { const data = JSON.parse(raw) as { paths: string[]; remote: boolean }; if (data.remote !== props.remote) props.onTransferDrop(data.paths, data.remote) }
-    catch { /* Ignore unrelated drag payloads. */ }
-  }}>
+  return <section ref={browser} data-file-browser-side={props.remote ? 'remote' : 'local'} className={`file-browser ${props.transferDropActive ? 'transfer-drop-target' : ''}`}>
     <header className="file-toolbar">
       <strong>{props.remote ? <Server size={15} /> : <Folder size={15} />}{props.title}</strong>
       <button className="icon-button" title="后退" disabled={!props.canBack} onClick={props.onBack}><ChevronLeft size={16} /></button>
@@ -97,9 +103,9 @@ function FileBrowser(props: BrowserProps): React.JSX.Element {
       {!props.loading && !props.error && shown.length === 0 && <div className="file-message">此目录为空</div>}
       {shown.length > 0 && <div className="file-virtual-space" style={{ height: virtualizer.getTotalSize() }}>{virtualizer.getVirtualItems().map((item) => {
         const entry = shown[item.index]!
-        return <div key={entry.path} className={`file-row ${props.selected.has(entry.path) ? 'selected' : ''}`} style={{ transform: `translateY(${item.start}px)` }}
-          draggable onDragStart={(event) => event.dataTransfer.setData('application/x-ssh-client-files', JSON.stringify({ paths: props.selected.has(entry.path) ? [...props.selected] : [entry.path], remote: props.remote }))}
-          onPointerDown={() => { if (entry.kind === 'directory') props.onPrefetch?.(entry.path) }}
+        const dragPaths = props.selected.has(entry.path) ? [...props.selected] : [entry.path]
+        return <div key={entry.path} data-entry-kind={entry.kind} data-entry-path={entry.path} className={`file-row ${props.selected.has(entry.path) ? 'selected' : ''} ${props.transferDropDirectory === entry.path ? 'transfer-folder-target' : ''}`} style={{ transform: `translateY(${item.start}px)` }}
+          onPointerDown={(event) => { if (entry.kind === 'directory') props.onPrefetch?.(entry.path); props.onTransferDragStart(dragPaths, props.remote, event) }}
           onClick={(event) => props.onSelect(entry.path, event.ctrlKey || event.metaKey, event.shiftKey, paths)}
           onDoubleClick={() => entry.kind === 'directory' ? props.onPath(entry.path) : props.onPreview(entry.path)}>
           <span className="file-name"><EntryIcon kind={entry.kind} /><span title={entry.name}>{entry.name}</span></span>
@@ -124,6 +130,8 @@ export function SftpPane({ sessionId, bookmarkId, connected, visible, onError, o
   const [remoteNavigation, setRemoteNavigation] = useState<NavigationState>({ items: [], index: -1 })
   const [favorites, setFavorites] = useState({ local: [] as string[], remote: [] as string[] })
   const [preview, setPreview] = useState<{ remote: boolean; path: string; value: FilePreview } | null>(null)
+  const [fileNameDialog, setFileNameDialog] = useState<FileNameDialogState | null>(null)
+  const [transferDrag, setTransferDrag] = useState<{ paths: string[]; sourceRemote: boolean; x: number; y: number; target: TransferDropTarget | null } | null>(null)
   const localPathRef = useRef('')
   const remotePathRef = useRef('/')
   const localRequest = useRef(0)
@@ -136,6 +144,8 @@ export function SftpPane({ sessionId, bookmarkId, connected, visible, onError, o
   const remoteInflight = useRef(new Map<string, Promise<DirectoryEntry[]>>())
   const localAnchor = useRef('')
   const remoteAnchor = useRef('')
+  const transferDragCleanup = useRef<(() => void) | null>(null)
+  const suppressSelectionUntil = useRef(0)
 
   const loadLocal = useCallback(async (path: string) => {
     const request = ++localRequest.current
@@ -198,7 +208,7 @@ export function SftpPane({ sessionId, bookmarkId, connected, visible, onError, o
     if (!cached || Date.now() - cached.updatedAt >= 10_000) void fetchRemote(path).catch(() => undefined)
   }, [sessionId, connected, fetchRemote])
 
-  useEffect(() => { void window.api.files.getFavorites(bookmarkId).then(setFavorites) }, [bookmarkId])
+  useEffect(() => { void window.api.files.getFavorites(bookmarkId).then(setFavorites).catch((error) => onError(errorMessage(error))) }, [bookmarkId])
   useEffect(() => {
     if (!visible || localInitialized.current) return
     localInitialized.current = true
@@ -225,12 +235,71 @@ export function SftpPane({ sessionId, bookmarkId, connected, visible, onError, o
     return () => { stop(); if (refreshTimer.current) clearTimeout(refreshTimer.current); refreshTimer.current = null; pendingRefresh.current = { local: false, remote: false } }
   }, [sessionId, loadLocal, loadRemote])
 
-  const enqueue = async (direction: 'upload' | 'download', paths: string[]): Promise<void> => {
+  useEffect(() => () => transferDragCleanup.current?.(), [])
+
+  useEffect(() => {
+    if (!fileNameDialog) return
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape' && !fileNameDialog.submitting) setFileNameDialog(null)
+    }
+    window.addEventListener('keydown', closeOnEscape)
+    return () => window.removeEventListener('keydown', closeOnEscape)
+  }, [fileNameDialog])
+
+  const enqueue = async (direction: 'upload' | 'download', paths: string[], destinationDirectory?: string): Promise<void> => {
     if (!sessionId || !connected || paths.length === 0) return
-    try { await window.api.transfers.enqueue({ sessionId, direction, sourcePaths: paths, destinationDirectory: direction === 'upload' ? remotePath : localPath }) }
+    try { await window.api.transfers.enqueue({ sessionId, direction, sourcePaths: paths, destinationDirectory: destinationDirectory ?? (direction === 'upload' ? remotePathRef.current : localPathRef.current) }) }
     catch (error) { onError(errorMessage(error)) }
   }
+  const beginTransferDrag = (paths: string[], sourceRemote: boolean, event: React.PointerEvent<HTMLDivElement>): void => {
+    if (event.button !== 0 || paths.length === 0) return
+    transferDragCleanup.current?.()
+    const pointerId = event.pointerId
+    const startX = event.clientX
+    const startY = event.clientY
+    let active = false
+    const cleanup = (): void => {
+      window.removeEventListener('pointermove', move, true)
+      window.removeEventListener('pointerup', finish, true)
+      window.removeEventListener('pointercancel', cancel, true)
+      transferDragCleanup.current = null
+      document.documentElement.classList.remove('is-file-dragging')
+    }
+    const move = (pointerEvent: PointerEvent): void => {
+      if (pointerEvent.pointerId !== pointerId) return
+      if (!active && Math.hypot(pointerEvent.clientX - startX, pointerEvent.clientY - startY) < 5) return
+      active = true
+      document.documentElement.classList.add('is-file-dragging')
+      const target = transferDropTargetAt(pointerEvent.clientX, pointerEvent.clientY)
+      setTransferDrag({ paths, sourceRemote, x: pointerEvent.clientX, y: pointerEvent.clientY, target: target?.remote === sourceRemote ? null : target })
+      pointerEvent.preventDefault()
+    }
+    const finish = (pointerEvent: PointerEvent): void => {
+      if (pointerEvent.pointerId !== pointerId) return
+      if (active) {
+        const target = transferDropTargetAt(pointerEvent.clientX, pointerEvent.clientY)
+        if (target && target.remote !== sourceRemote) {
+          const destination = target.directory ?? (target.remote ? remotePathRef.current : localPathRef.current)
+          void enqueue(target.remote ? 'upload' : 'download', paths, destination)
+        }
+        suppressSelectionUntil.current = Date.now() + 250
+        pointerEvent.preventDefault()
+      }
+      cleanup()
+      setTransferDrag(null)
+    }
+    const cancel = (pointerEvent: PointerEvent): void => {
+      if (pointerEvent.pointerId !== pointerId) return
+      cleanup()
+      setTransferDrag(null)
+    }
+    window.addEventListener('pointermove', move, true)
+    window.addEventListener('pointerup', finish, true)
+    window.addEventListener('pointercancel', cancel, true)
+    transferDragCleanup.current = cleanup
+  }
   const select = (remote: boolean, path: string, additive: boolean, range: boolean, visiblePaths: string[]): void => {
+    if (Date.now() < suppressSelectionUntil.current) return
     const setter = remote ? setRemoteSelected : setLocalSelected
     const anchor = remote ? remoteAnchor : localAnchor
     setter((current) => {
@@ -244,27 +313,56 @@ export function SftpPane({ sessionId, bookmarkId, connected, visible, onError, o
       return next
     })
   }
-  const mutate = async (remote: boolean, action: () => Promise<void>): Promise<void> => {
+  const mutate = async (remote: boolean, action: () => Promise<void>): Promise<string | null> => {
     try {
       await action()
       if (remote) { remoteCache.current.clear(); await loadRemote(remotePathRef.current, true) } else await loadLocal(localPathRef.current)
-    } catch (error) { onError(errorMessage(error)) }
+      return null
+    } catch (error) {
+      const message = errorMessage(error)
+      onError(message)
+      return message
+    }
   }
   const createDirectory = (remote: boolean): void => {
-    const name = window.prompt('新目录名称')?.trim()
-    if (!name || name.includes('/') || (!remote && name.includes('\\'))) return
-    const path = childPath(remote ? remotePath : localPath, name, remote)
-    void mutate(remote, () => window.api.files.createDirectory(remote, sessionId, path))
+    setFileNameDialog({ mode: 'create', remote, value: '', error: '', submitting: false })
   }
   const renameEntry = (remote: boolean, path: string): void => {
-    const name = window.prompt('新名称', entryName(path))?.trim()
-    if (!name || name === entryName(path) || name.includes('/') || (!remote && name.includes('\\'))) return
-    const parent = remote ? remoteParentPath(path) : path.slice(0, Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))) || localPath
-    void mutate(remote, () => window.api.files.rename(remote, sessionId, path, childPath(parent, name, remote)))
+    setFileNameDialog({ mode: 'rename', remote, path, value: entryName(path), error: '', submitting: false })
   }
-  const deleteEntries = (remote: boolean, paths: string[]): void => {
-    if (!paths.length || !window.confirm(`确定永久删除选中的 ${paths.length} 项吗？`)) return
-    void mutate(remote, () => window.api.files.remove(remote, sessionId, paths))
+  const submitFileName = async (event: React.FormEvent<HTMLFormElement>): Promise<void> => {
+    event.preventDefault()
+    if (!fileNameDialog || fileNameDialog.submitting) return
+    const name = fileNameDialog.value.trim()
+    if (!name) {
+      setFileNameDialog((current) => current ? { ...current, error: '名称不能为空' } : null)
+      return
+    }
+    if (name.includes('/') || (!fileNameDialog.remote && name.includes('\\'))) {
+      setFileNameDialog((current) => current ? { ...current, error: '名称不能包含路径分隔符' } : null)
+      return
+    }
+    if (fileNameDialog.mode === 'rename' && fileNameDialog.path && name === entryName(fileNameDialog.path)) {
+      setFileNameDialog(null)
+      return
+    }
+    setFileNameDialog((current) => current ? { ...current, error: '', submitting: true } : null)
+    const currentDirectory = fileNameDialog.remote ? remotePathRef.current : localPathRef.current
+    let error: string | null
+    if (fileNameDialog.mode === 'create') {
+      const path = childPath(currentDirectory, name, fileNameDialog.remote)
+      error = await mutate(fileNameDialog.remote, () => window.api.files.createDirectory(fileNameDialog.remote, sessionId, path))
+    } else {
+      const source = fileNameDialog.path!
+      const parent = fileNameDialog.remote ? remoteParentPath(source) : source.slice(0, Math.max(source.lastIndexOf('/'), source.lastIndexOf('\\'))) || currentDirectory
+      error = await mutate(fileNameDialog.remote, () => window.api.files.rename(fileNameDialog.remote, sessionId, source, childPath(parent, name, fileNameDialog.remote)))
+    }
+    if (error) setFileNameDialog((current) => current ? { ...current, error, submitting: false } : null)
+    else setFileNameDialog(null)
+  }
+  const deleteEntries = async (remote: boolean, paths: string[]): Promise<void> => {
+    if (!paths.length || !await confirmDialog(`确定永久删除选中的 ${paths.length} 项吗？`, { title: '删除文件', kind: 'warning' })) return
+    await mutate(remote, () => window.api.files.remove(remote, sessionId, paths))
   }
   const previewEntry = async (remote: boolean, path: string, position: 'start' | 'end' = 'start'): Promise<void> => {
     try { setPreview({ remote, path, value: await window.api.files.preview(remote, sessionId, path, position) }) }
@@ -275,7 +373,8 @@ export function SftpPane({ sessionId, bookmarkId, connected, visible, onError, o
     const list = remote ? favorites.remote : favorites.local
     const nextList = list.includes(path) ? list.filter((item) => item !== path) : [...list, path]
     const next = remote ? { ...favorites, remote: nextList } : { ...favorites, local: nextList }
-    setFavorites(next); void window.api.files.setFavorites(bookmarkId, next)
+    setFavorites(next)
+    void window.api.files.setFavorites(bookmarkId, next).catch((error) => onError(errorMessage(error)))
   }
 
   if (!sessionId || !connected) return <div className="sftp-disabled"><Folder size={25} /><strong>文件传输尚未连接</strong><span>连接后可浏览本地和远端目录</span>{onConnect && <button className="secondary-button" onClick={onConnect}><Plug size={15} />连接</button>}</div>
@@ -283,14 +382,15 @@ export function SftpPane({ sessionId, bookmarkId, connected, visible, onError, o
     onSelect: (path, additive, range, paths) => select(remote, path, additive, range, paths),
     onSelectAll: (paths) => (remote ? setRemoteSelected : setLocalSelected)(new Set(paths)),
     onCreateDirectory: () => createDirectory(remote), onRename: (path) => renameEntry(remote, path),
-    onDelete: (paths) => deleteEntries(remote, paths), onPreview: (path) => void previewEntry(remote, path), onToggleFavorite: () => toggleFavorite(remote)
+    onDelete: (paths) => void deleteEntries(remote, paths), onPreview: (path) => void previewEntry(remote, path), onToggleFavorite: () => toggleFavorite(remote)
   })
   return <>
     <div className="sftp-pane">
       <FileBrowser title="本地" remote={false} path={localPath} entries={localEntries} selected={localSelected} loading={localState.loading} error={localState.error} favorites={favorites.local}
         canBack={localNavigation.index > 0} canForward={localNavigation.index < localNavigation.items.length - 1} onBack={() => moveHistory(false, -1)} onForward={() => moveHistory(false, 1)}
         onPath={navigateLocal} onParent={() => { void window.api.files.parentLocal(localPath).then(navigateLocal).catch((error) => onError(errorMessage(error))) }} onRefresh={() => void loadLocal(localPath)}
-        onTransferDrop={(paths, sourceRemote) => { if (sourceRemote) void enqueue('download', paths) }} {...common(false)} />
+        onTransferDrop={(paths, sourceRemote) => { if (sourceRemote) void enqueue('download', paths) }} onTransferDragStart={beginTransferDrag}
+        transferDropActive={transferDrag?.target?.remote === false} transferDropDirectory={transferDrag?.target?.remote === false ? transferDrag.target.directory : undefined} {...common(false)} />
       <div className="transfer-arrows">
         <button className="icon-button transfer-button" title="上传到远端" disabled={!localSelected.size} onClick={() => void enqueue('upload', [...localSelected])}><ArrowRight size={18} /></button>
         <button className="icon-button transfer-button" title="下载到本地" disabled={!remoteSelected.size} onClick={() => void enqueue('download', [...remoteSelected])}><ArrowLeft size={18} /></button>
@@ -298,8 +398,20 @@ export function SftpPane({ sessionId, bookmarkId, connected, visible, onError, o
       <FileBrowser title="远端" remote path={remotePath} entries={remoteEntries} selected={remoteSelected} loading={remoteState.loading} error={remoteState.error} favorites={favorites.remote}
         canBack={remoteNavigation.index > 0} canForward={remoteNavigation.index < remoteNavigation.items.length - 1} onBack={() => moveHistory(true, -1)} onForward={() => moveHistory(true, 1)}
         onPath={navigateRemote} onParent={() => navigateRemote(remoteParentPath(remotePath))} onRefresh={() => void loadRemote(remotePath, true)} onPrefetch={prefetchRemote}
-        onTransferDrop={(paths, sourceRemote) => { if (!sourceRemote) void enqueue('upload', paths) }} {...common(true)} />
+        onTransferDrop={(paths, sourceRemote) => { if (!sourceRemote) void enqueue('upload', paths) }} onTransferDragStart={beginTransferDrag}
+        transferDropActive={transferDrag?.target?.remote === true} transferDropDirectory={transferDrag?.target?.remote === true ? transferDrag.target.directory : undefined} {...common(true)} />
     </div>
+    {transferDrag && <div className="transfer-drag-ghost" style={{ left: transferDrag.x + 14, top: transferDrag.y + 14 }}><File size={15} /><span>{transferDrag.paths.length === 1 ? entryName(transferDrag.paths[0]!) : `${transferDrag.paths.length} 项`}</span></div>}
+    {fileNameDialog && <div className="modal-backdrop file-operation-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !fileNameDialog.submitting) setFileNameDialog(null) }}>
+      <section className="modal file-operation-dialog" role="dialog" aria-modal="true" aria-labelledby="file-operation-title">
+        <header><strong id="file-operation-title">{fileNameDialog.mode === 'create' ? `新建${fileNameDialog.remote ? '远端' : '本地'}目录` : `重命名${fileNameDialog.remote ? '远端' : '本地'}项目`}</strong><button type="button" className="icon-button" title="关闭" disabled={fileNameDialog.submitting} onClick={() => setFileNameDialog(null)}><X size={17} /></button></header>
+        <form className="file-operation-form" onSubmit={(event) => void submitFileName(event)}>
+          <label>名称<input autoFocus maxLength={255} value={fileNameDialog.value} onFocus={(event) => { if (fileNameDialog.mode === 'rename') event.currentTarget.select() }} onChange={(event) => setFileNameDialog((current) => current ? { ...current, value: event.target.value, error: '' } : null)} /></label>
+          {fileNameDialog.error && <small className="error-text">{fileNameDialog.error}</small>}
+          <div className="dialog-actions"><button type="button" className="secondary-button" disabled={fileNameDialog.submitting} onClick={() => setFileNameDialog(null)}>取消</button><button className="primary-button" disabled={fileNameDialog.submitting}>{fileNameDialog.submitting ? '处理中…' : '确定'}</button></div>
+        </form>
+      </section>
+    </div>}
     {preview && <div className="file-preview-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setPreview(null) }}><section className="file-preview" role="dialog" aria-modal="true"><header><strong>{entryName(preview.path)}</strong><span>{preview.value.size.toLocaleString()} bytes</span><button className="icon-button" title="关闭预览" onClick={() => setPreview(null)}><X size={16} /></button></header>{preview.value.binary ? <div className="binary-preview"><File size={34} /><strong>二进制文件</strong><span>此文件不适合文本预览</span></div> : <pre>{preview.value.content}</pre>}{preview.value.truncated && !preview.value.binary && <footer><span>文件较大，当前显示{preview.value.position === 'start' ? '开头' : '末尾'} 1 MiB</span><button className="secondary-button" onClick={() => void previewEntry(preview.remote, preview.path, preview.value.position === 'start' ? 'end' : 'start')}>查看{preview.value.position === 'start' ? '末尾' : '开头'}</button></footer>}</section></div>}
   </>
 }

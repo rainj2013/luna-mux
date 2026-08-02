@@ -10,4 +10,7 @@ async function start(): Promise<void> {
   ReactDOM.createRoot(document.getElementById('root')!).render(<React.StrictMode><App /></React.StrictMode>)
 }
 
-void start()
+void start().catch((error) => {
+  const message = error instanceof Error ? error.message : String(error)
+  ReactDOM.createRoot(document.getElementById('root')!).render(<div className="bootstrap-error" role="alert"><strong>应用启动失败</strong><span>{message}</span></div>)
+})

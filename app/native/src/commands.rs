@@ -3,7 +3,7 @@ use std::{
     fs,
     io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, atomic::AtomicBool},
     time::UNIX_EPOCH,
 };
 
@@ -26,6 +26,7 @@ pub struct AppState {
     pub transfers: Arc<TransferManager>,
     pub tunnels: Arc<TunnelManager>,
     pub allowed_imports: Mutex<HashSet<PathBuf>>,
+    pub exit_cleanup_started: AtomicBool,
 }
 
 fn selected_path(value: Option<FilePath>) -> Option<String> {

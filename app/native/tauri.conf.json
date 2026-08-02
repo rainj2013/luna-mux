@@ -25,7 +25,7 @@
         "dragDropEnabled": true
       }
     ],
-    "security": { "csp": "default-src 'self'; img-src 'self' asset: data: blob:; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost ws://127.0.0.1:1420; script-src 'self'" }
+    "security": { "csp": "default-src 'self'; img-src 'self' asset: data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost ws://localhost:1420 ws://127.0.0.1:1420; script-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'none'" }
   },
   "bundle": {
     "active": true,

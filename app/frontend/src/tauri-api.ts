@@ -1,16 +1,22 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { readText, writeText } from '@tauri-apps/plugin-clipboard-manager'
-import type { AppApi, AppEvent, AppIconId, BookmarkInput, ConnectInput, ConflictResolution, DeploymentProfile, PortForwardProfile, TerminalSettings, TransferRequest, UiTheme } from './types'
+import type { AppApi, AppEvent, AppIconId, BookmarkInput, ConnectInput, ConflictResolution, DeploymentProfile, Platform, PortForwardProfile, TerminalSettings, TransferRequest, UiTheme } from './types'
 
 const call = <T>(command: string, args?: Record<string, unknown>): Promise<T> => invoke<T>(command, args).catch((error) => {
   throw new Error(typeof error === 'string' ? error : String(error))
 })
 
+const send = (command: string, args?: Record<string, unknown>): void => {
+  void call(command, args).catch((error) => console.warn(`Tauri command ${command} failed`, error))
+}
+
 export async function createTauriApi(): Promise<AppApi> {
-  const platform = await call<NodeJS.Platform>('platform')
-  void getCurrentWebview().onDragDropEvent((event) => {
+  const platform = await call<Platform>('platform')
+  const currentWindow = getCurrentWindow()
+  await getCurrentWebview().onDragDropEvent((event) => {
     if (event.payload.type !== 'drop') return
     const scale = window.devicePixelRatio || 1
     window.dispatchEvent(new CustomEvent('tauri-file-drop', { detail: {
@@ -24,7 +30,10 @@ export async function createTauriApi(): Promise<AppApi> {
     system: {
       openExternal: (url) => call('system_open_external', { value: url }),
       readClipboard: () => readText(),
-      writeClipboard: (text) => writeText(text.slice(0, 4 * 1024 * 1024))
+      writeClipboard: (text) => writeText(text.slice(0, 4 * 1024 * 1024)),
+      minimizeWindow: () => currentWindow.minimize(),
+      toggleMaximizeWindow: () => currentWindow.toggleMaximize(),
+      closeWindow: () => currentWindow.close()
     },
     bookmarks: {
       list: () => call('bookmarks_list'),
@@ -38,10 +47,10 @@ export async function createTauriApi(): Promise<AppApi> {
       list: () => call('sessions_list'),
       connect: (input: ConnectInput) => call('sessions_connect', { input }),
       disconnect: (id) => call('sessions_disconnect', { id }),
-      write: (id, data) => { void call('sessions_write', { id, data }) },
-      resize: (id, cols, rows) => { void call('sessions_resize', { id, cols, rows }) },
-      flow: (id, paused) => { void call('sessions_flow', { id, paused }) },
-      hostKeyDecision: (id, accept) => { void call('sessions_host_key_decision', { id, accept }) }
+      write: (id, data) => send('sessions_write', { id, data }),
+      resize: (id, cols, rows) => send('sessions_resize', { id, cols, rows }),
+      flow: (id, paused) => send('sessions_flow', { id, paused }),
+      hostKeyDecision: (id, accept) => send('sessions_host_key_decision', { id, accept })
     },
     files: {
       home: () => call('files_home'),
@@ -55,7 +64,6 @@ export async function createTauriApi(): Promise<AppApi> {
       preview: (remote, sessionId, path, position) => call('files_preview', { remote, sessionId, path, position }),
       getFavorites: (bookmarkId) => call('files_get_favorites', { bookmarkId }),
       setFavorites: (bookmarkId, value) => call('files_set_favorites', { bookmarkId, value }),
-      filePath: () => '',
       chooseLocalDirectory: () => call('files_choose_local_directory'),
       choosePrivateKey: () => call('files_choose_private_key')
     },
@@ -65,7 +73,7 @@ export async function createTauriApi(): Promise<AppApi> {
       cancel: (id) => call('transfers_cancel', { id }),
       retry: (id, sessionId) => call('transfers_retry', { id, sessionId }),
       clearCompleted: () => call('transfers_clear_completed'),
-      resolveConflict: (id, resolution: ConflictResolution, applyToBatch) => { void call('transfers_resolve_conflict', { id, resolution, applyToBatch }) }
+      resolveConflict: (id, resolution: ConflictResolution, applyToBatch) => send('transfers_resolve_conflict', { id, resolution, applyToBatch })
     },
     deployments: {
       list: (bookmarkId) => call('deployments_list', { bookmarkId }),
@@ -106,7 +114,7 @@ export async function createTauriApi(): Promise<AppApi> {
       let unlisten: (() => void) | undefined
       void listen<AppEvent>('app:event', (event) => { if (!stopped) listener(event.payload) }).then((stop) => {
         if (stopped) stop(); else unlisten = stop
-      })
+      }).catch((error) => console.error('Failed to register Tauri event listener', error))
       return () => { stopped = true; unlisten?.() }
     }
   }
