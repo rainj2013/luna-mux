@@ -233,17 +233,6 @@ pub enum AppIconId {
     Light,
 }
 
-impl AppIconId {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Ssh => "ssh",
-            Self::Classic => "classic",
-            Self::Neon => "neon",
-            Self::Light => "light",
-        }
-    }
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppIconOption {

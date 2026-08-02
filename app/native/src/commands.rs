@@ -132,17 +132,19 @@ pub fn bookmarks_forget_credential(state: State<AppState>, id: String) -> Result
 }
 
 #[tauri::command]
-pub fn bookmarks_preview_ssh_config(
+pub async fn bookmarks_preview_ssh_config(
     app: AppHandle,
-    state: State<AppState>,
+    state: State<'_, AppState>,
 ) -> Result<Option<SshConfigPreview>, String> {
-    let path = selected_path(
-        app.dialog()
-            .file()
-            .set_title("导入 OpenSSH Config")
-            .set_file_name(ssh_config::default_path().to_string_lossy())
-            .blocking_pick_file(),
-    );
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .set_title("导入 OpenSSH Config")
+        .set_file_name(ssh_config::default_path().to_string_lossy())
+        .pick_file(move |path| {
+            let _ = sender.send(path);
+        });
+    let path = selected_path(receiver.await.ok().flatten());
     let Some(path) = path else {
         return Ok(None);
     };
@@ -444,22 +446,26 @@ pub fn files_set_favorites(
         .set_setting(&format!("fileFavorites:{bookmark_id}"), &value)
 }
 #[tauri::command]
-pub fn files_choose_local_directory(app: AppHandle) -> Option<String> {
-    selected_path(
-        app.dialog()
-            .file()
-            .set_title("选择本地部署目录")
-            .blocking_pick_folder(),
-    )
+pub async fn files_choose_local_directory(app: AppHandle) -> Option<String> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .set_title("选择本地部署目录")
+        .pick_folder(move |path| {
+            let _ = sender.send(path);
+        });
+    selected_path(receiver.await.ok().flatten())
 }
 #[tauri::command]
-pub fn files_choose_private_key(app: AppHandle) -> Option<String> {
-    selected_path(
-        app.dialog()
-            .file()
-            .set_title("选择 SSH 私钥")
-            .blocking_pick_file(),
-    )
+pub async fn files_choose_private_key(app: AppHandle) -> Option<String> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .set_title("选择 SSH 私钥")
+        .pick_file(move |path| {
+            let _ = sender.send(path);
+        });
+    selected_path(receiver.await.ok().flatten())
 }
 
 #[tauri::command]
@@ -523,18 +529,25 @@ pub fn settings_save_terminal(
 ) -> Result<TerminalSettings, String> {
     settings.font_size = settings.font_size.clamp(10, 32);
     settings.background_opacity = settings.background_opacity.clamp(0.1, 1.0);
+    if !settings.background_image_path.is_empty()
+        && !Path::new(&settings.background_image_path).is_file()
+    {
+        settings.background_image_path.clear();
+    }
     state.db.set_setting("terminalSettings", &settings)?;
     Ok(settings)
 }
 #[tauri::command]
-pub fn settings_choose_terminal_background(app: AppHandle) -> Option<String> {
-    selected_path(
-        app.dialog()
-            .file()
-            .set_title("选择终端背景图片")
-            .add_filter("图片", &["png", "jpg", "jpeg", "webp", "bmp", "gif"])
-            .blocking_pick_file(),
-    )
+pub async fn settings_choose_terminal_background(app: AppHandle) -> Option<String> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .set_title("选择终端背景图片")
+        .add_filter("图片", &["png", "jpg", "jpeg", "webp", "bmp", "gif"])
+        .pick_file(move |path| {
+            let _ = sender.send(path);
+        });
+    selected_path(receiver.await.ok().flatten())
 }
 #[tauri::command]
 pub fn settings_load_terminal_background(path: String) -> Result<String, String> {
@@ -568,10 +581,7 @@ pub fn settings_load_terminal_background(path: String) -> Result<String, String>
 }
 
 #[tauri::command]
-pub fn settings_get_app_icons(
-    app: AppHandle,
-    state: State<AppState>,
-) -> Result<AppIconSettings, String> {
+pub fn settings_get_app_icons(state: State<AppState>) -> Result<AppIconSettings, String> {
     let selected = state.db.get_setting("appIcon", AppIconId::Ssh);
     let definitions = [
         (AppIconId::Ssh, "SSH 终端"),
@@ -581,16 +591,15 @@ pub fn settings_get_app_icons(
     ];
     let options = definitions
         .into_iter()
-        .map(|(id, name)| {
-            fs::read(app_icon::path(&app, &id))
-                .map(|data| AppIconOption {
-                    id,
-                    name: name.into(),
-                    data_url: format!("data:image/png;base64,{}", STANDARD.encode(data)),
-                })
-                .map_err(|e| e.to_string())
+        .map(|(id, name)| AppIconOption {
+            data_url: format!(
+                "data:image/png;base64,{}",
+                STANDARD.encode(app_icon::bytes(&id))
+            ),
+            id,
+            name: name.into(),
         })
-        .collect::<Result<_, _>>()?;
+        .collect();
     Ok(AppIconSettings { selected, options })
 }
 #[tauri::command]
@@ -923,22 +932,24 @@ pub fn transfers_clear_completed(state: State<AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn diagnostics_export(
+pub async fn diagnostics_export(
     app: AppHandle,
-    state: State<AppState>,
+    state: State<'_, AppState>,
 ) -> Result<Option<String>, String> {
     let default = format!(
         "ssh-client-diagnostics-{}.json",
         Utc::now().format("%Y-%m-%dT%H-%M-%S")
     );
-    let Some(path) = selected_path(
-        app.dialog()
-            .file()
-            .set_title("导出诊断信息")
-            .set_file_name(default)
-            .add_filter("JSON", &["json"])
-            .blocking_save_file(),
-    ) else {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .set_title("导出诊断信息")
+        .set_file_name(default)
+        .add_filter("JSON", &["json"])
+        .save_file(move |path| {
+            let _ = sender.send(path);
+        });
+    let Some(path) = selected_path(receiver.await.ok().flatten()) else {
         return Ok(None);
     };
     let bookmarks = state.db.list_bookmarks()?;

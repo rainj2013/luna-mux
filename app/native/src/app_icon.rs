@@ -1,50 +1,45 @@
-use std::path::PathBuf;
+use tauri::{AppHandle, WebviewWindow};
 
-use tauri::{AppHandle, Manager, WebviewWindow};
+#[cfg(not(target_os = "macos"))]
+use tauri::Manager;
 
 use crate::models::AppIconId;
 
-pub fn path(app: &AppHandle, icon: &AppIconId) -> PathBuf {
-    let name = format!("{}.png", icon.as_str());
-    let packaged = app
-        .path()
-        .resource_dir()
-        .ok()
-        .map(|path| path.join("icons").join(&name));
-    packaged.filter(|path| path.exists()).unwrap_or_else(|| {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../assets/icons")
-            .join(name)
-    })
+pub fn bytes(icon: &AppIconId) -> &'static [u8] {
+    match icon {
+        AppIconId::Ssh => include_bytes!("../../../assets/icons/ssh.png"),
+        AppIconId::Classic => include_bytes!("../../../assets/icons/classic.png"),
+        AppIconId::Neon => include_bytes!("../../../assets/icons/neon.png"),
+        AppIconId::Light => include_bytes!("../../../assets/icons/light.png"),
+    }
 }
 
-pub fn apply_at_startup(app: &AppHandle, icon: &AppIconId) -> Result<(), String> {
+pub fn apply_at_startup(_app: &AppHandle, icon: &AppIconId) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        let bytes = std::fs::read(path(app, icon)).map_err(|error| error.to_string())?;
-        set_macos_dock_icon(&bytes)
+        set_macos_dock_icon(bytes(icon))
     }
 
     #[cfg(not(target_os = "macos"))]
     {
-        let window = app
+        let window = _app
             .get_webview_window("main")
             .ok_or_else(|| "找不到主窗口，无法恢复应用图标".to_string())?;
-        set_window_icon(app, &window, icon)
+        set_window_icon(&window, icon)
     }
 }
 
 pub async fn apply(
-    app: &AppHandle,
+    _app: &AppHandle,
     _window: &WebviewWindow,
     icon: &AppIconId,
 ) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        let bytes = std::fs::read(path(app, icon)).map_err(|error| error.to_string())?;
         let (sender, receiver) = tokio::sync::oneshot::channel();
-        app.run_on_main_thread(move || {
-            let _ = sender.send(set_macos_dock_icon(&bytes));
+        let bytes = bytes(icon);
+        _app.run_on_main_thread(move || {
+            let _ = sender.send(set_macos_dock_icon(bytes));
         })
         .map_err(|error| error.to_string())?;
         receiver
@@ -54,17 +49,13 @@ pub async fn apply(
 
     #[cfg(not(target_os = "macos"))]
     {
-        set_window_icon(app, _window, icon)
+        set_window_icon(_window, icon)
     }
 }
 
 #[cfg(not(target_os = "macos"))]
-fn set_window_icon(
-    app: &AppHandle,
-    window: &WebviewWindow,
-    icon: &AppIconId,
-) -> Result<(), String> {
-    let image = tauri::image::Image::from_path(path(app, icon)).map_err(|e| e.to_string())?;
+fn set_window_icon(window: &WebviewWindow, icon: &AppIconId) -> Result<(), String> {
+    let image = tauri::image::Image::from_bytes(bytes(icon)).map_err(|e| e.to_string())?;
     window.set_icon(image).map_err(|e| e.to_string())
 }
 
@@ -82,4 +73,22 @@ fn set_macos_dock_icon(bytes: &[u8]) -> Result<(), String> {
     let application = NSApplication::sharedApplication(main_thread);
     unsafe { application.setApplicationIconImage(Some(&image)) };
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bytes;
+    use crate::models::AppIconId;
+
+    #[test]
+    fn embedded_icons_are_valid_images() {
+        for icon in [
+            AppIconId::Ssh,
+            AppIconId::Classic,
+            AppIconId::Neon,
+            AppIconId::Light,
+        ] {
+            image::load_from_memory(bytes(&icon)).expect("valid embedded app icon");
+        }
+    }
 }

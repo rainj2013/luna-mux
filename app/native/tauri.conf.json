@@ -33,7 +33,6 @@
     "category": "DeveloperTool",
     "shortDescription": "Cross-platform SSH and SFTP desktop client",
     "icon": ["../../assets/icons/ssh.png", "../../assets/icons/ssh.icns", "../../assets/icons/ssh.ico"],
-    "resources": { "../../assets/icons/*.png": "icons/" },
     "createUpdaterArtifacts": false,
     "windows": { "webviewInstallMode": { "type": "embedBootstrapper" } }
   }

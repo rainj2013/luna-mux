@@ -216,10 +216,9 @@ export function App(): React.JSX.Element {
 
   const saveSettings = async (settings: TerminalSettings, previewImage: string, appIcon: AppIconId, theme: UiTheme): Promise<void> => {
     try {
-      const [saved, savedTheme] = await Promise.all([window.api.settings.saveTerminal(settings), window.api.settings.saveUiTheme(theme)])
+      const [saved, savedTheme, selected] = await Promise.all([window.api.settings.saveTerminal(settings), window.api.settings.saveUiTheme(theme), window.api.settings.setAppIcon(appIcon)])
       let image = saved.backgroundImagePath === settings.backgroundImagePath ? previewImage : ''
       if (saved.backgroundImagePath && !image) image = await window.api.settings.loadTerminalBackground(saved.backgroundImagePath)
-      const selected = await window.api.settings.setAppIcon(appIcon)
       setTerminalSettings(saved)
       setUiTheme(savedTheme)
       setUiThemePreview(null)
