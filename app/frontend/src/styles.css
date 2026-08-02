@@ -232,7 +232,8 @@ body.sidebar-resizing { cursor: col-resize; user-select: none; }
 .binary-preview { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px; color: var(--text-muted); background: var(--surface-subtle); font-size: 11px; }
 .binary-preview strong { color: var(--text-muted); font-size: 13px; }
 .file-preview footer { min-height: 43px; justify-content: flex-end; border-top: 1px solid var(--border); border-bottom: 0; }
-.deployment-dialog { width: min(720px, 78vw); display: grid; gap: 11px; }
+.deployment-dialog { width: 100%; padding: 15px 17px 17px; display: grid; gap: 11px; }
+.deployment-dialog > .form-grid { padding: 0; }
 .deployment-profile-bar { display: flex; align-items: center; gap: 7px; }
 .deployment-profile-bar select { min-width: 0; height: 31px; flex: 1; border: 1px solid var(--border-strong); border-radius: 5px; }
 .deployment-summary { display: flex; gap: 14px; color: var(--text-muted); font-size: 11px; }

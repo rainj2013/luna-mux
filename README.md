@@ -57,14 +57,19 @@ npm run web:build
 
 Tauri 安装包必须在目标平台原生构建，产物位于 `app/native/target/release/bundle/`。未配置证书时会生成未签名安装包；正式分发前应配置 Apple Developer ID、公证和 Windows 代码签名。
 
+仓库已固定使用 rsproxy 的 Cargo sparse registry，避免企业网络下 crates.io 下载缓慢以及切换源造成缓存不一致。首次构建或 `package-lock.json` 变化后执行一次：
+
+```bash
+fnm use
+npm ci
+rustup default stable
+```
+
+日常重新打包不需要重复安装依赖，也不需要临时修改 Cargo 配置。
+
 macOS 构建 DMG：
 
 ```bash
-fnm use 24
-npm ci
-rustup default stable
-npm run typecheck
-npm test
 npm run build:mac
 ```
 
@@ -77,11 +82,6 @@ hdiutil verify "app/native/target/release/bundle/dmg/SSH Client_<version>_aarch6
 Windows x64 构建普通 NSIS 安装包：
 
 ```powershell
-fnm use 24
-npm ci
-rustup default stable-x86_64-pc-windows-msvc
-npm run typecheck
-npm test
 npm run build:win
 ```
 
