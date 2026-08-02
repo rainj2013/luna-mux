@@ -1,6 +1,7 @@
 node_modules/
-out/
-release/
+app/frontend/dist/
+app/native/target/
+app/native/gen/schemas/
 .vite/
 *.log
 .DS_Store

@@ -1,0 +1,40 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "SSH Client",
+  "version": "0.1.0",
+  "identifier": "com.local.sshclient",
+  "build": {
+    "beforeDevCommand": "npm run web:dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm run web:build",
+    "frontendDist": "../frontend/dist"
+  },
+  "app": {
+    "macOSPrivateApi": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "SSH Client",
+        "width": 1360,
+        "height": 860,
+        "minWidth": 980,
+        "minHeight": 640,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": { "x": 16, "y": 13 },
+        "dragDropEnabled": true
+      }
+    ],
+    "security": { "csp": "default-src 'self'; img-src 'self' asset: data: blob:; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost ws://127.0.0.1:1420; script-src 'self'" }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["dmg", "nsis"],
+    "category": "DeveloperTool",
+    "shortDescription": "Cross-platform SSH and SFTP desktop client",
+    "icon": ["../../assets/icons/ssh.png", "../../assets/icons/ssh.icns", "../../assets/icons/ssh.ico"],
+    "resources": { "../../assets/icons/*.png": "icons/" },
+    "createUpdaterArtifacts": false,
+    "windows": { "webviewInstallMode": { "type": "embedBootstrapper" } }
+  }
+}
