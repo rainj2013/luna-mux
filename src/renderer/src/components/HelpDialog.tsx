@@ -67,8 +67,8 @@ function createSections(commandKey: string): HelpSection[] {
         <h2>会话与终端</h2>
         <h3>多 session</h3>
         <ul>
-          <li>工具栏“新建会话”会为当前机器打开另一个独立 session。</li>
-          <li>断开后标签和滚屏内容会保留，点击“连接”可在原标签中重新连接。</li>
+          <li>已有活动 session 时，再次点击侧边栏中的同一机器会打开另一个独立 session。</li>
+          <li>断开后标签和滚屏内容会保留，再次点击侧边栏中的机器可在原标签中重新连接。</li>
           <li>标签可单击切换、中键关闭；后台标签不会丢失终端内容。</li>
         </ul>
         <h3>终端操作</h3>

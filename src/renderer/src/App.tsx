@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowRight, Bookmark as BookmarkIcon, CircleHelp, CirclePlus, Edit3, Eye, EyeOff, FileInput, FolderOpen, Image as ImageIcon, KeyRound, Monitor, Moon, Network, Palette, PanelLeftClose, PanelLeftOpen, Plug, Power, Rocket, RotateCcw, Search, Server, Settings as SettingsIcon, SquarePlus, SquareTerminal, Star, Sun, Trash2, X } from 'lucide-react'
+import { ArrowRight, Bookmark as BookmarkIcon, CircleHelp, CirclePlus, Edit3, Eye, EyeOff, FileInput, FolderOpen, Image as ImageIcon, KeyRound, Monitor, Moon, Network, Palette, PanelLeftClose, PanelLeftOpen, Plug, Power, Rocket, RotateCcw, Search, Server, Settings as SettingsIcon, SquareTerminal, Star, Sun, Trash2, X } from 'lucide-react'
 import { DEFAULT_TERMINAL_SETTINGS, type AppEvent, type AppIconId, type AppIconSettings, type Bookmark, type BookmarkInput, type ConflictResolution, type ConnectInput, type DeploymentDiffEntry, type DeploymentProfile, type HostKeyPrompt, type PortForwardProfile, type SessionStatus, type SshConfigPreview, type TerminalSettings, type TransferTask, type TunnelSummary, type UiTheme } from '../../shared/types'
 import { TerminalPane } from './components/TerminalPane'
 import { SftpPane } from './components/SftpPane'
@@ -342,9 +342,7 @@ export function App(): React.JSX.Element {
             </div><div className="session-actions">
             {workspaceView === 'files' && activeBookmark && activeTab?.sessionId && <button className="secondary-button" onClick={() => setDeploymentDialog(true)}><Rocket size={15} />部署</button>}
             {activeTab?.status === 'connected' && activeTab.sessionId && <button className="secondary-button" onClick={() => setTunnelDialog(true)}><Network size={15} />端口转发</button>}
-            {activeBookmark && <button className="secondary-button" title="为当前连接打开独立 SSH 会话" onClick={() => openBookmark(activeBookmark, { newSession: true })}><SquarePlus size={15} />新建会话</button>}
-            {activeTab?.status === 'connected' ? <button className="secondary-button" onClick={() => activeTab.sessionId && void window.api.sessions.disconnect(activeTab.sessionId)}><Power size={15} />断开</button>
-              : activeBookmark && <button className="primary-button" disabled={activeTab?.status === 'connecting'} onClick={() => openBookmark(activeBookmark, { tabKey: activeTab?.key })}><Plug size={15} />连接</button>}
+            {activeTab?.status === 'connected' && <button className="secondary-button" onClick={() => activeTab.sessionId && void window.api.sessions.disconnect(activeTab.sessionId)}><Power size={15} />断开</button>}
           </div></div>
           <div className="session-stack">
             {tabs.map((tab) => { const bookmark = bookmarkMap.get(tab.bookmarkId); const reconnect = bookmark ? () => openBookmark(bookmark, { tabKey: tab.key }) : undefined; return <div key={tab.key} className={`session-view ${tab.key === activeKey ? 'active' : ''} ${workspaceView}`}>

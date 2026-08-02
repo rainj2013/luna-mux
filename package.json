@@ -12,8 +12,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "dist": "npm run build && electron-builder",
-    "dist:win": "npm run build && electron-builder --win nsis --x64",
-    "dist:mac": "npm run build && electron-builder --mac dmg zip"
+    "dist:win": "npm run build && electron-builder --win nsis --x64 -c.npmRebuild=false",
+    "dist:mac": "npm run build && electron-builder --mac dmg zip --x64 --arm64"
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.14.9",
