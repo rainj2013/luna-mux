@@ -1,4 +1,4 @@
-export type AuthType = 'password' | 'privateKey'
+export type AuthType = 'password' | 'privateKey' | 'agent'
 
 export interface Bookmark {
   id: string
@@ -9,16 +9,38 @@ export interface Bookmark {
   authType: AuthType
   privateKeyPath: string
   jumpBookmarkId: string
+  groupName: string
+  favorite: boolean
+  lastConnectedAt: string
+  keepaliveEnabled: boolean
+  keepaliveIntervalSeconds: number
+  keepaliveCountMax: number
   note: string
   hasSavedCredential: boolean
   createdAt: string
   updatedAt: string
 }
 
-export type BookmarkInput = Omit<Bookmark, 'id' | 'hasSavedCredential' | 'createdAt' | 'updatedAt'>
+export type BookmarkInput = Omit<Bookmark, 'id' | 'hasSavedCredential' | 'lastConnectedAt' | 'createdAt' | 'updatedAt'>
+
+export interface SshConfigImportEntry {
+  alias: string
+  name: string
+  host: string
+  port: number
+  username: string
+  privateKeyPath: string
+  proxyJumpAlias: string
+}
+
+export interface SshConfigPreview {
+  path: string
+  entries: SshConfigImportEntry[]
+}
 
 export interface ConnectInput {
   bookmarkId: string
+  newSession?: boolean
   credential?: string
   rememberCredential?: boolean
   jumpCredential?: string
@@ -35,6 +57,34 @@ export interface SessionSummary {
   error?: string
 }
 
+export type PortForwardType = 'local' | 'remote' | 'dynamic'
+export type TunnelStatus = 'starting' | 'running' | 'error'
+
+export interface PortForwardProfile {
+  id: string
+  bookmarkId: string
+  name: string
+  type: PortForwardType
+  bindAddress: string
+  bindPort: number
+  targetHost: string
+  targetPort: number
+}
+
+export interface TunnelSummary {
+  id: string
+  profileId: string
+  sessionId: string
+  name: string
+  type: PortForwardType
+  bindAddress: string
+  bindPort: number
+  targetHost: string
+  targetPort: number
+  status: TunnelStatus
+  error?: string
+}
+
 export interface HostKeyPrompt {
   sessionId: string
   host: string
@@ -48,12 +98,38 @@ export interface DirectoryEntry {
   name: string
   path: string
   kind: 'file' | 'directory' | 'symlink' | 'other'
+  size?: number
+  modifiedAt?: number
+}
+
+export interface FilePreview {
+  content: string
   size: number
-  modifiedAt: number
+  truncated: boolean
+  position: 'start' | 'end'
+  binary: boolean
+}
+
+export interface DeploymentProfile {
+  id: string
+  bookmarkId: string
+  name: string
+  localDirectory: string
+  remoteDirectory: string
+  deleteExtraneous: boolean
+}
+
+export interface DeploymentDiffEntry {
+  relativePath: string
+  localPath?: string
+  remotePath: string
+  status: 'new' | 'changed' | 'same' | 'remote-only'
+  size?: number
 }
 
 export type TerminalBackgroundFit = 'cover' | 'contain' | 'stretch' | 'tile'
 export type AppIconId = 'ssh' | 'classic' | 'neon' | 'light'
+export type UiTheme = 'system' | 'light' | 'dark'
 
 export interface AppIconOption {
   id: AppIconId
@@ -112,6 +188,7 @@ export type AppEvent =
   | { type: 'terminal-data'; payload: { sessionId: string; data: string } }
   | { type: 'host-key'; payload: HostKeyPrompt }
   | { type: 'transfer'; payload: TransferTask }
+  | { type: 'tunnel'; payload: TunnelSummary & { removed?: boolean } }
   | { type: 'transfer-conflict'; payload: { taskId: string; sourcePath: string; destinationPath: string } }
 
 export interface TransferRequest {
@@ -123,11 +200,18 @@ export interface TransferRequest {
 
 export interface AppApi {
   platform: NodeJS.Platform
+  system: {
+    openExternal(url: string): Promise<void>
+    readClipboard(): Promise<string>
+    writeClipboard(text: string): Promise<void>
+  }
   bookmarks: {
     list(): Promise<Bookmark[]>
     save(input: BookmarkInput & { id?: string }): Promise<Bookmark>
     remove(id: string): Promise<void>
     forgetCredential(id: string): Promise<void>
+    previewSshConfig(): Promise<SshConfigPreview | null>
+    importSshConfig(path: string, aliases: string[]): Promise<Bookmark[]>
   }
   sessions: {
     list(): Promise<SessionSummary[]>
@@ -144,6 +228,14 @@ export interface AppApi {
     remoteHome(sessionId: string): Promise<string>
     listLocal(path: string): Promise<DirectoryEntry[]>
     listRemote(sessionId: string, path: string): Promise<DirectoryEntry[]>
+    createDirectory(remote: boolean, sessionId: string | undefined, path: string): Promise<void>
+    rename(remote: boolean, sessionId: string | undefined, from: string, to: string): Promise<void>
+    remove(remote: boolean, sessionId: string | undefined, paths: string[]): Promise<void>
+    preview(remote: boolean, sessionId: string | undefined, path: string, position: 'start' | 'end'): Promise<FilePreview>
+    getFavorites(bookmarkId: string): Promise<{ local: string[]; remote: string[] }>
+    setFavorites(bookmarkId: string, value: { local: string[]; remote: string[] }): Promise<void>
+    filePath(file: File): string
+    chooseLocalDirectory(): Promise<string | null>
     choosePrivateKey(): Promise<string | null>
   }
   transfers: {
@@ -154,13 +246,35 @@ export interface AppApi {
     clearCompleted(): Promise<void>
     resolveConflict(id: string, resolution: ConflictResolution, applyToBatch: boolean): void
   }
+  deployments: {
+    list(bookmarkId: string): Promise<DeploymentProfile[]>
+    save(profile: DeploymentProfile): Promise<DeploymentProfile>
+    remove(id: string): Promise<void>
+    preview(id: string, sessionId: string): Promise<DeploymentDiffEntry[]>
+    execute(id: string, sessionId: string): Promise<TransferTask[]>
+  }
+  tunnels: {
+    listProfiles(bookmarkId: string): Promise<PortForwardProfile[]>
+    saveProfile(profile: PortForwardProfile): Promise<PortForwardProfile>
+    removeProfile(id: string): Promise<void>
+    list(sessionId: string): Promise<TunnelSummary[]>
+    start(sessionId: string, profileId: string): Promise<TunnelSummary>
+    stop(sessionId: string, tunnelId: string): Promise<void>
+  }
+  diagnostics: {
+    export(): Promise<string | null>
+  }
   state: {
     getOpenBookmarks(): Promise<string[]>
     setOpenBookmarks(ids: string[]): Promise<void>
     getSidebarCollapsed(): Promise<boolean>
     setSidebarCollapsed(collapsed: boolean): Promise<void>
+    getSidebarWidth(): Promise<number>
+    setSidebarWidth(width: number): Promise<void>
   }
   settings: {
+    getUiTheme(): Promise<UiTheme>
+    saveUiTheme(theme: UiTheme): Promise<UiTheme>
     getTerminal(): Promise<TerminalSettings>
     saveTerminal(settings: TerminalSettings): Promise<TerminalSettings>
     chooseTerminalBackground(): Promise<string | null>

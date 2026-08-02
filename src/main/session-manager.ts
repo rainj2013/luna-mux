@@ -1,9 +1,19 @@
-import { Client, type ClientChannel, type ConnectConfig, type SFTPWrapper } from 'ssh2'
+import { Client, type ClientChannel, type ConnectConfig, type SFTPWrapper, type Stats } from 'ssh2'
 import { readFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
+import { connect as connectTcp, createServer, type Server } from 'node:net'
+import type { Duplex } from 'node:stream'
+import socks, { type SocksServer } from 'socksv5'
 import type { AppDatabase } from './database'
 import { TerminalOutputBuffer } from './terminal-output-buffer'
-import type { AppEvent, Bookmark, ConnectInput, DirectoryEntry, SessionSummary } from '../shared/types'
+import type { AppEvent, Bookmark, ConnectInput, DirectoryEntry, FilePreview, PortForwardProfile, SessionSummary, TunnelSummary } from '../shared/types'
+
+interface ActiveTunnel {
+  summary: TunnelSummary
+  server?: Server | SocksServer
+  remoteBinding?: { address: string; port: number }
+  streams: Set<Duplex>
+}
 
 interface ActiveSession {
   summary: SessionSummary
@@ -16,6 +26,7 @@ interface ActiveSession {
   remoteHome?: string
   remoteListMode?: 'exec' | 'sftp'
   terminalOutput?: TerminalOutputBuffer
+  tunnels: Map<string, ActiveTunnel>
   closing: boolean
 }
 
@@ -54,8 +65,10 @@ export class SessionManager {
   async connect(input: ConnectInput): Promise<SessionSummary> {
     const bookmark = this.db.getBookmark(input.bookmarkId)
     if (!bookmark) throw new Error('连接不存在')
-    const active = [...this.sessions.values()].find((item) => item.bookmark.id === bookmark.id && !item.closing && ['connecting', 'connected'].includes(item.summary.status))
-    if (active) return active.summary
+    if (!input.newSession) {
+      const active = [...this.sessions.values()].find((item) => item.bookmark.id === bookmark.id && !item.closing && ['connecting', 'connected'].includes(item.summary.status))
+      if (active) return active.summary
+    }
     const jumpBookmark = bookmark.jumpBookmarkId ? this.db.getBookmark(bookmark.jumpBookmarkId) : undefined
     if (bookmark.jumpBookmarkId && !jumpBookmark) throw new Error('配置的跳板机连接不存在')
     if (jumpBookmark?.jumpBookmarkId) throw new Error('当前仅支持单级跳板机')
@@ -63,7 +76,7 @@ export class SessionManager {
     const sessionId = randomUUID()
     const summary: SessionSummary = { id: sessionId, bookmarkId: bookmark.id, title: bookmark.name, status: 'connecting' }
     const client = new Client()
-    const session: ActiveSession = { summary, bookmark, client, closing: false }
+    const session: ActiveSession = { summary, bookmark, client, tunnels: new Map(), closing: false }
     this.sessions.set(sessionId, session)
     this.emitSession(session)
 
@@ -97,7 +110,9 @@ export class SessionManager {
           client.connect(targetConfig)
         })
       })
-      jumpClient.on('error', (error) => this.failSession(session, `跳板机连接失败：${error.message}`))
+      jumpClient.on('error', (error) => this.failSession(session, error.message === 'Keepalive timeout'
+        ? '跳板机保活检测超时，连接已断开'
+        : `跳板机连接失败：${error.message}`))
       jumpClient.on('close', () => {
         if (session.closing || this.sessions.get(sessionId) !== session) return
         this.closeSession(session, 'disconnected', '跳板机连接已断开')
@@ -116,17 +131,23 @@ export class SessionManager {
     }) as unknown as NonNullable<ConnectConfig['hostVerifier']>
     const config: ConnectConfig = {
       host: bookmark.host, port: bookmark.port, username: bookmark.username,
-      readyTimeout: 20_000, keepaliveInterval: 15_000, keepaliveCountMax: 3,
+      readyTimeout: 20_000,
+      keepaliveInterval: bookmark.keepaliveEnabled ? bookmark.keepaliveIntervalSeconds * 1000 : 0,
+      keepaliveCountMax: bookmark.keepaliveCountMax,
       hostHash: 'sha256', hostVerifier
     }
     if (bookmark.authType === 'password') {
       if (!credential) throw new Error(`${label}需要输入密码`)
       config.password = credential
       config.tryKeyboard = true
-    } else {
+    } else if (bookmark.authType === 'privateKey') {
       if (!bookmark.privateKeyPath) throw new Error(`${label}未配置私钥文件`)
       config.privateKey = await readFile(bookmark.privateKeyPath)
       if (credential) config.passphrase = credential
+    } else {
+      const agent = process.env['SSH_AUTH_SOCK'] || (process.platform === 'win32' ? '\\\\.\\pipe\\openssh-ssh-agent' : '')
+      if (!agent) throw new Error(`${label}未检测到 SSH Agent，请确认 SSH_AUTH_SOCK 已设置`)
+      config.agent = agent
     }
     return config
   }
@@ -150,10 +171,22 @@ export class SessionManager {
       }
       this.openShell(session)
     })
-    session.client.on('error', (error) => this.failSession(session, `${viaJump ? '目标机器连接失败：' : ''}${error.message}`))
+    session.client.on('error', (error) => this.failSession(session, error.message === 'Keepalive timeout'
+      ? `${viaJump ? '目标机器' : 'SSH'}保活检测超时，连接已断开`
+      : `${viaJump ? '目标机器连接失败：' : ''}${error.message}`))
     session.client.on('close', () => {
       if (session.closing || this.sessions.get(session.summary.id) !== session) return
       this.closeSession(session, 'disconnected')
+    })
+    session.client.on('tcp connection', (details, accept, reject) => {
+      const tunnel = [...session.tunnels.values()].find((item) => item.summary.type === 'remote'
+        && item.remoteBinding?.port === details.destPort
+        && (item.remoteBinding.address === details.destIP || item.remoteBinding.address === '0.0.0.0' || item.remoteBinding.address === '::'))
+      if (!tunnel || tunnel.summary.status !== 'running') { reject(); return }
+      const channel = accept()
+      const socket = connectTcp(tunnel.summary.targetPort, tunnel.summary.targetHost)
+      this.trackTunnelStreams(tunnel, channel, socket)
+      channel.pipe(socket).pipe(channel)
     })
   }
 
@@ -193,10 +226,12 @@ export class SessionManager {
       session.terminalOutput = output
       shell.on('data', (data: Buffer) => output.write('stdout', data))
       shell.stderr.on('data', (data: Buffer) => output.write('stderr', data))
+      shell.on('error', (shellError: Error) => this.failSession(session, shellError.message))
       shell.on('close', () => {
         output.end()
         if (session.terminalOutput === output) session.terminalOutput = undefined
       })
+      this.db.markBookmarkConnected(session.bookmark.id)
       this.emitSession(session)
     })
   }
@@ -221,6 +256,115 @@ export class SessionManager {
     this.closeSession(session, 'disconnected')
   }
   disconnectAll(): void { for (const id of this.sessions.keys()) this.disconnect(id) }
+
+  listTunnels(sessionId: string): TunnelSummary[] {
+    const session = this.sessions.get(sessionId)
+    return session ? [...session.tunnels.values()].map((item) => item.summary) : []
+  }
+
+  async startTunnel(sessionId: string, profile: PortForwardProfile): Promise<TunnelSummary> {
+    const session = this.requireConnectedSession(sessionId)
+    if (profile.bookmarkId !== session.bookmark.id) throw new Error('端口转发配置与当前连接不匹配')
+    const existing = [...session.tunnels.values()].find((item) => item.summary.profileId === profile.id)
+    if (existing) return existing.summary
+    const summary: TunnelSummary = {
+      id: randomUUID(), profileId: profile.id, sessionId, name: profile.name, type: profile.type,
+      bindAddress: profile.bindAddress, bindPort: profile.bindPort,
+      targetHost: profile.targetHost, targetPort: profile.targetPort, status: 'starting'
+    }
+    const tunnel: ActiveTunnel = { summary, streams: new Set() }
+    session.tunnels.set(summary.id, tunnel)
+    this.emitTunnel(tunnel)
+    try {
+      if (profile.type === 'remote') await this.startRemoteTunnel(session, tunnel)
+      else await this.startLocalTunnel(session, tunnel, profile.type === 'dynamic')
+      tunnel.summary = { ...tunnel.summary, status: 'running', error: undefined }
+      this.emitTunnel(tunnel)
+      return tunnel.summary
+    } catch (error) {
+      tunnel.summary = { ...tunnel.summary, status: 'error', error: error instanceof Error ? error.message : String(error) }
+      this.emitTunnel(tunnel)
+      session.tunnels.delete(summary.id)
+      tunnel.server?.close()
+      throw error
+    }
+  }
+
+  async stopTunnel(sessionId: string, tunnelId: string): Promise<void> {
+    const session = this.sessions.get(sessionId)
+    const tunnel = session?.tunnels.get(tunnelId)
+    if (!session || !tunnel) return
+    if (tunnel.remoteBinding) {
+      await new Promise<void>((resolve, reject) => session.client.unforwardIn(tunnel.remoteBinding!.address, tunnel.remoteBinding!.port, (error) => error ? reject(error) : resolve()))
+    }
+    session.tunnels.delete(tunnelId)
+    tunnel.server?.close()
+    for (const stream of tunnel.streams) stream.destroy()
+    tunnel.streams.clear()
+    this.emit({ type: 'tunnel', payload: { ...tunnel.summary, removed: true } })
+  }
+
+  private async startLocalTunnel(session: ActiveSession, tunnel: ActiveTunnel, dynamic: boolean): Promise<void> {
+    const onRuntimeError = (error: Error): void => {
+      if (!session.tunnels.has(tunnel.summary.id)) return
+      tunnel.summary = { ...tunnel.summary, status: 'error', error: error.message }
+      this.emitTunnel(tunnel)
+    }
+    if (dynamic) {
+      const server = socks.createServer((info, accept, deny) => {
+        session.client.forwardOut(info.srcAddr, info.srcPort, info.dstAddr, info.dstPort, (error, stream) => {
+          if (error) { deny(); return }
+          const socket = accept(true)
+          if (!socket) { stream.close(); return }
+          this.trackTunnelStreams(tunnel, stream, socket)
+          stream.pipe(socket).pipe(stream)
+        })
+      }).useAuth(socks.auth.None())
+      tunnel.server = server
+      await this.listen(server, tunnel.summary.bindPort, tunnel.summary.bindAddress)
+      const address = server.address()
+      if (address && typeof address !== 'string') tunnel.summary = { ...tunnel.summary, bindPort: address.port }
+      server.on('error', onRuntimeError)
+      return
+    }
+    const server = createServer((socket) => {
+      session.client.forwardOut(socket.remoteAddress ?? '127.0.0.1', socket.remotePort ?? 0, tunnel.summary.targetHost, tunnel.summary.targetPort, (error, stream) => {
+        if (error) { socket.destroy(error); return }
+        this.trackTunnelStreams(tunnel, stream, socket)
+        socket.pipe(stream).pipe(socket)
+      })
+    })
+    tunnel.server = server
+    await this.listen(server, tunnel.summary.bindPort, tunnel.summary.bindAddress)
+    const address = server.address()
+    if (address && typeof address !== 'string') tunnel.summary = { ...tunnel.summary, bindPort: address.port }
+    server.on('error', onRuntimeError)
+  }
+
+  private async startRemoteTunnel(session: ActiveSession, tunnel: ActiveTunnel): Promise<void> {
+    const assignedPort = await new Promise<number>((resolve, reject) => {
+      session.client.forwardIn(tunnel.summary.bindAddress, tunnel.summary.bindPort, (error, port) => error ? reject(error) : resolve(port))
+    })
+    tunnel.remoteBinding = { address: tunnel.summary.bindAddress, port: assignedPort }
+    tunnel.summary = { ...tunnel.summary, bindPort: assignedPort }
+  }
+
+  private listen(server: Server | SocksServer, port: number, address: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const onError = (error: Error): void => { server.removeListener('error', onError); reject(error) }
+      server.once('error', onError)
+      server.listen(port, address, () => { server.removeListener('error', onError); resolve() })
+    })
+  }
+
+  private emitTunnel(tunnel: ActiveTunnel): void { this.emit({ type: 'tunnel', payload: tunnel.summary }) }
+
+  private trackTunnelStreams(tunnel: ActiveTunnel, first: Duplex, second: Duplex): void {
+    tunnel.streams.add(first); tunnel.streams.add(second)
+    const close = (): void => { first.destroy(); second.destroy(); tunnel.streams.delete(first); tunnel.streams.delete(second) }
+    first.on('error', close); second.on('error', close)
+    first.on('close', close); second.on('close', close)
+  }
 
   getBookmarkId(id: string): string {
     return this.requireConnectedSession(id).bookmark.id
@@ -253,6 +397,9 @@ export class SessionManager {
         throw new Error('SSH 会话未连接')
       }
       session.sftp = sftp
+      const invalidate = (): void => { if (session.sftp === sftp) session.sftp = undefined }
+      sftp.once('close', invalidate)
+      sftp.on('error', invalidate)
       return sftp
     } finally {
       if (session.sftpPromise === promise) session.sftpPromise = undefined
@@ -294,6 +441,63 @@ export class SessionManager {
     return await this.listRemoteWithSftp(id, path)
   }
 
+  async createRemoteDirectory(id: string, path: string): Promise<void> {
+    const sftp = await this.getSftp(id)
+    await this.sftpCall<void>(`创建远端目录超时：${path}`, (done) => sftp.mkdir(path, (error) => done(error)))
+  }
+
+  async renameRemote(id: string, from: string, to: string): Promise<void> {
+    const sftp = await this.getSftp(id)
+    await this.sftpCall<void>(`重命名远端文件超时：${from}`, (done) => sftp.rename(from, to, (error) => done(error)))
+  }
+
+  async removeRemote(id: string, paths: string[]): Promise<void> {
+    const sftp = await this.getSftp(id)
+    for (const path of paths) await this.removeRemoteEntry(sftp, path)
+  }
+
+  async previewRemote(id: string, path: string, position: 'start' | 'end'): Promise<FilePreview> {
+    const sftp = await this.getSftp(id)
+    const info = await this.sftpCall<Stats>(`读取远端文件信息超时：${path}`, (done) => sftp.lstat(path, done))
+    if ((info.mode & 0o170000) !== 0o100000) throw new Error('只能预览普通文件')
+    const limit = 1024 * 1024
+    const length = Math.min(limit, info.size)
+    const start = position === 'end' ? Math.max(0, info.size - length) : 0
+    const stream = sftp.createReadStream(path, { start, end: Math.max(start, start + length - 1) })
+    const chunks: Buffer[] = []
+    let size = 0
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => { stream.destroy(); reject(new Error(`预览远端文件超时：${path}`)) }, 20_000)
+      stream.on('data', (chunk: Buffer) => { size += chunk.length; if (size <= limit) chunks.push(chunk) })
+      stream.on('error', (error: Error) => { clearTimeout(timer); reject(error) })
+      stream.on('close', () => { clearTimeout(timer); resolve() })
+    })
+    const buffer = Buffer.concat(chunks)
+    const sample = buffer.subarray(0, Math.min(buffer.length, 8192))
+    let controls = 0
+    for (const byte of sample) if (byte === 0 || (byte < 9 || (byte > 13 && byte < 32))) controls++
+    const binary = sample.length > 0 && controls / sample.length > 0.01
+    return { content: binary ? '' : buffer.toString('utf8'), size: info.size, truncated: info.size > limit, position, binary }
+  }
+
+  async listRemoteTree(id: string, root: string): Promise<{ relativePath: string; path: string; size: number; modifiedAt: number }[]> {
+    const sftp = await this.getSftp(id)
+    const files: { relativePath: string; path: string; size: number; modifiedAt: number }[] = []
+    const walk = async (directory: string, relativeDirectory: string): Promise<void> => {
+      const entries = await this.sftpCall<Parameters<Parameters<SFTPWrapper['readdir']>[1]>[1]>(`读取远端目录超时：${directory}`, (done) => sftp.readdir(directory, done))
+      for (const entry of entries ?? []) {
+        if (entry.filename === '.' || entry.filename === '..') continue
+        const mode = entry.attrs.mode ?? 0
+        const path = directory === '/' ? `/${entry.filename}` : `${directory}/${entry.filename}`
+        const relativePath = relativeDirectory ? `${relativeDirectory}/${entry.filename}` : entry.filename
+        if ((mode & 0o170000) === 0o040000) await walk(path, relativePath)
+        else if ((mode & 0o170000) === 0o100000) files.push({ relativePath, path, size: entry.attrs.size ?? 0, modifiedAt: (entry.attrs.mtime ?? 0) * 1000 })
+      }
+    }
+    await walk(root, '')
+    return files
+  }
+
   private requireConnectedSession(id: string): ActiveSession {
     const session = this.sessions.get(id)
     if (!session || session.summary.status !== 'connected') throw new Error('SSH 会话未连接')
@@ -311,7 +515,7 @@ export class SessionManager {
       if (typeof item.name !== 'string' || typeof item.path !== 'string' || !['file', 'directory', 'symlink', 'other'].includes(item.kind ?? '')) {
         throw new Error('远端目录条目格式错误')
       }
-      return { name: item.name, path: item.path, kind: item.kind!, size: Number(item.size) || 0, modifiedAt: Number(item.modifiedAt) || 0 }
+      return { name: item.name, path: item.path, kind: item.kind! }
     })
   }
 
@@ -370,6 +574,37 @@ export class SessionManager {
     })
   }
 
+  private sftpCall<T>(timeoutMessage: string, invoke: (done: (error?: Error | null, value?: T) => void) => void): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      let settled = false
+      const timer = setTimeout(() => { settled = true; reject(new Error(timeoutMessage)) }, 20_000)
+      const done = (error?: Error | null, value?: T): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        if (error) reject(error)
+        else resolve(value as T)
+      }
+      try { invoke(done) }
+      catch (error) { done(error instanceof Error ? error : new Error(String(error))) }
+    })
+  }
+
+  private async removeRemoteEntry(sftp: SFTPWrapper, path: string): Promise<void> {
+    const info = await this.sftpCall<Stats>(`读取远端文件信息超时：${path}`, (done) => sftp.lstat(path, done))
+    const kind = info.mode & 0o170000
+    if (kind !== 0o040000) {
+      await this.sftpCall<void>(`删除远端文件超时：${path}`, (done) => sftp.unlink(path, (error) => done(error)))
+      return
+    }
+    const children = await this.sftpCall<{ filename: string }[]>(`读取远端目录超时：${path}`, (done) => sftp.readdir(path, done as Parameters<SFTPWrapper['readdir']>[1]))
+    for (const child of children) {
+      if (child.filename === '.' || child.filename === '..') continue
+      await this.removeRemoteEntry(sftp, path === '/' ? `/${child.filename}` : `${path}/${child.filename}`)
+    }
+    await this.sftpCall<void>(`删除远端目录超时：${path}`, (done) => sftp.rmdir(path, (error) => done(error)))
+  }
+
   private closeSession(session: ActiveSession, status: 'disconnected' | 'error', error?: string): void {
     if (this.sessions.get(session.summary.id) !== session) return
     session.summary = { ...session.summary, status, error }
@@ -386,6 +621,11 @@ export class SessionManager {
     pending?.callback(false)
     session.terminalOutput?.end()
     session.terminalOutput = undefined
+    for (const tunnel of session.tunnels.values()) {
+      tunnel.server?.close()
+      for (const stream of tunnel.streams) stream.destroy()
+    }
+    session.tunnels.clear()
     session.shell?.close()
     session.sftp?.end()
     session.sftp = undefined

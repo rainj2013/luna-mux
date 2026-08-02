@@ -88,6 +88,25 @@ export class TransferManager {
 
   clearCompleted(): void { this.db.clearCompletedTransfers() }
 
+  whenSettled(ids: string[]): Promise<boolean> {
+    if (!ids.length) return Promise.resolve(true)
+    return new Promise((resolve) => {
+      const check = (): void => {
+        const tasks = this.db.listTransfers().filter((task) => ids.includes(task.id))
+        if (tasks.length !== ids.length) {
+          clearInterval(timer)
+          resolve(false)
+          return
+        }
+        if (tasks.some((task) => ['queued', 'scanning', 'running', 'conflict'].includes(task.status))) return
+        clearInterval(timer)
+        resolve(tasks.every((task) => task.status === 'completed'))
+      }
+      const timer = setInterval(check, 250)
+      check()
+    })
+  }
+
   resolveConflict(id: string, resolution: ConflictResolution, applyToBatch: boolean): void {
     const waiter = this.conflicts.get(id)
     if (!waiter || this.activeConflictId !== id) return

@@ -1,6 +1,6 @@
 # SSH Client 项目进度与风险记录
 
-最后更新：2026-07-25
+最后更新：2026-08-01
 
 ## 项目目标
 
@@ -51,11 +51,16 @@ Electron main process
 ### 连接与认证
 
 - 新增、编辑、删除和搜索 SSH 连接
-- 左侧连接管理支持折叠/展开，并持久化折叠状态
+- 左侧连接管理支持折叠/展开和拖动调宽，并持久化折叠状态与宽度
 - 支持选择一个直连配置作为单级跳板机
 - 跳板机和目标机器分别输入、保存凭据并验证主机指纹
 - 通过跳板机的 `forwardOut` 通道连接目标机器，终端和 SFTP 均绑定目标机器
 - 支持密码认证和 OpenSSH 私钥认证
+- 支持系统 SSH Agent 认证；macOS/Linux 使用 `SSH_AUTH_SOCK`，Windows 支持 OpenSSH Agent 命名管道
+- 连接支持分组、收藏和最近连接排序，并可安全预览、选择性导入 OpenSSH Config
+- SSH Config 导入不会执行 `Match exec`、`ProxyCommand` 或 shell 展开，仅导入具体 Host
+- 支持本地、远端和 SOCKS5 动态端口转发；配置按连接保存，监听器随 session 关闭
+- 支持可配置 SSH keepalive，目标机器和跳板机分别生效并提供明确超时提示
 - 私钥口令动态输入
 - 使用 Electron `safeStorage` 加密保存凭据
 - 支持主动清除已保存凭据
@@ -64,7 +69,7 @@ Electron main process
 
 ### 会话与终端
 
-- 多连接标签页
+- 多连接标签页，同一连接配置可同时打开多个独立 SSH 会话
 - 连接、断开及状态显示
 - xterm 终端输入输出
 - 终端尺寸变化同步到远端 PTY
@@ -74,6 +79,8 @@ Electron main process
 - SSH 输出按 16 ms / 64 KiB 批处理，降低大量输出时的 IPC 开销
 - stdout/stderr 使用流式 UTF-8 解码，避免多字节字符跨包乱码
 - 应用重启后恢复已打开的连接标签，但不会自动重连
+- 支持终端搜索、Web 链接、选区复制与粘贴，以及新建/关闭/切换 session 快捷键
+- 后台终端保留滚屏内容，并仅在可见时使用 WebGL 渲染
 
 终端的数据链路、性能取舍和跨平台验收要求见 `docs/TERMINAL_ARCHITECTURE.md`。
 
@@ -84,6 +91,8 @@ Electron main process
 - 远端不支持 `python3` 或 exec 时自动回退 SFTP `readdir`
 - 远端目录请求具有 12 秒超时、一次超时重试、10 秒缓存、同路径请求去重、悬停预取和过期响应隔离
 - 文件夹优先排序和多选
+- 支持前进、后退、上级目录、过滤、隐藏文件、路径收藏和虚拟化大目录列表
+- 支持新建目录、重命名、递归删除和文本预览；二进制文件会被识别并停止文本解码
 - 通过按钮或拖放上传、下载
 - 递归扫描及传输目录
 - 最多三个传输任务并发运行
@@ -94,6 +103,8 @@ Electron main process
 - 上传完成后自动刷新当前远端目录，下载完成后自动刷新当前本地目录；同批多文件完成事件合并刷新
 - 传输记录持久化到 SQLite
 - 应用异常退出后将未完成任务标记为中断
+- 支持保存单向部署配置，预览新增/变化/远端多余文件后批量上传；仅在全部上传成功后执行可选远端删除
+- 传输面板汇总显示整体进度、速度和预计时间
 
 ### 桌面与安全基础
 
@@ -104,20 +115,21 @@ Electron main process
 - preload 只暴露声明过的业务 API
 - 阻止 renderer 任意页面跳转
 - 外部 HTTP/HTTPS 链接交给系统浏览器
+- 支持导出脱敏 JSON 诊断信息，不包含凭据、私钥内容/路径、主机指纹、终端输出或文件内容
 - 配置 Windows NSIS 和 macOS DMG/ZIP 构建目标
 
 ## 已完成验证
 
-2026-07-25 在 macOS 开发机上完成以下静态验证：
+2026-08-01 在 macOS 开发机上完成以下验证：
 
 ```text
 npm run typecheck  通过
-npm test           通过，5 个测试文件、14 个测试用例
+npm test           通过，7 个测试文件、20 个测试用例
 npm run build      通过，main/preload/renderer 均成功生成产物
 npm audit --omit=dev  生产依赖 0 个已知漏洞
 ```
 
-全量 `npm audit` 报告 16 个 high，均来自 `electron-builder` 使用的开发/打包依赖链（`brace-expansion`/`minimatch` 及其上游）。审计建议的自动修复会将 `electron-builder` 从 26.x 降至 25.x，属于破坏性变更，因此未执行 `npm audit fix --force`；发布工具链升级时需重新评估。
+`npm audit --omit=dev` 报告生产依赖 0 个已知漏洞。全量 `npm audit` 报告 1 个 high，来自 Electron 打包工具链间接依赖的 `brace-expansion`；未在没有跨平台打包回归的情况下自动修改发布依赖。
 
 同日已执行 `npm run dev`，Electron 主进程、preload、renderer 开发服务和 macOS 桌面窗口均成功启动，启动阶段未出现运行时错误。renderer 开发服务监听 `http://localhost:5173/`。
 
@@ -265,7 +277,7 @@ macOS 交通灯坐标从 `x=16` 开始，CSS 中品牌内容同样从左侧 16px
 
 #### 14. 自动化覆盖不足
 
-自动化覆盖已增加到 6 个测试文件、16 个用例，覆盖跳板连接、SFTP 单例初始化、重复连接、host-key 定时器隔离、传输冲突批次、失败覆盖恢复、数据库 v2 migration、路径、终端输出和终端设置校验。但真实网络错误和跨平台行为仍有覆盖缺口。
+自动化覆盖已增加到 7 个测试文件、20 个用例，新增覆盖数据库 v4 migration、keepalive、SSH Agent、SSH Config 安全解析、SFTP wrapper 重建、远端转发生命周期和部署任务完成判定。但真实网络错误和跨平台行为仍有覆盖缺口。
 
 优先补充：
 

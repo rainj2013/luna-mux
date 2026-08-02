@@ -4,7 +4,14 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { Bookmark, BookmarkInput, TransferTask } from '../shared/types'
 
-type BookmarkRow = Omit<Bookmark, 'hasSavedCredential'> & { hasSavedCredential: number }
+type BookmarkRow = Omit<Bookmark, 'hasSavedCredential' | 'keepaliveEnabled' | 'favorite'> & {
+  hasSavedCredential: number
+  keepaliveEnabled: number
+  favorite: number
+}
+
+function keepaliveInterval(value: number): number { return Math.min(300, Math.max(5, Math.round(value))) }
+function keepaliveCount(value: number): number { return Math.min(10, Math.max(1, Math.round(value))) }
 
 export class AppDatabase {
   private db: DatabaseSync
@@ -17,6 +24,10 @@ export class AppDatabase {
         id TEXT PRIMARY KEY, name TEXT NOT NULL, host TEXT NOT NULL, port INTEGER NOT NULL,
         username TEXT NOT NULL, authType TEXT NOT NULL, privateKeyPath TEXT NOT NULL DEFAULT '',
         jumpBookmarkId TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '',
+        groupName TEXT NOT NULL DEFAULT '', favorite INTEGER NOT NULL DEFAULT 0,
+        lastConnectedAt TEXT NOT NULL DEFAULT '',
+        keepaliveEnabled INTEGER NOT NULL DEFAULT 1, keepaliveIntervalSeconds INTEGER NOT NULL DEFAULT 15,
+        keepaliveCountMax INTEGER NOT NULL DEFAULT 3,
         createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS credentials (bookmarkId TEXT PRIMARY KEY, encrypted TEXT NOT NULL);
@@ -65,12 +76,56 @@ export class AppDatabase {
         throw error
       }
     }
+    if (version < 3) {
+      const columns = this.db.prepare('PRAGMA table_info(bookmarks)').all() as { name: string }[]
+      this.db.exec('BEGIN')
+      try {
+        if (!columns.some((column) => column.name === 'keepaliveEnabled')) {
+          this.db.exec('ALTER TABLE bookmarks ADD COLUMN keepaliveEnabled INTEGER NOT NULL DEFAULT 1')
+        }
+        if (!columns.some((column) => column.name === 'keepaliveIntervalSeconds')) {
+          this.db.exec('ALTER TABLE bookmarks ADD COLUMN keepaliveIntervalSeconds INTEGER NOT NULL DEFAULT 15')
+        }
+        if (!columns.some((column) => column.name === 'keepaliveCountMax')) {
+          this.db.exec('ALTER TABLE bookmarks ADD COLUMN keepaliveCountMax INTEGER NOT NULL DEFAULT 3')
+        }
+        this.db.exec('PRAGMA user_version = 3; COMMIT')
+      } catch (error) {
+        this.db.exec('ROLLBACK')
+        throw error
+      }
+    }
+    if (version < 4) {
+      const columns = this.db.prepare('PRAGMA table_info(bookmarks)').all() as { name: string }[]
+      this.db.exec('BEGIN')
+      try {
+        if (!columns.some((column) => column.name === 'groupName')) {
+          this.db.exec("ALTER TABLE bookmarks ADD COLUMN groupName TEXT NOT NULL DEFAULT ''")
+        }
+        if (!columns.some((column) => column.name === 'favorite')) {
+          this.db.exec('ALTER TABLE bookmarks ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0')
+        }
+        if (!columns.some((column) => column.name === 'lastConnectedAt')) {
+          this.db.exec("ALTER TABLE bookmarks ADD COLUMN lastConnectedAt TEXT NOT NULL DEFAULT ''")
+        }
+        this.db.exec('PRAGMA user_version = 4; COMMIT')
+      } catch (error) {
+        this.db.exec('ROLLBACK')
+        throw error
+      }
+    }
   }
 
   listBookmarks(): Bookmark[] {
     const rows = this.db.prepare(`SELECT b.*, CASE WHEN c.bookmarkId IS NULL THEN 0 ELSE 1 END hasSavedCredential
-      FROM bookmarks b LEFT JOIN credentials c ON c.bookmarkId = b.id ORDER BY b.updatedAt DESC`).all() as BookmarkRow[]
-    return rows.map((row) => ({ ...row, hasSavedCredential: Boolean(row.hasSavedCredential) }))
+      FROM bookmarks b LEFT JOIN credentials c ON c.bookmarkId = b.id
+      ORDER BY b.favorite DESC, CASE WHEN b.lastConnectedAt = '' THEN b.updatedAt ELSE b.lastConnectedAt END DESC`).all() as BookmarkRow[]
+    return rows.map((row) => ({
+      ...row,
+      hasSavedCredential: Boolean(row.hasSavedCredential),
+      keepaliveEnabled: Boolean(row.keepaliveEnabled),
+      favorite: Boolean(row.favorite)
+    }))
   }
 
   getBookmark(id: string): Bookmark | undefined {
@@ -80,21 +135,35 @@ export class AppDatabase {
   saveBookmark(input: BookmarkInput & { id?: string }): Bookmark {
     const now = new Date().toISOString()
     const existing = input.id ? this.getBookmark(input.id) : undefined
+    if (existing && existing.authType !== input.authType) this.forgetCredential(existing.id)
     const bookmark: Bookmark = {
       id: input.id ?? randomUUID(), name: input.name.trim(), host: input.host.trim(),
       port: input.port, username: input.username.trim(), authType: input.authType,
       privateKeyPath: input.privateKeyPath.trim(), jumpBookmarkId: input.jumpBookmarkId.trim(), note: input.note.trim(),
-      hasSavedCredential: existing?.hasSavedCredential ?? false,
+      groupName: input.groupName.trim(), favorite: Boolean(input.favorite), lastConnectedAt: existing?.lastConnectedAt ?? '',
+      keepaliveEnabled: Boolean(input.keepaliveEnabled), keepaliveIntervalSeconds: keepaliveInterval(input.keepaliveIntervalSeconds),
+      keepaliveCountMax: keepaliveCount(input.keepaliveCountMax),
+      hasSavedCredential: existing?.authType === input.authType ? existing.hasSavedCredential : false,
       createdAt: existing?.createdAt ?? now, updatedAt: now
     }
-    this.db.prepare(`INSERT INTO bookmarks (id,name,host,port,username,authType,privateKeyPath,jumpBookmarkId,note,createdAt,updatedAt)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,host=excluded.host,
+    this.db.prepare(`INSERT INTO bookmarks (id,name,host,port,username,authType,privateKeyPath,jumpBookmarkId,note,groupName,favorite,lastConnectedAt,keepaliveEnabled,keepaliveIntervalSeconds,keepaliveCountMax,createdAt,updatedAt)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,host=excluded.host,
       port=excluded.port,username=excluded.username,authType=excluded.authType,
-      privateKeyPath=excluded.privateKeyPath,jumpBookmarkId=excluded.jumpBookmarkId,note=excluded.note,updatedAt=excluded.updatedAt`).run(
+      privateKeyPath=excluded.privateKeyPath,jumpBookmarkId=excluded.jumpBookmarkId,note=excluded.note,
+      groupName=excluded.groupName,favorite=excluded.favorite,
+      keepaliveEnabled=excluded.keepaliveEnabled,keepaliveIntervalSeconds=excluded.keepaliveIntervalSeconds,
+      keepaliveCountMax=excluded.keepaliveCountMax,updatedAt=excluded.updatedAt`).run(
       bookmark.id, bookmark.name, bookmark.host, bookmark.port, bookmark.username,
-      bookmark.authType, bookmark.privateKeyPath, bookmark.jumpBookmarkId, bookmark.note, bookmark.createdAt, bookmark.updatedAt
+      bookmark.authType, bookmark.privateKeyPath, bookmark.jumpBookmarkId, bookmark.note,
+      bookmark.groupName, Number(bookmark.favorite), bookmark.lastConnectedAt,
+      Number(bookmark.keepaliveEnabled), bookmark.keepaliveIntervalSeconds, bookmark.keepaliveCountMax,
+      bookmark.createdAt, bookmark.updatedAt
     )
     return bookmark
+  }
+
+  markBookmarkConnected(id: string): void {
+    this.db.prepare('UPDATE bookmarks SET lastConnectedAt = ? WHERE id = ?').run(new Date().toISOString(), id)
   }
 
   removeBookmark(id: string): void {

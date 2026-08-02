@@ -46,6 +46,11 @@ async function waitForStatus(tasks: Map<string, TransferTask>, ids: string[], st
 }
 
 describe('TransferManager reliability', () => {
+  it('settles conservatively when deployment task records are missing', async () => {
+    const harness = createHarness(() => Readable.from(''))
+    await expect(harness.manager.whenSettled(['missing'])).resolves.toBe(false)
+  })
+
   it('serializes conflicts and applies one batch decision to queued conflicts', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'ssh-client-transfer-'))
     temporaryDirectories.push(directory)
