@@ -10,13 +10,13 @@ use std::{
 use base64::{Engine, engine::general_purpose::STANDARD};
 use chrono::Utc;
 use serde_json::json;
-use tauri::{AppHandle, Manager, State, Theme, WebviewWindow};
+use tauri::{AppHandle, State, Theme, WebviewWindow};
 use tauri_plugin_dialog::{DialogExt, FilePath};
 use tauri_plugin_opener::OpenerExt;
 use uuid::Uuid;
 
 use crate::{
-    database::Database, models::*, sessions::SessionManager, ssh_config,
+    app_icon, database::Database, models::*, sessions::SessionManager, ssh_config,
     transfers::TransferManager, tunnels::TunnelManager,
 };
 
@@ -567,19 +567,6 @@ pub fn settings_load_terminal_background(path: String) -> Result<String, String>
     ))
 }
 
-fn icon_path(app: &AppHandle, id: &AppIconId) -> PathBuf {
-    let name = format!("{}.png", id.as_str());
-    let packaged = app
-        .path()
-        .resource_dir()
-        .ok()
-        .map(|path| path.join("icons").join(&name));
-    packaged.filter(|path| path.exists()).unwrap_or_else(|| {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../assets/icons")
-            .join(name)
-    })
-}
 #[tauri::command]
 pub fn settings_get_app_icons(
     app: AppHandle,
@@ -595,7 +582,7 @@ pub fn settings_get_app_icons(
     let options = definitions
         .into_iter()
         .map(|(id, name)| {
-            fs::read(icon_path(&app, &id))
+            fs::read(app_icon::path(&app, &id))
                 .map(|data| AppIconOption {
                     id,
                     name: name.into(),
@@ -607,16 +594,14 @@ pub fn settings_get_app_icons(
     Ok(AppIconSettings { selected, options })
 }
 #[tauri::command]
-pub fn settings_set_app_icon(
+pub async fn settings_set_app_icon(
     app: AppHandle,
     window: WebviewWindow,
-    state: State<AppState>,
+    state: State<'_, AppState>,
     icon: AppIconId,
 ) -> Result<AppIconId, String> {
+    app_icon::apply(&app, &window, &icon).await?;
     state.db.set_setting("appIcon", &icon)?;
-    let image =
-        tauri::image::Image::from_path(icon_path(&app, &icon)).map_err(|e| e.to_string())?;
-    let _ = window.set_icon(image);
     Ok(icon)
 }
 

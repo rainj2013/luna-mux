@@ -4,13 +4,14 @@ use std::{
     pin::Pin,
     sync::{
         Arc, Mutex as StdMutex, RwLock,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
     },
     time::Duration,
 };
 
 use anyhow::{Context, anyhow};
 use async_recursion::async_recursion;
+use base64::{Engine, engine::general_purpose::STANDARD};
 use russh::{
     ChannelMsg, Disconnect, client,
     keys::{self, HashAlg, PrivateKeyWithHashAlg},
@@ -28,6 +29,30 @@ use crate::{database::Database, models::*};
 trait AsyncTransport: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> AsyncTransport for T {}
 type Transport = Pin<Box<dyn AsyncTransport>>;
+
+const REMOTE_EXEC_TIMEOUT: Duration = Duration::from_secs(12);
+const REMOTE_EXEC_OUTPUT_LIMIT: usize = 16 * 1024 * 1024;
+const REMOTE_LIST_MODE_UNKNOWN: u8 = 0;
+const REMOTE_LIST_MODE_EXEC: u8 = 1;
+const REMOTE_LIST_MODE_SFTP: u8 = 2;
+const REMOTE_LIST_SCRIPT: &str = r#"import base64,json,os,sys
+path=os.fsdecode(base64.b64decode(sys.argv[1]))
+items=[]
+with os.scandir(path) as entries:
+ for entry in entries:
+  try:
+   kind='symlink' if entry.is_symlink() else 'directory' if entry.is_dir(follow_symlinks=False) else 'file' if entry.is_file(follow_symlinks=False) else 'other'
+   items.append({'name':entry.name,'path':os.path.join(path,entry.name),'kind':kind})
+  except OSError:
+   items.append({'name':entry.name,'path':os.path.join(path,entry.name),'kind':'other'})
+sys.stdout.write(json.dumps(items))"#;
+
+#[derive(Debug)]
+enum RemoteExecError {
+    Unavailable,
+    Timeout,
+    Failed(String),
+}
 
 struct ClientHandler {
     session_id: String,
@@ -115,6 +140,8 @@ pub struct ActiveSession {
     jump_handle: Mutex<Option<client::Handle<ClientHandler>>>,
     shell: Mutex<Option<russh::ChannelWriteHalf<client::Msg>>>,
     sftp: Mutex<Option<Arc<SftpSession>>>,
+    remote_home: Mutex<Option<String>>,
+    remote_list_mode: AtomicU8,
     paused: AtomicBool,
     resume: Notify,
     closing: AtomicBool,
@@ -209,6 +236,8 @@ impl SessionManager {
             jump_handle: Mutex::new(None),
             shell: Mutex::new(None),
             sftp: Mutex::new(None),
+            remote_home: Mutex::new(None),
+            remote_list_mode: AtomicU8::new(REMOTE_LIST_MODE_UNKNOWN),
             paused: AtomicBool::new(false),
             resume: Notify::new(),
             closing: AtomicBool::new(false),
@@ -700,13 +729,67 @@ impl SessionManager {
             .map_err(|e| e.to_string())
     }
     pub async fn remote_home(&self, id: &str) -> Result<String, String> {
-        self.sftp(id)
+        let active = self.get(id)?;
+        let mut cached = active.remote_home.lock().await;
+        if let Some(path) = cached.as_ref() {
+            return Ok(path.clone());
+        }
+        if let Ok(output) = self.exec_remote(&active, "printf '%s' \"$HOME\"").await {
+            let path = output.trim().to_string();
+            if path.starts_with('/') {
+                *cached = Some(path.clone());
+                return Ok(path);
+            }
+        }
+        let path = self
+            .sftp(id)
             .await?
             .canonicalize(".")
             .await
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        *cached = Some(path.clone());
+        Ok(path)
     }
     pub async fn list_remote(&self, id: &str, path: String) -> Result<Vec<DirectoryEntry>, String> {
+        let active = self.get(id)?;
+        if active.remote_list_mode.load(Ordering::Acquire) != REMOTE_LIST_MODE_SFTP {
+            match self.list_remote_with_exec(&active, &path).await {
+                Ok(entries) => {
+                    active
+                        .remote_list_mode
+                        .store(REMOTE_LIST_MODE_EXEC, Ordering::Release);
+                    return Ok(entries);
+                }
+                Err(RemoteExecError::Unavailable) => {
+                    active
+                        .remote_list_mode
+                        .store(REMOTE_LIST_MODE_SFTP, Ordering::Release);
+                }
+                Err(RemoteExecError::Timeout) => {}
+                Err(RemoteExecError::Failed(message)) => return Err(message),
+            }
+        }
+        self.list_remote_with_sftp(id, path).await
+    }
+    async fn list_remote_with_exec(
+        &self,
+        active: &ActiveSession,
+        path: &str,
+    ) -> Result<Vec<DirectoryEntry>, RemoteExecError> {
+        let encoded_path = STANDARD.encode(path.as_bytes());
+        let command = format!(
+            "python3 -c {} {}",
+            shell_quote(REMOTE_LIST_SCRIPT),
+            shell_quote(&encoded_path)
+        );
+        let output = self.exec_remote(active, &command).await?;
+        parse_remote_entries(&output)
+    }
+    async fn list_remote_with_sftp(
+        &self,
+        id: &str,
+        path: String,
+    ) -> Result<Vec<DirectoryEntry>, String> {
         let entries = self
             .sftp(id)
             .await?
@@ -731,6 +814,90 @@ impl SessionManager {
                 }
             })
             .collect())
+    }
+    async fn exec_remote(
+        &self,
+        active: &ActiveSession,
+        command: &str,
+    ) -> Result<String, RemoteExecError> {
+        let deadline = tokio::time::Instant::now() + REMOTE_EXEC_TIMEOUT;
+        let mut channel = tokio::time::timeout_at(deadline, async {
+            let handle = active.handle.lock().await;
+            let channel = handle
+                .as_ref()
+                .ok_or(RemoteExecError::Unavailable)?
+                .channel_open_session()
+                .await
+                .map_err(|_| RemoteExecError::Unavailable)?;
+            Ok::<_, RemoteExecError>(channel)
+        })
+        .await
+        .map_err(|_| RemoteExecError::Timeout)??;
+        match tokio::time::timeout_at(deadline, channel.exec(true, command)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(_)) => {
+                let _ = channel.close().await;
+                return Err(RemoteExecError::Unavailable);
+            }
+            Err(_) => {
+                let _ = channel.close().await;
+                return Err(RemoteExecError::Timeout);
+            }
+        }
+        let read_output = async {
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let mut exit_status = None;
+            while let Some(message) = channel.wait().await {
+                match message {
+                    ChannelMsg::Data { data } => {
+                        if stdout.len().saturating_add(data.len()) > REMOTE_EXEC_OUTPUT_LIMIT {
+                            let _ = channel.close().await;
+                            return Err(RemoteExecError::Failed("远端目录内容过大".into()));
+                        }
+                        stdout.extend_from_slice(&data);
+                    }
+                    ChannelMsg::ExtendedData { data, .. } => {
+                        if stderr.len().saturating_add(data.len()) <= REMOTE_EXEC_OUTPUT_LIMIT {
+                            stderr.extend_from_slice(&data);
+                        }
+                    }
+                    ChannelMsg::ExitStatus {
+                        exit_status: status,
+                    } => exit_status = Some(status),
+                    ChannelMsg::ExitSignal { error_message, .. } => {
+                        return Err(RemoteExecError::Failed(if error_message.is_empty() {
+                            "远端目录命令被终止".into()
+                        } else {
+                            error_message
+                        }));
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(status) = exit_status.filter(|status| *status != 0) {
+                let message = String::from_utf8_lossy(&stderr).trim().to_string();
+                let message = if message.is_empty() {
+                    format!("远端命令退出码 {status}")
+                } else {
+                    message
+                };
+                return Err(if status == 127 {
+                    RemoteExecError::Unavailable
+                } else {
+                    RemoteExecError::Failed(message)
+                });
+            }
+            String::from_utf8(stdout)
+                .map_err(|_| RemoteExecError::Failed("远端目录响应不是 UTF-8 文本".into()))
+        };
+        match tokio::time::timeout_at(deadline, read_output).await {
+            Ok(result) => result,
+            Err(_) => {
+                let _ = channel.close().await;
+                Err(RemoteExecError::Timeout)
+            }
+        }
     }
     pub async fn remote_tree(
         &self,
@@ -863,6 +1030,14 @@ impl SessionManager {
     }
 }
 
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+fn parse_remote_entries(output: &str) -> Result<Vec<DirectoryEntry>, RemoteExecError> {
+    serde_json::from_str(output).map_err(|_| RemoteExecError::Failed("远端目录响应格式错误".into()))
+}
+
 #[derive(Default)]
 struct Utf8Decoder {
     pending: Vec<u8>,
@@ -898,7 +1073,25 @@ impl Utf8Decoder {
 
 #[cfg(test)]
 mod tests {
-    use super::Utf8Decoder;
+    use super::{EntryKind, Utf8Decoder, parse_remote_entries, shell_quote};
+
+    #[test]
+    fn quotes_remote_command_arguments() {
+        assert_eq!(shell_quote("a'b"), "'a'\"'\"'b'");
+    }
+
+    #[test]
+    fn parses_fast_remote_directory_response() {
+        let entries =
+            parse_remote_entries(r#"[{"name":"logs","path":"/srv/logs","kind":"directory"}]"#)
+                .expect("valid directory response");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "logs");
+        assert!(matches!(entries[0].kind, EntryKind::Directory));
+        assert_eq!(entries[0].size, None);
+        assert_eq!(entries[0].modified_at, None);
+    }
+
     #[test]
     fn preserves_split_utf8_sequences() {
         let mut decoder = Utf8Decoder::default();

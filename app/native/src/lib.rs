@@ -1,3 +1,4 @@
+mod app_icon;
 mod commands;
 mod database;
 mod desktop;
@@ -47,6 +48,8 @@ pub fn run() {
                 &legacy,
                 &format!("{}.credentials", app.config().identifier),
             )?);
+            let selected_icon = database.get_setting("appIcon", models::AppIconId::Ssh);
+            app_icon::apply_at_startup(app.handle(), &selected_icon)?;
             let sessions = SessionManager::new(app.handle().clone(), database.clone());
             let transfers =
                 TransferManager::new(app.handle().clone(), database.clone(), sessions.clone());
