@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, nativeTheme, shell } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, shell, type MenuItemConstructorOptions } from 'electron'
 import { dirname, extname, join, posix, relative } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
@@ -152,6 +152,86 @@ function applyAppIcon(id: AppIconId): void {
 function emit(event: AppEvent): void {
   if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return
   mainWindow.webContents.send('app:event', event)
+}
+
+function installMacApplicationMenu(): void {
+  if (process.platform !== 'darwin') return
+  const applicationName = app.getName() === 'ssh-client' ? 'SSH Client' : app.getName()
+  const command = (payload: Extract<AppEvent, { type: 'menu-command' }>['payload']): void => emit({ type: 'menu-command', payload })
+  const template: MenuItemConstructorOptions[] = [
+    {
+      label: applicationName,
+      submenu: [
+        { role: 'about', label: `关于 ${applicationName}` },
+        { type: 'separator' },
+        { label: '设置...', accelerator: 'CommandOrControl+,', click: () => command('settings') },
+        { type: 'separator' },
+        { role: 'services', label: '服务' },
+        { type: 'separator' },
+        { role: 'hide', label: `隐藏 ${applicationName}` },
+        { role: 'hideOthers', label: '隐藏其他' },
+        { role: 'unhide', label: '全部显示' },
+        { type: 'separator' },
+        { role: 'quit', label: `退出 ${applicationName}` }
+      ]
+    },
+    {
+      label: '连接',
+      submenu: [
+        { label: '新增连接', accelerator: 'CommandOrControl+N', click: () => command('new-connection') },
+        { label: '导入 OpenSSH Config...', click: () => command('import-connections') },
+        { type: 'separator' },
+        { label: '为当前机器新建会话', accelerator: 'CommandOrControl+Shift+T', click: () => command('new-session') },
+        { label: '关闭当前标签', accelerator: 'CommandOrControl+W', click: () => command('close-tab') }
+      ]
+    },
+    {
+      label: '编辑',
+      submenu: [
+        { role: 'undo', label: '撤销' },
+        { role: 'redo', label: '重做' },
+        { type: 'separator' },
+        { role: 'cut', label: '剪切' },
+        { role: 'copy', label: '复制' },
+        { role: 'paste', label: '粘贴' },
+        { role: 'pasteAndMatchStyle', label: '粘贴并匹配样式' },
+        { role: 'delete', label: '删除' },
+        { role: 'selectAll', label: '全选' }
+      ]
+    },
+    {
+      label: '视图',
+      submenu: [
+        { label: '终端', accelerator: 'CommandOrControl+1', click: () => command('show-terminal') },
+        { label: '文件传输', accelerator: 'CommandOrControl+2', click: () => command('show-files') },
+        { type: 'separator' },
+        { label: '展开/折叠连接管理', accelerator: 'CommandOrControl+B', click: () => command('toggle-sidebar') },
+        { type: 'separator' },
+        { role: 'resetZoom', label: '实际大小', accelerator: 'CommandOrControl+0' },
+        { role: 'zoomIn', label: '放大', accelerator: 'CommandOrControl+=' },
+        { role: 'zoomOut', label: '缩小', accelerator: 'CommandOrControl+-' },
+        { type: 'separator' },
+        { role: 'togglefullscreen', label: '进入/退出全屏' }
+      ]
+    },
+    {
+      label: '窗口',
+      submenu: [
+        { role: 'minimize', label: '最小化' },
+        { role: 'zoom', label: '缩放' },
+        { type: 'separator' },
+        { role: 'front', label: '前置全部窗口' }
+      ]
+    },
+    {
+      role: 'help',
+      label: '帮助',
+      submenu: [
+        { label: `${applicationName} 使用帮助`, accelerator: 'F1', click: () => command('help') }
+      ]
+    }
+  ]
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template))
 }
 
 async function loadTerminalBackground(path: string): Promise<string> {
@@ -450,7 +530,7 @@ app.whenReady().then(() => {
   nativeTheme.themeSource = sanitizeUiTheme(database.getSetting('uiTheme', 'system'))
   sessions = new SessionManager(database, emit)
   transfers = new TransferManager(database, sessions, emit)
-  registerIpc(); createWindow()
+  registerIpc(); installMacApplicationMenu(); createWindow()
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })
 })
 

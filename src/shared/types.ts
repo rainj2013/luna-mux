@@ -183,6 +183,17 @@ export interface TransferTask {
   updatedAt: string
 }
 
+export type MenuCommand =
+  | 'new-connection'
+  | 'import-connections'
+  | 'new-session'
+  | 'close-tab'
+  | 'settings'
+  | 'help'
+  | 'show-terminal'
+  | 'show-files'
+  | 'toggle-sidebar'
+
 export type AppEvent =
   | { type: 'session'; payload: SessionSummary }
   | { type: 'terminal-data'; payload: { sessionId: string; data: string } }
@@ -190,6 +201,7 @@ export type AppEvent =
   | { type: 'transfer'; payload: TransferTask }
   | { type: 'tunnel'; payload: TunnelSummary & { removed?: boolean } }
   | { type: 'transfer-conflict'; payload: { taskId: string; sourcePath: string; destinationPath: string } }
+  | { type: 'menu-command'; payload: MenuCommand }
 
 export interface TransferRequest {
   sessionId: string

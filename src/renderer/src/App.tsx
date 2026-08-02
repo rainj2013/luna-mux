@@ -240,6 +240,21 @@ export function App(): React.JSX.Element {
     } catch (error) { showError(errorMessage(error)) }
   }
 
+  useEffect(() => window.api.onEvent((event) => {
+    if (event.type !== 'menu-command') return
+    const modalOpen = Boolean(document.querySelector('.modal-backdrop, .help-backdrop'))
+    if (modalOpen) return
+    if (event.payload === 'new-connection') setBookmarkDialog('new')
+    else if (event.payload === 'import-connections') void chooseSshConfig()
+    else if (event.payload === 'new-session' && activeBookmark) openBookmark(activeBookmark, { newSession: true })
+    else if (event.payload === 'close-tab' && activeTab) closeTab(activeTab)
+    else if (event.payload === 'settings') setSettingsDialog(true)
+    else if (event.payload === 'help') setHelpDialog(true)
+    else if (event.payload === 'show-terminal' && tabs.length) setWorkspaceView('terminal')
+    else if (event.payload === 'show-files' && tabs.length) setWorkspaceView('files')
+    else if (event.payload === 'toggle-sidebar') setSidebarCollapsed((collapsed) => !collapsed)
+  }), [activeBookmark, activeTab, tabs, bookmarks])
+
   const saveSidebarWidth = (width: number): void => {
     const next = clampSidebarWidth(width)
     sidebarWidthRef.current = next
