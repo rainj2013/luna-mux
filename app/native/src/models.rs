@@ -109,6 +109,72 @@ pub enum SessionStatus {
     Error,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum AiShell {
+    Linux,
+    PowerShell,
+    Cmd,
+    Macos,
+}
+
+impl Default for AiShell {
+    fn default() -> Self {
+        Self::Linux
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiSettings {
+    pub base_url: String,
+    pub model: String,
+    pub default_shell: AiShell,
+    pub api_key_configured: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiSettingsInput {
+    pub base_url: String,
+    pub model: String,
+    pub default_shell: AiShell,
+    #[serde(default)]
+    pub api_key: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiGenerateRequest {
+    pub requirement: String,
+    pub shell: AiShell,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum AiRiskLevel {
+    Low,
+    Medium,
+    High,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiRiskAssessment {
+    pub risk_level: AiRiskLevel,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiCommandSuggestion {
+    pub command: String,
+    pub explanation: String,
+    pub assumptions: Vec<String>,
+    pub warnings: Vec<String>,
+    pub risk_level: AiRiskLevel,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HostKeyPrompt {

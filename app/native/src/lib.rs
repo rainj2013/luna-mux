@@ -1,3 +1,4 @@
+mod ai;
 mod app_icon;
 mod commands;
 mod database;
@@ -180,7 +181,13 @@ pub fn run() {
             settings_choose_terminal_background,
             settings_load_terminal_background,
             settings_get_app_icons,
-            settings_set_app_icon
+            settings_set_app_icon,
+            ai_settings_get,
+            ai_settings_save,
+            ai_settings_delete_key,
+            ai_settings_test,
+            ai_command_generate,
+            ai_command_analyze
         ])
         .build(tauri::generate_context!())
         .expect("failed to build SSH Client")

@@ -16,7 +16,7 @@ use tauri_plugin_opener::OpenerExt;
 use uuid::Uuid;
 
 use crate::{
-    app_icon, database::Database, models::*, sessions::SessionManager, ssh_config,
+    ai, app_icon, database::Database, models::*, sessions::SessionManager, ssh_config,
     transfers::TransferManager, tunnels::TunnelManager,
 };
 
@@ -647,6 +647,45 @@ pub fn settings_save_terminal(
     }
     state.db.set_setting("terminalSettings", &settings)?;
     Ok(settings)
+}
+
+#[tauri::command]
+pub fn ai_settings_get(state: State<AppState>) -> AiSettings {
+    ai::get_settings(&state.db)
+}
+
+#[tauri::command]
+pub fn ai_settings_save(
+    state: State<AppState>,
+    settings: AiSettingsInput,
+) -> Result<AiSettings, String> {
+    ai::save_settings(&state.db, settings)
+}
+
+#[tauri::command]
+pub fn ai_settings_delete_key(state: State<AppState>) -> AiSettings {
+    ai::delete_api_key(&state.db)
+}
+
+#[tauri::command]
+pub async fn ai_settings_test(
+    state: State<'_, AppState>,
+    settings: AiSettingsInput,
+) -> Result<(), String> {
+    ai::test_settings(&state.db, settings).await
+}
+
+#[tauri::command]
+pub async fn ai_command_generate(
+    state: State<'_, AppState>,
+    request: AiGenerateRequest,
+) -> Result<AiCommandSuggestion, String> {
+    ai::generate_command(&state.db, request).await
+}
+
+#[tauri::command]
+pub fn ai_command_analyze(command: String) -> Result<AiRiskAssessment, String> {
+    ai::analyze_command(&command)
 }
 #[tauri::command]
 pub async fn settings_choose_terminal_background(app: AppHandle) -> Option<String> {

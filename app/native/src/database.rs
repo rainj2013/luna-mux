@@ -8,6 +8,8 @@ use uuid::Uuid;
 
 use crate::models::*;
 
+const AI_API_KEY_ACCOUNT: &str = "__ai_api_key__";
+
 pub struct Database {
     connection: Mutex<Connection>,
     credential_service: String,
@@ -446,6 +448,27 @@ impl Database {
             )
             .map(|_| ())
         })
+    }
+
+    pub fn save_ai_api_key(&self, api_key: &str) -> Result<(), String> {
+        Entry::new(&self.credential_service, AI_API_KEY_ACCOUNT)
+            .map_err(|e| e.to_string())?
+            .set_password(api_key)
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn get_ai_api_key(&self) -> Option<String> {
+        Entry::new(&self.credential_service, AI_API_KEY_ACCOUNT)
+            .ok()?
+            .get_password()
+            .ok()
+            .filter(|value| !value.is_empty())
+    }
+
+    pub fn delete_ai_api_key(&self) {
+        if let Ok(entry) = Entry::new(&self.credential_service, AI_API_KEY_ACCOUNT) {
+            let _ = entry.delete_credential();
+        }
     }
 
     pub fn mark_connected(&self, id: &str) -> Result<(), String> {

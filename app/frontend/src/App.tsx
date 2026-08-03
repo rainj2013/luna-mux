@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { confirm as confirmDialog } from '@tauri-apps/plugin-dialog'
-import { ArrowRight, Bookmark as BookmarkIcon, ChevronDown, ChevronRight, CircleHelp, CirclePlus, Copy, Edit3, Eye, EyeOff, FileInput, Folder, FolderOpen, FolderPlus, GripVertical, Image as ImageIcon, KeyRound, Minus, Monitor, Moon, Network, Palette, PanelLeftClose, PanelLeftOpen, Plug, Power, Rocket, RotateCcw, Search, Server, Settings as SettingsIcon, Square, SquareTerminal, Star, Sun, Trash2, X } from 'lucide-react'
-import { DEFAULT_TERMINAL_SETTINGS, type AppEvent, type AppIconId, type AppIconSettings, type Bookmark, type BookmarkInput, type ConflictResolution, type ConnectInput, type DeploymentDiffEntry, type DeploymentProfile, type HostKeyPrompt, type PortForwardProfile, type SessionStatus, type SshConfigPreview, type TerminalSettings, type TransferTask, type TunnelSummary, type UiTheme } from './types'
+import { ArrowRight, Bookmark as BookmarkIcon, Bot, Check, ChevronDown, ChevronRight, CircleHelp, CirclePlus, Copy, Edit3, Eye, EyeOff, FileInput, Folder, FolderOpen, FolderPlus, GripVertical, Image as ImageIcon, KeyRound, Minus, Monitor, Moon, Network, Palette, PanelLeftClose, PanelLeftOpen, Play, Plug, Power, Rocket, RotateCcw, Search, Send, Server, Settings as SettingsIcon, ShieldAlert, Square, SquareTerminal, Star, Sun, Trash2, WandSparkles, X } from 'lucide-react'
+import { DEFAULT_AI_SETTINGS, DEFAULT_TERMINAL_SETTINGS, type AiCommandSuggestion, type AiRiskAssessment, type AiSettings, type AiSettingsInput, type AiShell, type AppEvent, type AppIconId, type AppIconSettings, type Bookmark, type BookmarkInput, type ConflictResolution, type ConnectInput, type DeploymentDiffEntry, type DeploymentProfile, type HostKeyPrompt, type PortForwardProfile, type SessionStatus, type SshConfigPreview, type TerminalSettings, type TransferTask, type TunnelSummary, type UiTheme } from './types'
 import { TerminalPane } from './components/TerminalPane'
 import { SftpPane } from './components/SftpPane'
 import { HelpDialog } from './components/HelpDialog'
@@ -11,7 +11,7 @@ interface WorkspaceTab { key: string; bookmarkId: string; sessionId?: string; st
 interface ConnectionTarget { newSession?: boolean; tabKey?: string }
 interface SidebarContextMenu { x: number; y: number; group?: string; bookmark?: Bookmark }
 interface GroupDialogState { mode: 'create' | 'rename'; group?: string }
-type SettingsSection = 'appearance' | 'terminal' | 'application'
+type SettingsSection = 'appearance' | 'terminal' | 'application' | 'ai'
 type SidebarPointerDrag = { pointerId: number; type: 'bookmark' | 'group'; value: string; startX: number; startY: number; active: boolean }
 type SidebarPointerDrop = { type: 'bookmark'; id: string; group: string; position: 'before' | 'after' } | { type: 'group'; group: string; position: 'before' | 'after' | 'inside' }
 
@@ -57,6 +57,8 @@ export function App(): React.JSX.Element {
   const [uiThemePreview, setUiThemePreview] = useState<UiTheme | null>(null)
   const [systemDark, setSystemDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches)
   const [appIcons, setAppIcons] = useState<AppIconSettings>({ selected: 'ssh', options: [] })
+  const [aiSettings, setAiSettings] = useState<AiSettings>({ ...DEFAULT_AI_SETTINGS })
+  const [aiDialog, setAiDialog] = useState(false)
   const [settingsDialog, setSettingsDialog] = useState(false)
   const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSection>('appearance')
   const [helpDialog, setHelpDialog] = useState(false)
@@ -82,7 +84,7 @@ export function App(): React.JSX.Element {
   }
 
   useEffect(() => {
-    void Promise.all([window.api.bookmarks.list(), window.api.bookmarkGroups.list(), window.api.transfers.list(), window.api.state.getSidebarCollapsed(), window.api.state.getCollapsedBookmarkGroups(), window.api.state.getSidebarWidth(), window.api.settings.getTerminal(), window.api.settings.getAppIcons(), window.api.settings.getUiTheme()]).then(([items, groups, transferItems, collapsed, collapsedGroups, width, appearance, icons, theme]) => {
+    void Promise.all([window.api.bookmarks.list(), window.api.bookmarkGroups.list(), window.api.transfers.list(), window.api.state.getSidebarCollapsed(), window.api.state.getCollapsedBookmarkGroups(), window.api.state.getSidebarWidth(), window.api.settings.getTerminal(), window.api.settings.getAppIcons(), window.api.settings.getUiTheme(), window.api.ai.getSettings()]).then(([items, groups, transferItems, collapsed, collapsedGroups, width, appearance, icons, theme, ai]) => {
       setBookmarks(items); setTransfers(transferItems)
       setBookmarkGroupNames(groups)
       setSidebarCollapsed(collapsed)
@@ -92,6 +94,7 @@ export function App(): React.JSX.Element {
       setTerminalSettings(appearance)
       setAppIcons(icons)
       setUiTheme(theme)
+      setAiSettings(ai)
       if (appearance.backgroundImagePath) void window.api.settings.loadTerminalBackground(appearance.backgroundImagePath).then(setTerminalBackground).catch(() => setTerminalBackground(''))
       stateRestored.current = true
     }).catch((error) => showError(errorMessage(error)))
@@ -461,9 +464,9 @@ export function App(): React.JSX.Element {
 
   const statusText: Record<SessionStatus, string> = { connecting: '连接中', connected: '已连接', disconnected: '未连接', error: '连接失败' }
 
-  const saveSettings = async (settings: TerminalSettings, previewImage: string, appIcon: AppIconId, theme: UiTheme): Promise<void> => {
+  const saveSettings = async (settings: TerminalSettings, previewImage: string, appIcon: AppIconId, theme: UiTheme, ai: AiSettingsInput): Promise<void> => {
     try {
-      const [saved, savedTheme, selected] = await Promise.all([window.api.settings.saveTerminal(settings), window.api.settings.saveUiTheme(theme), window.api.settings.setAppIcon(appIcon)])
+      const [saved, savedTheme, selected, savedAi] = await Promise.all([window.api.settings.saveTerminal(settings), window.api.settings.saveUiTheme(theme), window.api.settings.setAppIcon(appIcon), window.api.ai.saveSettings(ai)])
       let image = saved.backgroundImagePath === settings.backgroundImagePath ? previewImage : ''
       if (saved.backgroundImagePath && !image) image = await window.api.settings.loadTerminalBackground(saved.backgroundImagePath)
       setTerminalSettings(saved)
@@ -471,6 +474,7 @@ export function App(): React.JSX.Element {
       setUiThemePreview(null)
       setTerminalBackground(image)
       setAppIcons((current) => ({ ...current, selected }))
+      setAiSettings(savedAi)
       setSettingsDialog(false)
     } catch (error) { showError(errorMessage(error)) }
   }
@@ -599,6 +603,7 @@ export function App(): React.JSX.Element {
               <button role="tab" aria-selected={workspaceView === 'files'} className={workspaceView === 'files' ? 'active' : ''} onClick={() => setWorkspaceView('files')}><FolderOpen size={15} />文件传输</button>
             </div><div className="session-actions">
             {workspaceView === 'files' && activeBookmark && activeTab?.sessionId && <button className="secondary-button" onClick={() => setDeploymentDialog(true)}><Rocket size={15} />部署</button>}
+            {workspaceView === 'terminal' && activeBookmark && <button className="secondary-button" onClick={() => setAiDialog(true)}><WandSparkles size={15} />AI 命令</button>}
             {activeTab?.status === 'connected' && activeTab.sessionId && <button className="secondary-button" onClick={() => setTunnelDialog(true)}><Network size={15} />端口转发</button>}
             {activeTab?.status === 'connected' && <button className="secondary-button" onClick={() => activeTab.sessionId && void window.api.sessions.disconnect(activeTab.sessionId).catch((error) => showError(errorMessage(error)))}><Power size={15} />断开</button>}
           </div></div>
@@ -632,13 +637,112 @@ export function App(): React.JSX.Element {
     {authRequest && <AuthDialog bookmark={authRequest.bookmark} jumpBookmark={authRequest.bookmark.jumpBookmarkId ? bookmarkMap.get(authRequest.bookmark.jumpBookmarkId) : undefined} onClose={() => setAuthRequest(null)} onConnect={(credentials) => void connect(authRequest.bookmark, credentials, authRequest.target)} />}
     {hostPrompts[0] && <HostKeyDialog prompt={hostPrompts[0]} onDecision={(accept) => { const prompt = hostPrompts[0]; if (!prompt) return; window.api.sessions.hostKeyDecision(prompt.sessionId, accept); setHostPrompts((current) => current.filter((item) => item !== prompt)) }} />}
     {conflict && <ConflictDialog conflict={conflict} onDecision={(resolution, apply) => { window.api.transfers.resolveConflict(conflict.taskId, resolution, apply); setConflict(null) }} />}
-    {settingsDialog && <SettingsDialog initialSection={settingsInitialSection} settings={terminalSettings} backgroundImage={terminalBackground} appIcons={appIcons} uiTheme={uiTheme} onThemePreview={setUiThemePreview} onClose={() => { setUiThemePreview(null); setSettingsDialog(false) }} onSave={(settings, image, icon, theme) => void saveSettings(settings, image, icon, theme)} onError={showError} />}
+    {settingsDialog && <SettingsDialog initialSection={settingsInitialSection} settings={terminalSettings} backgroundImage={terminalBackground} appIcons={appIcons} uiTheme={uiTheme} aiSettings={aiSettings} onAiSettingsChange={setAiSettings} onThemePreview={setUiThemePreview} onClose={() => { setUiThemePreview(null); setSettingsDialog(false) }} onSave={(settings, image, icon, theme, ai) => void saveSettings(settings, image, icon, theme, ai)} onError={showError} />}
+    {aiDialog && activeBookmark && activeTab && <AiCommandDialog bookmark={activeBookmark} sessionId={activeTab.sessionId} connected={activeTab.status === 'connected'} settings={aiSettings} onSettingsChange={setAiSettings} onSettings={() => { setAiDialog(false); openSettings('ai') }} onClose={() => setAiDialog(false)} onError={showError} />}
     {helpDialog && <HelpDialog onClose={() => setHelpDialog(false)} />}
     {deploymentDialog && activeBookmark && activeTab?.sessionId && <DeploymentDialog bookmark={activeBookmark} sessionId={activeTab.sessionId} onClose={() => setDeploymentDialog(false)} onError={showError} />}
     {tunnelDialog && activeBookmark && activeTab?.sessionId && <TunnelDialog bookmark={activeBookmark} sessionId={activeTab.sessionId} onClose={() => setTunnelDialog(false)} onError={showError} />}
     {importPreview && <SshConfigImportDialog preview={importPreview} onClose={() => setImportPreview(null)} onImported={async () => { setImportPreview(null); await reloadSidebarData() }} onError={showError} />}
     {toast && <div className="toast">{toast}</div>}
   </div>
+}
+
+function AiCommandDialog({ bookmark, sessionId, connected, settings, onSettingsChange, onSettings, onClose, onError }: { bookmark: Bookmark; sessionId?: string; connected: boolean; settings: AiSettings; onSettingsChange(settings: AiSettings): void; onSettings(): void; onClose(): void; onError(message: string): void }): React.JSX.Element {
+  const [requirement, setRequirement] = useState('')
+  const [shell, setShell] = useState<AiShell>(settings.defaultShell)
+  const [suggestion, setSuggestion] = useState<AiCommandSuggestion | null>(null)
+  const [command, setCommand] = useState('')
+  const [edited, setEdited] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [executing, setExecuting] = useState(false)
+  const [error, setError] = useState('')
+  const [confirming, setConfirming] = useState<AiRiskAssessment | null>(null)
+  const [confirmationText, setConfirmationText] = useState('')
+
+  const effectiveAssessment = (local: AiRiskAssessment): AiRiskAssessment => {
+    if (!suggestion || edited) return local
+    const rank = { low: 0, medium: 1, high: 2 } as const
+    const riskLevel = rank[suggestion.riskLevel] > rank[local.riskLevel] ? suggestion.riskLevel : local.riskLevel
+    return { riskLevel, warnings: [...new Set([...suggestion.warnings, ...local.warnings])] }
+  }
+
+  const selectShell = async (value: AiShell): Promise<void> => {
+    setShell(value)
+    try {
+      const saved = await window.api.ai.saveSettings({ baseUrl: settings.baseUrl, model: settings.model, defaultShell: value })
+      onSettingsChange(saved)
+    } catch (saveError) { onError(errorMessage(saveError)) }
+  }
+  const generate = async (): Promise<void> => {
+    if (!requirement.trim()) return
+    setLoading(true); setError(''); setSuggestion(null); setCommand(''); setEdited(false)
+    try {
+      const result = await window.api.ai.generate(requirement.trim(), shell)
+      setSuggestion(result); setCommand(result.command)
+    } catch (generateError) { setError(errorMessage(generateError)) }
+    finally { setLoading(false) }
+  }
+  const requireConnectedSession = (): string | null => {
+    if (!connected || !sessionId) { setError('当前 SSH 会话已断开，无法发送命令'); return null }
+    return sessionId
+  }
+  const fillCommand = async (): Promise<void> => {
+    const targetSession = requireConnectedSession()
+    if (!targetSession) return
+    try {
+      const assessment = effectiveAssessment(await window.api.ai.analyze(command))
+      setSuggestion((current) => current ? { ...current, riskLevel: assessment.riskLevel, warnings: assessment.warnings } : current)
+      await window.api.sessions.writeCommand(targetSession, command.trim())
+      onClose()
+    } catch (fillError) { setError(errorMessage(fillError)) }
+  }
+  const executeConfirmed = async (): Promise<void> => {
+    const targetSession = requireConnectedSession()
+    if (!targetSession) return
+    setExecuting(true)
+    try {
+      await window.api.ai.analyze(command)
+      await window.api.sessions.writeCommand(targetSession, `${command.trim()}\r`)
+      onClose()
+    } catch (executeError) { setError(errorMessage(executeError)); setConfirming(null); setExecuting(false) }
+  }
+  const requestExecution = async (): Promise<void> => {
+    const targetSession = requireConnectedSession()
+    if (!targetSession) return
+    try {
+      const assessment = effectiveAssessment(await window.api.ai.analyze(command))
+      setSuggestion((current) => current ? { ...current, riskLevel: assessment.riskLevel, warnings: assessment.warnings } : current)
+      if (assessment.riskLevel === 'high') { setConfirmationText(''); setConfirming(assessment); return }
+      const accepted = await confirmDialog(`目标：${bookmark.username}@${bookmark.host}:${bookmark.port}\n\n${command.trim()}`, { title: assessment.riskLevel === 'medium' ? '确认执行有风险的命令' : '确认执行命令', kind: assessment.riskLevel === 'medium' ? 'warning' : 'info' })
+      if (accepted) await executeConfirmed()
+    } catch (executeError) { setError(errorMessage(executeError)) }
+  }
+  const riskText = suggestion ? ({ low: '低风险', medium: '需注意', high: '高风险' } as const)[suggestion.riskLevel] : ''
+
+  if (confirming) return <Modal title="确认执行高风险命令" onClose={() => setConfirming(null)} wide><div className="ai-danger-confirm">
+    <div className="ai-danger-heading"><ShieldAlert size={22} /><div><strong>该命令可能造成不可逆修改</strong><span>{bookmark.username}@{bookmark.host}:{bookmark.port}</span></div></div>
+    <pre>{command.trim()}</pre>
+    {confirming.warnings.length > 0 && <ul>{confirming.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>}
+    <label>输入“执行”以继续<input autoFocus value={confirmationText} onChange={(event) => setConfirmationText(event.target.value)} /></label>
+    <div className="dialog-actions"><button className="secondary-button" disabled={executing} onClick={() => setConfirming(null)}>取消</button><button className="danger-button" disabled={confirmationText !== '执行' || executing} onClick={() => void executeConfirmed()}><Play size={15} />{executing ? '正在执行…' : '执行命令'}</button></div>
+  </div></Modal>
+
+  return <Modal title="AI 命令助手" onClose={onClose} wide><div className="ai-command-dialog">
+    <div className="ai-target"><Server size={16} /><strong>{bookmark.name}</strong><span>{bookmark.username}@{bookmark.host}:{bookmark.port}</span><span className={`status-dot ${connected ? 'connected' : 'disconnected'}`} /></div>
+    {!settings.model.trim() ? <div className="ai-unconfigured"><Bot size={28} /><strong>尚未配置 AI 模型</strong><button className="primary-button" onClick={onSettings}><SettingsIcon size={15} />打开 AI 设置</button></div> : <>
+      <div className="ai-prompt-row"><label>目标 Shell<select value={shell} onChange={(event) => void selectShell(event.target.value as AiShell)}><option value="linux">Linux Shell</option><option value="powerShell">PowerShell</option><option value="cmd">Windows cmd</option><option value="macos">macOS Shell</option></select></label><label className="ai-requirement">需要完成什么<textarea autoFocus rows={4} maxLength={8000} value={requirement} onChange={(event) => setRequirement(event.target.value)} placeholder="例如：从 app.log 中找出更新条数大于 0 的日志" onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); void generate() } }} /></label></div>
+      <div className="ai-generate-actions"><button className="primary-button" disabled={loading || !requirement.trim()} onClick={() => void generate()}><WandSparkles size={15} />{loading ? '正在生成…' : suggestion ? '重新生成' : '生成命令'}</button></div>
+      {error && <div className="ai-error">{error}</div>}
+      {suggestion && <div className="ai-result">
+        <div className="ai-result-heading"><strong>生成结果</strong><span className={`ai-risk ${suggestion.riskLevel}`}>{riskText}</span>{edited && <span className="ai-edited">命令已修改，原说明可能不再适用</span>}</div>
+        <textarea className="ai-command-editor" rows={3} spellCheck={false} value={command} onChange={(event) => { setCommand(event.target.value); setEdited(event.target.value !== suggestion.command) }} />
+        {suggestion.explanation && <p>{suggestion.explanation}</p>}
+        {suggestion.assumptions.length > 0 && <div className="ai-notes"><strong>假设</strong><ul>{suggestion.assumptions.map((item) => <li key={item}>{item}</li>)}</ul></div>}
+        {suggestion.warnings.length > 0 && <div className="ai-notes warning"><strong>注意</strong><ul>{suggestion.warnings.map((item) => <li key={item}>{item}</li>)}</ul></div>}
+        <div className="dialog-actions spread"><button className="secondary-button" onClick={() => void window.api.system.writeClipboard(command).catch((copyError) => setError(errorMessage(copyError)))}><Copy size={15} />复制</button><div><button className="secondary-button" disabled={!connected || !command.trim() || executing} onClick={() => void fillCommand()}><Send size={15} />填入终端</button><button className="primary-button" disabled={!connected || !command.trim() || executing} onClick={() => void requestExecution()}><Play size={15} />执行</button></div></div>
+      </div>}
+    </>}
+  </div></Modal>
 }
 
 function SshConfigImportDialog({ preview, onClose, onImported, onError }: { preview: SshConfigPreview; onClose(): void; onImported(): void; onError(message: string): void }): React.JSX.Element {
@@ -758,14 +862,20 @@ function DeploymentDialog({ bookmark, sessionId, onClose, onError }: { bookmark:
   </div></Modal>
 }
 
-function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, uiTheme, onThemePreview, onClose, onSave, onError }: { initialSection: SettingsSection; settings: TerminalSettings; backgroundImage: string; appIcons: AppIconSettings; uiTheme: UiTheme; onThemePreview(theme: UiTheme): void; onClose(): void; onSave(settings: TerminalSettings, backgroundImage: string, appIcon: AppIconId, uiTheme: UiTheme): void; onError(message: string): void }): React.JSX.Element {
+function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, uiTheme, aiSettings, onAiSettingsChange, onThemePreview, onClose, onSave, onError }: { initialSection: SettingsSection; settings: TerminalSettings; backgroundImage: string; appIcons: AppIconSettings; uiTheme: UiTheme; aiSettings: AiSettings; onAiSettingsChange(settings: AiSettings): void; onThemePreview(theme: UiTheme): void; onClose(): void; onSave(settings: TerminalSettings, backgroundImage: string, appIcon: AppIconId, uiTheme: UiTheme, ai: AiSettingsInput): void; onError(message: string): void }): React.JSX.Element {
   const [form, setForm] = useState<TerminalSettings>({ ...settings })
   const [previewImage, setPreviewImage] = useState(backgroundImage)
   const [appIcon, setAppIcon] = useState(appIcons.selected)
   const [theme, setTheme] = useState(uiTheme)
+  const [aiForm, setAiForm] = useState<AiSettings>({ ...aiSettings })
+  const [apiKey, setApiKey] = useState('')
+  const [testingAi, setTestingAi] = useState(false)
+  const [aiTested, setAiTested] = useState(false)
   const [diagnosticPath, setDiagnosticPath] = useState('')
   const [section, setSection] = useState<SettingsSection>(initialSection)
   const set = <K extends keyof TerminalSettings>(key: K, value: TerminalSettings[K]): void => setForm((current) => ({ ...current, [key]: value }))
+  const setAi = <K extends keyof AiSettings>(key: K, value: AiSettings[K]): void => { setAiTested(false); setAiForm((current) => ({ ...current, [key]: value })) }
+  const aiInput = (): AiSettingsInput => ({ baseUrl: aiForm.baseUrl, model: aiForm.model, defaultShell: aiForm.defaultShell, ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}) })
   const selectTheme = (value: UiTheme): void => { setTheme(value); onThemePreview(value) }
   const chooseBackground = async (): Promise<void> => {
     try {
@@ -776,11 +886,31 @@ function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, u
       setPreviewImage(image)
     } catch (error) { onError(errorMessage(error)) }
   }
-  const reset = (): void => { setForm({ ...DEFAULT_TERMINAL_SETTINGS }); setPreviewImage(''); setAppIcon('ssh'); selectTheme('system') }
+  const reset = (): void => {
+    if (section === 'ai') { setAiForm({ ...DEFAULT_AI_SETTINGS, apiKeyConfigured: aiForm.apiKeyConfigured }); setApiKey(''); setAiTested(false); return }
+    setForm({ ...DEFAULT_TERMINAL_SETTINGS }); setPreviewImage(''); setAppIcon('ssh'); selectTheme('system')
+  }
+  const testAi = async (): Promise<void> => {
+    setTestingAi(true); setAiTested(false)
+    try { await window.api.ai.testSettings(aiInput()); setAiTested(true) }
+    catch (error) { onError(errorMessage(error)) }
+    finally { setTestingAi(false) }
+  }
+  const deleteAiKey = async (): Promise<void> => {
+    if (!await confirmDialog('确定删除已保存的 AI API Key 吗？', { title: '删除 API Key', kind: 'warning' })) return
+    try { const saved = await window.api.ai.deleteApiKey(); setApiKey(''); setAiForm((current) => ({ ...current, apiKeyConfigured: saved.apiKeyConfigured })); onAiSettingsChange(saved) }
+    catch (error) { onError(errorMessage(error)) }
+  }
   const themeOptions: { value: UiTheme; label: string; icon: typeof Monitor }[] = [{ value: 'system', label: '跟随系统', icon: Monitor }, { value: 'light', label: '浅色', icon: Sun }, { value: 'dark', label: '深色', icon: Moon }]
-  return <Modal title="设置" onClose={onClose}><form className="form-grid terminal-settings-form" onSubmit={(event) => { event.preventDefault(); onSave(form, previewImage, appIcon, theme) }}>
-    <div className="settings-tabs" role="tablist" aria-label="设置类别"><button type="button" role="tab" aria-selected={section === 'appearance'} className={section === 'appearance' ? 'active' : ''} onClick={() => setSection('appearance')}><Palette size={15} />界面</button><button type="button" role="tab" aria-selected={section === 'terminal'} className={section === 'terminal' ? 'active' : ''} onClick={() => setSection('terminal')}><SquareTerminal size={15} />终端</button><button type="button" role="tab" aria-selected={section === 'application'} className={section === 'application' ? 'active' : ''} onClick={() => setSection('application')}><ImageIcon size={15} />应用图标</button></div>
-    {section === 'appearance' ? <fieldset className="ui-theme-settings"><legend>界面主题</legend><div className="theme-options" role="radiogroup" aria-label="界面主题">{themeOptions.map((option) => { const Icon = option.icon; return <button key={option.value} type="button" role="radio" aria-checked={theme === option.value} className={theme === option.value ? 'active' : ''} onClick={() => selectTheme(option.value)}><Icon size={17} /><span>{option.label}</span></button> })}</div></fieldset> : section === 'application' ? <><fieldset className="app-icon-settings"><legend>选择应用图标</legend><div className="app-icon-options">{appIcons.options.map((icon) => <label key={icon.id} className={appIcon === icon.id ? 'selected' : ''}><input type="radio" name="app-icon" checked={appIcon === icon.id} onChange={() => setAppIcon(icon.id)} /><img src={icon.dataUrl} alt="" /><span>{icon.name}</span></label>)}</div></fieldset><div className="diagnostic-export"><button type="button" className="secondary-button" onClick={async () => { try { const path = await window.api.diagnostics.export(); if (path) setDiagnosticPath(path) } catch (error) { onError(errorMessage(error)) } }}><FileInput size={15} />导出诊断信息</button>{diagnosticPath && <small title={diagnosticPath}>{diagnosticPath}</small>}</div></> : <>
+  return <Modal title="设置" onClose={onClose}><form className="form-grid terminal-settings-form" onSubmit={(event) => { event.preventDefault(); onSave(form, previewImage, appIcon, theme, aiInput()) }}>
+    <div className="settings-tabs" role="tablist" aria-label="设置类别"><button type="button" role="tab" aria-selected={section === 'appearance'} className={section === 'appearance' ? 'active' : ''} onClick={() => setSection('appearance')}><Palette size={15} />界面</button><button type="button" role="tab" aria-selected={section === 'terminal'} className={section === 'terminal' ? 'active' : ''} onClick={() => setSection('terminal')}><SquareTerminal size={15} />终端</button><button type="button" role="tab" aria-selected={section === 'application'} className={section === 'application' ? 'active' : ''} onClick={() => setSection('application')}><ImageIcon size={15} />应用图标</button><button type="button" role="tab" aria-selected={section === 'ai'} className={section === 'ai' ? 'active' : ''} onClick={() => setSection('ai')}><Bot size={15} />AI</button></div>
+    {section === 'appearance' ? <fieldset className="ui-theme-settings"><legend>界面主题</legend><div className="theme-options" role="radiogroup" aria-label="界面主题">{themeOptions.map((option) => { const Icon = option.icon; return <button key={option.value} type="button" role="radio" aria-checked={theme === option.value} className={theme === option.value ? 'active' : ''} onClick={() => selectTheme(option.value)}><Icon size={17} /><span>{option.label}</span></button> })}</div></fieldset> : section === 'application' ? <><fieldset className="app-icon-settings"><legend>选择应用图标</legend><div className="app-icon-options">{appIcons.options.map((icon) => <label key={icon.id} className={appIcon === icon.id ? 'selected' : ''}><input type="radio" name="app-icon" checked={appIcon === icon.id} onChange={() => setAppIcon(icon.id)} /><img src={icon.dataUrl} alt="" /><span>{icon.name}</span></label>)}</div></fieldset><div className="diagnostic-export"><button type="button" className="secondary-button" onClick={async () => { try { const path = await window.api.diagnostics.export(); if (path) setDiagnosticPath(path) } catch (error) { onError(errorMessage(error)) } }}><FileInput size={15} />导出诊断信息</button>{diagnosticPath && <small title={diagnosticPath}>{diagnosticPath}</small>}</div></> : section === 'ai' ? <div className="ai-settings">
+      <label>API Base URL<input required type="url" value={aiForm.baseUrl} onChange={(event) => setAi('baseUrl', event.target.value)} placeholder="https://api.openai.com/v1" /></label>
+      <label>模型名称<input value={aiForm.model} onChange={(event) => setAi('model', event.target.value)} placeholder="gpt-5" /></label>
+      <label>API Key<div className="input-button"><input type="password" autoComplete="off" value={apiKey} onChange={(event) => { setApiKey(event.target.value); setAiTested(false) }} placeholder={aiForm.apiKeyConfigured ? '已安全保存，留空则保持不变' : '可选'} /><button type="button" className="icon-button danger" title="删除已保存的 API Key" disabled={!aiForm.apiKeyConfigured} onClick={() => void deleteAiKey()}><Trash2 size={15} /></button></div></label>
+      <label>默认目标 Shell<select value={aiForm.defaultShell} onChange={(event) => setAi('defaultShell', event.target.value as AiShell)}><option value="linux">Linux Shell</option><option value="powerShell">PowerShell</option><option value="cmd">Windows cmd</option><option value="macos">macOS Shell</option></select></label>
+      <div className="ai-settings-test"><button type="button" className="secondary-button" disabled={testingAi || !aiForm.model.trim()} onClick={() => void testAi()}>{testingAi ? '正在测试…' : '测试连接'}</button>{aiTested && <span><Check size={14} />连接成功</span>}</div>
+    </div> : <>
       <div className="terminal-preview" style={terminalBackgroundStyle(form, previewImage)}><div style={{ color: form.foregroundColor, background: colorWithOpacity(form.backgroundColor, form.backgroundOpacity), fontFamily: form.fontFamily, fontSize: form.fontSize }}><span>user@host:~$</span> ls -la<br />drwxr-xr-x&nbsp;&nbsp;projects</div></div>
       <label>字体<select value={form.fontFamily} onChange={(event) => set('fontFamily', event.target.value)}><option value="Cascadia Mono, SFMono-Regular, Consolas, monospace">默认等宽字体</option><option value="Cascadia Mono, Consolas, monospace">Cascadia Mono</option><option value="SFMono-Regular, Menlo, Monaco, monospace">SF Mono</option><option value="JetBrains Mono, monospace">JetBrains Mono</option><option value="Fira Code, monospace">Fira Code</option><option value="Consolas, monospace">Consolas</option><option value="Menlo, monospace">Menlo</option><option value="monospace">系统等宽字体</option></select></label>
       <label>字号<div className="range-control"><input type="range" min="10" max="30" step="1" value={form.fontSize} onChange={(event) => set('fontSize', Number(event.target.value))} /><output>{form.fontSize} px</output></div></label>

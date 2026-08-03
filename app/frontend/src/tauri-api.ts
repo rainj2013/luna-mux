@@ -3,7 +3,7 @@ import { listen } from '@tauri-apps/api/event'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { readText, writeText } from '@tauri-apps/plugin-clipboard-manager'
-import type { AppApi, AppEvent, AppIconId, BookmarkInput, ConnectInput, ConflictResolution, DeploymentProfile, Platform, PortForwardProfile, TerminalSettings, TransferRequest, UiTheme } from './types'
+import type { AiSettingsInput, AiShell, AppApi, AppEvent, AppIconId, BookmarkInput, ConnectInput, ConflictResolution, DeploymentProfile, Platform, PortForwardProfile, TerminalSettings, TransferRequest, UiTheme } from './types'
 
 const call = <T>(command: string, args?: Record<string, unknown>): Promise<T> => invoke<T>(command, args).catch((error) => {
   throw new Error(typeof error === 'string' ? error : String(error))
@@ -58,6 +58,7 @@ export async function createTauriApi(): Promise<AppApi> {
       connect: (input: ConnectInput) => call('sessions_connect', { input }),
       disconnect: (id) => call('sessions_disconnect', { id }),
       write: (id, data) => send('sessions_write', { id, data }),
+      writeCommand: (id, data) => call('sessions_write', { id, data }),
       resize: (id, cols, rows) => send('sessions_resize', { id, cols, rows }),
       flow: (id, paused) => send('sessions_flow', { id, paused }),
       hostKeyDecision: (id, accept) => send('sessions_host_key_decision', { id, accept })
@@ -101,6 +102,14 @@ export async function createTauriApi(): Promise<AppApi> {
       stop: (sessionId, tunnelId) => call('tunnels_stop', { sessionId, tunnelId })
     },
     diagnostics: { export: () => call('diagnostics_export') },
+    ai: {
+      getSettings: () => call('ai_settings_get'),
+      saveSettings: (settings: AiSettingsInput) => call('ai_settings_save', { settings }),
+      deleteApiKey: () => call('ai_settings_delete_key'),
+      testSettings: (settings: AiSettingsInput) => call('ai_settings_test', { settings }),
+      generate: (requirement, shell: AiShell) => call('ai_command_generate', { request: { requirement, shell } }),
+      analyze: (command) => call('ai_command_analyze', { command })
+    },
     state: {
       getOpenBookmarks: () => call('state_get_open_bookmarks'),
       setOpenBookmarks: (ids) => call('state_set_open_bookmarks', { ids }),

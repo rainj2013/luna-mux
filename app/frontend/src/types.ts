@@ -137,6 +137,42 @@ export interface DeploymentDiffEntry {
 export type TerminalBackgroundFit = 'cover' | 'contain' | 'stretch' | 'tile'
 export type AppIconId = 'ssh' | 'classic' | 'neon' | 'light'
 export type UiTheme = 'system' | 'light' | 'dark'
+export type AiShell = 'linux' | 'powerShell' | 'cmd' | 'macos'
+export type AiRiskLevel = 'low' | 'medium' | 'high'
+
+export interface AiSettings {
+  baseUrl: string
+  model: string
+  defaultShell: AiShell
+  apiKeyConfigured: boolean
+}
+
+export interface AiSettingsInput {
+  baseUrl: string
+  model: string
+  defaultShell: AiShell
+  apiKey?: string
+}
+
+export interface AiCommandSuggestion {
+  command: string
+  explanation: string
+  assumptions: string[]
+  warnings: string[]
+  riskLevel: AiRiskLevel
+}
+
+export interface AiRiskAssessment {
+  riskLevel: AiRiskLevel
+  warnings: string[]
+}
+
+export const DEFAULT_AI_SETTINGS: AiSettings = {
+  baseUrl: 'https://api.openai.com/v1',
+  model: '',
+  defaultShell: 'linux',
+  apiKeyConfigured: false
+}
 
 export interface AppIconOption {
   id: AppIconId
@@ -250,6 +286,7 @@ export interface AppApi {
     connect(input: ConnectInput): Promise<SessionSummary>
     disconnect(id: string): Promise<void>
     write(id: string, data: string): void
+    writeCommand(id: string, data: string): Promise<void>
     resize(id: string, cols: number, rows: number): void
     flow(id: string, paused: boolean): void
     hostKeyDecision(id: string, accept: boolean): void
@@ -294,6 +331,14 @@ export interface AppApi {
   }
   diagnostics: {
     export(): Promise<string | null>
+  }
+  ai: {
+    getSettings(): Promise<AiSettings>
+    saveSettings(settings: AiSettingsInput): Promise<AiSettings>
+    deleteApiKey(): Promise<AiSettings>
+    testSettings(settings: AiSettingsInput): Promise<void>
+    generate(requirement: string, shell: AiShell): Promise<AiCommandSuggestion>
+    analyze(command: string): Promise<AiRiskAssessment>
   }
   state: {
     getOpenBookmarks(): Promise<string[]>

@@ -22,6 +22,7 @@ fast-socks5 = "0.10"
 futures = "0.3"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp", "gif"] }
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 rusqlite = { version = "0.37", features = ["bundled"] }
 russh = "0.54"
 russh-sftp = "2.1"
