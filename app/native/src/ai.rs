@@ -5,7 +5,7 @@ use std::{
 
 use futures::StreamExt;
 use regex::{Captures, Regex};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 use url::Url;
 
@@ -68,12 +68,35 @@ struct ModelSuggestion {
     command: String,
     #[serde(default)]
     explanation: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string_list")]
     assumptions: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string_list")]
     warnings: Vec<String>,
     #[serde(default)]
     risk_level: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum StringList {
+    One(String),
+    Many(Vec<String>),
+}
+
+fn deserialize_string_list<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<StringList>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(StringList::One(item)) => vec![item],
+        Some(StringList::Many(items)) => items,
+        None => Vec::new(),
+    }
+    .into_iter()
+    .map(|item| item.trim().to_string())
+    .filter(|item| !item.is_empty())
+    .collect())
 }
 
 #[derive(Default)]
@@ -633,8 +656,12 @@ fn parse_suggestion(content: &str) -> Result<ModelSuggestion, String> {
     if let (Some(start), Some(end)) = (candidate.find('{'), candidate.rfind('}')) {
         candidate = &candidate[start..=end];
     }
-    let suggestion: ModelSuggestion = serde_json::from_str(candidate)
-        .map_err(|_| "AI 未按要求返回结构化命令，请重试".to_string())?;
+    let suggestion: ModelSuggestion = serde_json::from_str(candidate).map_err(|error| {
+        format!(
+            "AI 返回的命令结构无法解析：{}",
+            truncate(&error.to_string(), 240)
+        )
+    })?;
     validate_command(&suggestion.command)?;
     Ok(suggestion)
 }
@@ -707,6 +734,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(fenced.command, "Get-Content app.log");
+
+        let string_lists = parse_suggestion(
+            r#"{"command":"wc -l /tmp/app.log","explanation":"统计行数","assumptions":"日志文件存在","warnings":"只读文件，不修改内容","riskLevel":"low"}"#,
+        )
+        .unwrap();
+        assert_eq!(string_lists.assumptions, ["日志文件存在"]);
+        assert_eq!(string_lists.warnings, ["只读文件，不修改内容"]);
     }
 
     #[test]
