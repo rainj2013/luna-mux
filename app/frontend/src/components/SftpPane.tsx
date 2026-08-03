@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { confirm as confirmDialog } from '@tauri-apps/plugin-dialog'
 import { ArrowLeft, ArrowRight, ArrowUp, ChevronLeft, ChevronRight, Eye, File, Folder, FolderPlus, Link, Pencil, Plug, RefreshCw, Search, Server, Star, Trash2, X } from 'lucide-react'
 import type { DirectoryEntry, FilePreview } from '../types'
 
@@ -32,6 +31,7 @@ interface BrowserProps {
 
 interface TransferDropTarget { remote: boolean; directory?: string }
 interface FileNameDialogState { mode: 'create' | 'rename'; remote: boolean; path?: string; value: string; error: string; submitting: boolean }
+interface FileDeleteDialogState { remote: boolean; paths: string[]; error: string; submitting: boolean }
 
 function transferDropTargetAt(x: number, y: number): TransferDropTarget | null {
   const element = document.elementFromPoint(x, y) as HTMLElement | null
@@ -131,6 +131,7 @@ export function SftpPane({ sessionId, bookmarkId, connected, visible, onError, o
   const [favorites, setFavorites] = useState({ local: [] as string[], remote: [] as string[] })
   const [preview, setPreview] = useState<{ remote: boolean; path: string; value: FilePreview } | null>(null)
   const [fileNameDialog, setFileNameDialog] = useState<FileNameDialogState | null>(null)
+  const [fileDeleteDialog, setFileDeleteDialog] = useState<FileDeleteDialogState | null>(null)
   const [transferDrag, setTransferDrag] = useState<{ paths: string[]; sourceRemote: boolean; x: number; y: number; target: TransferDropTarget | null } | null>(null)
   const localPathRef = useRef('')
   const remotePathRef = useRef('/')
@@ -246,6 +247,15 @@ export function SftpPane({ sessionId, bookmarkId, connected, visible, onError, o
     return () => window.removeEventListener('keydown', closeOnEscape)
   }, [fileNameDialog])
 
+  useEffect(() => {
+    if (!fileDeleteDialog) return
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape' && !fileDeleteDialog.submitting) setFileDeleteDialog(null)
+    }
+    window.addEventListener('keydown', closeOnEscape)
+    return () => window.removeEventListener('keydown', closeOnEscape)
+  }, [fileDeleteDialog])
+
   const enqueue = async (direction: 'upload' | 'download', paths: string[], destinationDirectory?: string): Promise<void> => {
     if (!sessionId || !connected || paths.length === 0) return
     try { await window.api.transfers.enqueue({ sessionId, direction, sourcePaths: paths, destinationDirectory: destinationDirectory ?? (direction === 'upload' ? remotePathRef.current : localPathRef.current) }) }
@@ -360,9 +370,20 @@ export function SftpPane({ sessionId, bookmarkId, connected, visible, onError, o
     if (error) setFileNameDialog((current) => current ? { ...current, error, submitting: false } : null)
     else setFileNameDialog(null)
   }
-  const deleteEntries = async (remote: boolean, paths: string[]): Promise<void> => {
-    if (!paths.length || !await confirmDialog(`确定永久删除选中的 ${paths.length} 项吗？`, { title: '删除文件', kind: 'warning' })) return
-    await mutate(remote, () => window.api.files.remove(remote, sessionId, paths))
+  const requestDeleteEntries = (remote: boolean, paths: string[]): void => {
+    if (paths.length) setFileDeleteDialog({ remote, paths, error: '', submitting: false })
+  }
+  const confirmDeleteEntries = async (event: React.FormEvent<HTMLFormElement>): Promise<void> => {
+    event.preventDefault()
+    if (!fileDeleteDialog || fileDeleteDialog.submitting) return
+    const { remote, paths } = fileDeleteDialog
+    setFileDeleteDialog((current) => current ? { ...current, error: '', submitting: true } : null)
+    const error = await mutate(remote, () => window.api.files.remove(remote, sessionId, paths))
+    if (error) setFileDeleteDialog((current) => current ? { ...current, error, submitting: false } : null)
+    else {
+      if (remote) setRemoteSelected(new Set()); else setLocalSelected(new Set())
+      setFileDeleteDialog(null)
+    }
   }
   const previewEntry = async (remote: boolean, path: string, position: 'start' | 'end' = 'start'): Promise<void> => {
     try { setPreview({ remote, path, value: await window.api.files.preview(remote, sessionId, path, position) }) }
@@ -382,7 +403,7 @@ export function SftpPane({ sessionId, bookmarkId, connected, visible, onError, o
     onSelect: (path, additive, range, paths) => select(remote, path, additive, range, paths),
     onSelectAll: (paths) => (remote ? setRemoteSelected : setLocalSelected)(new Set(paths)),
     onCreateDirectory: () => createDirectory(remote), onRename: (path) => renameEntry(remote, path),
-    onDelete: (paths) => void deleteEntries(remote, paths), onPreview: (path) => void previewEntry(remote, path), onToggleFavorite: () => toggleFavorite(remote)
+    onDelete: (paths) => requestDeleteEntries(remote, paths), onPreview: (path) => void previewEntry(remote, path), onToggleFavorite: () => toggleFavorite(remote)
   })
   return <>
     <div className="sftp-pane">
@@ -409,6 +430,17 @@ export function SftpPane({ sessionId, bookmarkId, connected, visible, onError, o
           <label>名称<input autoFocus maxLength={255} value={fileNameDialog.value} onFocus={(event) => { if (fileNameDialog.mode === 'rename') event.currentTarget.select() }} onChange={(event) => setFileNameDialog((current) => current ? { ...current, value: event.target.value, error: '' } : null)} /></label>
           {fileNameDialog.error && <small className="error-text">{fileNameDialog.error}</small>}
           <div className="dialog-actions"><button type="button" className="secondary-button" disabled={fileNameDialog.submitting} onClick={() => setFileNameDialog(null)}>取消</button><button className="primary-button" disabled={fileNameDialog.submitting}>{fileNameDialog.submitting ? '处理中…' : '确定'}</button></div>
+        </form>
+      </section>
+    </div>}
+    {fileDeleteDialog && <div className="modal-backdrop file-operation-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !fileDeleteDialog.submitting) setFileDeleteDialog(null) }}>
+      <section className="modal file-operation-dialog" role="dialog" aria-modal="true" aria-labelledby="file-delete-title">
+        <header><strong id="file-delete-title">删除{fileDeleteDialog.remote ? '远端' : '本地'}文件</strong><button type="button" className="icon-button" title="关闭" disabled={fileDeleteDialog.submitting} onClick={() => setFileDeleteDialog(null)}><X size={17} /></button></header>
+        <form className="file-delete-confirm" onSubmit={(event) => void confirmDeleteEntries(event)}>
+          <div className="file-delete-heading"><Trash2 size={22} /><div><strong>永久删除选中的 {fileDeleteDialog.paths.length} 项？</strong><span>此操作无法撤销，请确认所选内容。</span></div></div>
+          <ul>{fileDeleteDialog.paths.slice(0, 5).map((path) => <li key={path} title={path}>{entryName(path)}</li>)}{fileDeleteDialog.paths.length > 5 && <li>另外 {fileDeleteDialog.paths.length - 5} 项</li>}</ul>
+          {fileDeleteDialog.error && <small className="error-text">{fileDeleteDialog.error}</small>}
+          <div className="dialog-actions"><button type="button" autoFocus className="secondary-button" disabled={fileDeleteDialog.submitting} onClick={() => setFileDeleteDialog(null)}>取消</button><button type="submit" className="danger-button" disabled={fileDeleteDialog.submitting}><Trash2 size={15} />{fileDeleteDialog.submitting ? '正在删除…' : '永久删除'}</button></div>
         </form>
       </section>
     </div>}
