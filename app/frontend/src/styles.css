@@ -415,7 +415,7 @@ body.sidebar-item-dragging, body.sidebar-item-dragging * { cursor: grabbing !imp
 .ai-settings > label { display: grid; gap: 6px; }
 .ai-settings-test { min-height: 32px; display: flex; align-items: center; gap: 10px; }
 .ai-settings-test span { display: inline-flex; align-items: center; gap: 5px; color: var(--success); font-size: 11px; }
-.ai-command-dialog, .ai-danger-confirm { padding: 16px 18px 18px; display: grid; gap: 14px; }
+.ai-command-dialog, .ai-execution-confirm { padding: 16px 18px 18px; display: grid; gap: 14px; }
 .ai-target { min-width: 0; min-height: 34px; display: grid; grid-template-columns: 18px max-content minmax(0, 1fr) 10px; align-items: center; gap: 8px; color: var(--text-muted); border-bottom: 1px solid var(--border); font-size: 11px; }
 .ai-target strong { color: var(--text-strong); font-size: 12px; }
 .ai-target > span:not(.status-dot) { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-family: Consolas, "SFMono-Regular", monospace; }
@@ -423,8 +423,8 @@ body.sidebar-item-dragging, body.sidebar-item-dragging * { cursor: grabbing !imp
 .ai-unconfigured > svg { color: var(--accent); }
 .ai-prompt-row { display: grid; grid-template-columns: 150px minmax(0, 1fr); align-items: start; gap: 12px; }
 .ai-prompt-row label { display: grid; gap: 6px; color: var(--text-strong); font-size: 11px; }
-.ai-prompt-row select, .ai-prompt-row textarea, .ai-command-editor, .ai-danger-confirm input { width: 100%; padding: 8px 9px; color: var(--text); border: 1px solid var(--border-strong); border-radius: 5px; outline: 0; background: var(--input-bg); }
-.ai-prompt-row select:focus, .ai-prompt-row textarea:focus, .ai-command-editor:focus, .ai-danger-confirm input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--focus-ring); }
+.ai-prompt-row select, .ai-prompt-row textarea, .ai-command-editor, .ai-execution-confirm input { width: 100%; padding: 8px 9px; color: var(--text); border: 1px solid var(--border-strong); border-radius: 5px; outline: 0; background: var(--input-bg); }
+.ai-prompt-row select:focus, .ai-prompt-row textarea:focus, .ai-command-editor:focus, .ai-execution-confirm input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--focus-ring); }
 .ai-prompt-row select { height: 34px; padding: 0 8px; }
 .ai-prompt-row textarea { min-height: 92px; resize: vertical; }
 .ai-context-option { color: var(--text-muted); font-size: 11px; }
@@ -445,14 +445,19 @@ body.sidebar-item-dragging, body.sidebar-item-dragging * { cursor: grabbing !imp
 .ai-notes { display: grid; grid-template-columns: 52px minmax(0, 1fr); gap: 8px; color: var(--text-muted); font-size: 10px; line-height: 1.5; }
 .ai-notes > strong { color: var(--text-strong); }
 .ai-notes.warning > strong { color: var(--warning); }
-.ai-notes ul, .ai-danger-confirm ul { margin: 0; padding-left: 17px; }
-.ai-danger-heading { display: flex; align-items: center; gap: 10px; color: var(--danger); }
-.ai-danger-heading > div { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-.ai-danger-heading strong { font-size: 13px; }
-.ai-danger-heading span { overflow: hidden; color: var(--text-muted); white-space: nowrap; text-overflow: ellipsis; font: 10px Consolas, monospace; }
-.ai-danger-confirm pre { max-height: 180px; margin: 0; padding: 11px 12px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-strong); border: 1px solid var(--danger); border-radius: 5px; background: var(--danger-surface); font: 11px/1.55 Consolas, "SFMono-Regular", monospace; }
-.ai-danger-confirm ul { color: var(--danger); font-size: 11px; line-height: 1.55; }
-.ai-danger-confirm label { display: grid; gap: 6px; color: var(--text-strong); font-size: 11px; }
+.ai-notes ul, .ai-execution-confirm ul { margin: 0; padding-left: 17px; }
+.ai-confirm-heading { display: flex; align-items: center; gap: 10px; color: var(--accent-text); }
+.ai-execution-confirm.medium .ai-confirm-heading { color: var(--warning); }
+.ai-execution-confirm.high .ai-confirm-heading { color: var(--danger); }
+.ai-confirm-heading > div { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.ai-confirm-heading strong { font-size: 13px; }
+.ai-confirm-heading span { overflow: hidden; color: var(--text-muted); white-space: nowrap; text-overflow: ellipsis; font: 10px Consolas, monospace; }
+.ai-execution-confirm pre { max-height: 180px; margin: 0; padding: 11px 12px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-strong); border: 1px solid var(--border-strong); border-radius: 5px; background: var(--surface-subtle); font: 11px/1.55 Consolas, "SFMono-Regular", monospace; }
+.ai-execution-confirm.medium pre { border-color: var(--warning); background: var(--warning-surface); }
+.ai-execution-confirm.high pre { border-color: var(--danger); background: var(--danger-surface); }
+.ai-execution-confirm ul { color: var(--warning); font-size: 11px; line-height: 1.55; }
+.ai-execution-confirm.high ul { color: var(--danger); }
+.ai-execution-confirm label { display: grid; gap: 6px; color: var(--text-strong); font-size: 11px; }
 .ai-diagnostics { padding: 15px 17px 17px; display: grid; gap: 12px; }
 .ai-diagnostics-meta { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) max-content max-content; align-items: center; gap: 10px; color: var(--text-muted); font-size: 10px; }
 .ai-diagnostics-meta > span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-family: Consolas, "SFMono-Regular", monospace; }

@@ -720,9 +720,8 @@ function AiCommandDialog({ bookmark, sessionId, connected, settings, getTerminal
     try {
       const assessment = effectiveAssessment(await window.api.ai.analyze(command))
       setSuggestion((current) => current ? { ...current, riskLevel: assessment.riskLevel, warnings: assessment.warnings } : current)
-      if (assessment.riskLevel === 'high') { setConfirmationText(''); setConfirming(assessment); return }
-      const accepted = await confirmDialog(`目标：${bookmark.username}@${bookmark.host}:${bookmark.port}\n\n${command.trim()}`, { title: assessment.riskLevel === 'medium' ? '确认执行有风险的命令' : '确认执行命令', kind: assessment.riskLevel === 'medium' ? 'warning' : 'info' })
-      if (accepted) await executeConfirmed()
+      setConfirmationText('')
+      setConfirming(assessment)
     } catch (executeError) { setError(errorMessage(executeError)) }
   }
   const riskText = suggestion ? ({ low: '低风险', medium: '需注意', high: '高风险' } as const)[suggestion.riskLevel] : ''
@@ -737,13 +736,22 @@ function AiCommandDialog({ bookmark, sessionId, connected, settings, getTerminal
 
   if (rawExchange) return <AiDiagnosticsDialog exchange={rawExchange} onClose={() => setRawExchange(null)} onClear={async () => { try { await window.api.ai.clearLastExchange(); setRawExchange(null) } catch (clearError) { onError(errorMessage(clearError)) } }} />
 
-  if (confirming) return <Modal title="确认执行高风险命令" onClose={() => setConfirming(null)} wide><div className="ai-danger-confirm">
-    <div className="ai-danger-heading"><ShieldAlert size={22} /><div><strong>该命令可能造成不可逆修改</strong><span>{bookmark.username}@{bookmark.host}:{bookmark.port}</span></div></div>
-    <pre>{command.trim()}</pre>
-    {confirming.warnings.length > 0 && <ul>{confirming.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>}
-    <label>输入“执行”以继续<input autoFocus value={confirmationText} onChange={(event) => setConfirmationText(event.target.value)} /></label>
-    <div className="dialog-actions"><button className="secondary-button" disabled={executing} onClick={() => setConfirming(null)}>取消</button><button className="danger-button" disabled={confirmationText !== '执行' || executing} onClick={() => void executeConfirmed()}><Play size={15} />{executing ? '正在执行…' : '执行命令'}</button></div>
-  </div></Modal>
+  if (confirming) {
+    const confirmationCopy = {
+      low: { title: '确认执行命令', heading: '请确认将在当前会话中执行此命令' },
+      medium: { title: '确认执行需注意的命令', heading: '该命令可能修改系统或文件内容' },
+      high: { title: '确认执行高风险命令', heading: '该命令可能造成不可逆修改' },
+    } as const
+    const copy = confirmationCopy[confirming.riskLevel]
+    const requiresTextConfirmation = confirming.riskLevel === 'high'
+    return <Modal title={copy.title} onClose={() => setConfirming(null)} wide><div className={`ai-execution-confirm ${confirming.riskLevel}`}>
+      <div className="ai-confirm-heading">{confirming.riskLevel === 'low' ? <SquareTerminal size={22} /> : <ShieldAlert size={22} />}<div><strong>{copy.heading}</strong><span>{bookmark.username}@{bookmark.host}:{bookmark.port}</span></div></div>
+      <pre>{command.trim()}</pre>
+      {confirming.warnings.length > 0 && <ul>{confirming.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>}
+      {requiresTextConfirmation && <label>输入“执行”以继续<input autoFocus value={confirmationText} onChange={(event) => setConfirmationText(event.target.value)} /></label>}
+      <div className="dialog-actions"><button className="secondary-button" disabled={executing} onClick={() => setConfirming(null)}>取消</button><button className={requiresTextConfirmation ? 'danger-button' : 'primary-button'} disabled={(requiresTextConfirmation && confirmationText !== '执行') || executing} onClick={() => void executeConfirmed()}><Play size={15} />{executing ? '正在执行…' : '执行命令'}</button></div>
+    </div></Modal>
+  }
 
   return <Modal title="AI 命令助手" onClose={onClose} wide><div className="ai-command-dialog">
     <div className="ai-target"><Server size={16} /><strong>{bookmark.name}</strong><span>{bookmark.username}@{bookmark.host}:{bookmark.port}</span><span className={`status-dot ${connected ? 'connected' : 'disconnected'}`} /></div>
