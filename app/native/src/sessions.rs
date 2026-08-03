@@ -32,6 +32,7 @@ type Transport = Pin<Box<dyn AsyncTransport>>;
 
 const REMOTE_EXEC_TIMEOUT: Duration = Duration::from_secs(12);
 const REMOTE_EXEC_OUTPUT_LIMIT: usize = 16 * 1024 * 1024;
+const DEFAULT_TERMINAL_SIZE: (u32, u32) = (100, 30);
 const REMOTE_LIST_MODE_UNKNOWN: u8 = 0;
 const REMOTE_LIST_MODE_EXEC: u8 = 1;
 const REMOTE_LIST_MODE_SFTP: u8 = 2;
@@ -139,6 +140,7 @@ pub struct ActiveSession {
     handle: Mutex<Option<client::Handle<ClientHandler>>>,
     jump_handle: Mutex<Option<client::Handle<ClientHandler>>>,
     shell: Mutex<Option<russh::ChannelWriteHalf<client::Msg>>>,
+    terminal_size: StdMutex<(u32, u32)>,
     sftp: Mutex<Option<Arc<SftpSession>>>,
     remote_home: Mutex<Option<String>>,
     remote_list_mode: AtomicU8,
@@ -235,6 +237,7 @@ impl SessionManager {
             handle: Mutex::new(None),
             jump_handle: Mutex::new(None),
             shell: Mutex::new(None),
+            terminal_size: StdMutex::new(DEFAULT_TERMINAL_SIZE),
             sftp: Mutex::new(None),
             remote_home: Mutex::new(None),
             remote_list_mode: AtomicU8::new(REMOTE_LIST_MODE_UNKNOWN),
@@ -336,13 +339,19 @@ impl SessionManager {
             }
         }
         let channel = handle.channel_open_session().await?;
+        let mut shell = active.shell.lock().await;
+        let (cols, rows) = *active
+            .terminal_size
+            .lock()
+            .map_err(|_| anyhow!("终端尺寸锁已损坏"))?;
         channel
-            .request_pty(false, "xterm-256color", 100, 30, 0, 0, &[])
+            .request_pty(false, "xterm-256color", cols, rows, 0, 0, &[])
             .await?;
         channel.request_shell(true).await?;
         let (reader, writer) = channel.split();
         *active.handle.lock().await = Some(handle);
-        *active.shell.lock().await = Some(writer);
+        *shell = Some(writer);
+        drop(shell);
         active.set_summary(SessionStatus::Connected, None);
         self.db
             .mark_connected(&active.bookmark.id)
@@ -578,12 +587,19 @@ impl SessionManager {
     }
     pub async fn resize(&self, id: &str, cols: u32, rows: u32) -> Result<(), String> {
         let active = self.get(id)?;
+        let size = (cols.max(1), rows.max(1));
+        *active
+            .terminal_size
+            .lock()
+            .map_err(|_| "终端尺寸锁已损坏".to_string())? = size;
         let shell = active.shell.lock().await;
-        let writer = shell.as_ref().ok_or_else(|| "终端尚未就绪".to_string())?;
-        writer
-            .window_change(cols.max(1), rows.max(1), 0, 0)
-            .await
-            .map_err(|e| e.to_string())
+        match shell.as_ref() {
+            Some(writer) => writer
+                .window_change(size.0, size.1, 0, 0)
+                .await
+                .map_err(|e| e.to_string()),
+            None => Ok(()),
+        }
     }
     pub fn flow(&self, id: &str, paused: bool) -> Result<(), String> {
         let active = self.get(id)?;

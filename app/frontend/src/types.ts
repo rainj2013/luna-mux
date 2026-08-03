@@ -337,7 +337,7 @@ export interface AppApi {
     saveSettings(settings: AiSettingsInput): Promise<AiSettings>
     deleteApiKey(): Promise<AiSettings>
     testSettings(settings: AiSettingsInput): Promise<void>
-    generate(requirement: string, shell: AiShell): Promise<AiCommandSuggestion>
+    generate(requirement: string, shell: AiShell, terminalContext?: string, redactTerminalContext?: boolean): Promise<AiCommandSuggestion>
     analyze(command: string): Promise<AiRiskAssessment>
   }
   state: {

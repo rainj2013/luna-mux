@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { confirm as confirmDialog } from '@tauri-apps/plugin-dialog'
 import { ArrowRight, Bookmark as BookmarkIcon, Bot, Check, ChevronDown, ChevronRight, CircleHelp, CirclePlus, Copy, Edit3, Eye, EyeOff, FileInput, Folder, FolderOpen, FolderPlus, GripVertical, Image as ImageIcon, KeyRound, Minus, Monitor, Moon, Network, Palette, PanelLeftClose, PanelLeftOpen, Play, Plug, Power, Rocket, RotateCcw, Search, Send, Server, Settings as SettingsIcon, ShieldAlert, Square, SquareTerminal, Star, Sun, Trash2, WandSparkles, X } from 'lucide-react'
 import { DEFAULT_AI_SETTINGS, DEFAULT_TERMINAL_SETTINGS, type AiCommandSuggestion, type AiRiskAssessment, type AiSettings, type AiSettingsInput, type AiShell, type AppEvent, type AppIconId, type AppIconSettings, type Bookmark, type BookmarkInput, type ConflictResolution, type ConnectInput, type DeploymentDiffEntry, type DeploymentProfile, type HostKeyPrompt, type PortForwardProfile, type SessionStatus, type SshConfigPreview, type TerminalSettings, type TransferTask, type TunnelSummary, type UiTheme } from './types'
-import { TerminalPane } from './components/TerminalPane'
+import { TerminalPane, type TerminalPaneHandle } from './components/TerminalPane'
 import { SftpPane } from './components/SftpPane'
 import { HelpDialog } from './components/HelpDialog'
 import { colorWithOpacity, terminalBackgroundStyle } from './terminal-style'
@@ -20,6 +20,8 @@ type ConnectionCredentials = Omit<ConnectInput, 'bookmarkId' | 'newSession'>
 const defaultSidebarWidth = 260
 const minSidebarWidth = 200
 const maxSidebarWidth = 480
+const aiTerminalContextLines = 100
+const aiTerminalContextChars = 16_000
 
 function clampSidebarWidth(width: number): number {
   return Math.min(maxSidebarWidth, Math.max(minSidebarWidth, Math.round(width)))
@@ -73,6 +75,7 @@ export function App(): React.JSX.Element {
   const sidebarPointerDragRef = useRef<SidebarPointerDrag | null>(null)
   const sidebarPointerDropRef = useRef<SidebarPointerDrop | null>(null)
   const suppressSidebarClickRef = useRef(false)
+  const terminalPaneRefs = useRef(new Map<string, TerminalPaneHandle>())
 
   const showError = (message: string): void => { setToast(message); setTimeout(() => setToast(''), 4500) }
   const openSettings = (section: SettingsSection = 'appearance'): void => { setSettingsInitialSection(section); setSettingsDialog(true) }
@@ -609,7 +612,7 @@ export function App(): React.JSX.Element {
           </div></div>
           <div className="session-stack">
             {tabs.map((tab) => { const bookmark = bookmarkMap.get(tab.bookmarkId); const reconnect = bookmark ? () => openBookmark(bookmark, { tabKey: tab.key }) : undefined; return <div key={tab.key} className={`session-view ${tab.key === activeKey ? 'active' : ''} ${workspaceView}`}>
-              <div className="terminal-region"><TerminalPane sessionId={tab.sessionId} visible={tab.key === activeKey && workspaceView === 'terminal'} settings={terminalSettings} backgroundImage={terminalBackground} onConnect={reconnect} onOpenSettings={() => openSettings('terminal')} /></div>
+              <div className="terminal-region"><TerminalPane ref={(pane) => { if (pane) terminalPaneRefs.current.set(tab.key, pane); else terminalPaneRefs.current.delete(tab.key) }} sessionId={tab.sessionId} connected={tab.status === 'connected'} visible={tab.key === activeKey && workspaceView === 'terminal'} settings={terminalSettings} backgroundImage={terminalBackground} onConnect={reconnect} onOpenSettings={() => openSettings('terminal')} /></div>
               <div className="sftp-region"><SftpPane sessionId={tab.sessionId} bookmarkId={tab.bookmarkId} connected={tab.status === 'connected'} visible={tab.key === activeKey && workspaceView === 'files'} onError={showError} onConnect={reconnect} /></div>
             </div> })}
           </div>
@@ -638,7 +641,7 @@ export function App(): React.JSX.Element {
     {hostPrompts[0] && <HostKeyDialog prompt={hostPrompts[0]} onDecision={(accept) => { const prompt = hostPrompts[0]; if (!prompt) return; window.api.sessions.hostKeyDecision(prompt.sessionId, accept); setHostPrompts((current) => current.filter((item) => item !== prompt)) }} />}
     {conflict && <ConflictDialog conflict={conflict} onDecision={(resolution, apply) => { window.api.transfers.resolveConflict(conflict.taskId, resolution, apply); setConflict(null) }} />}
     {settingsDialog && <SettingsDialog initialSection={settingsInitialSection} settings={terminalSettings} backgroundImage={terminalBackground} appIcons={appIcons} uiTheme={uiTheme} aiSettings={aiSettings} onAiSettingsChange={setAiSettings} onThemePreview={setUiThemePreview} onClose={() => { setUiThemePreview(null); setSettingsDialog(false) }} onSave={(settings, image, icon, theme, ai) => void saveSettings(settings, image, icon, theme, ai)} onError={showError} />}
-    {aiDialog && activeBookmark && activeTab && <AiCommandDialog bookmark={activeBookmark} sessionId={activeTab.sessionId} connected={activeTab.status === 'connected'} settings={aiSettings} onSettingsChange={setAiSettings} onSettings={() => { setAiDialog(false); openSettings('ai') }} onClose={() => setAiDialog(false)} onError={showError} />}
+    {aiDialog && activeBookmark && activeTab && <AiCommandDialog bookmark={activeBookmark} sessionId={activeTab.sessionId} connected={activeTab.status === 'connected'} settings={aiSettings} getTerminalContext={() => terminalPaneRefs.current.get(activeTab.key)?.getRecentLines(aiTerminalContextLines, aiTerminalContextChars) ?? ''} onSettingsChange={setAiSettings} onSettings={() => { setAiDialog(false); openSettings('ai') }} onClose={() => setAiDialog(false)} onError={showError} />}
     {helpDialog && <HelpDialog onClose={() => setHelpDialog(false)} />}
     {deploymentDialog && activeBookmark && activeTab?.sessionId && <DeploymentDialog bookmark={activeBookmark} sessionId={activeTab.sessionId} onClose={() => setDeploymentDialog(false)} onError={showError} />}
     {tunnelDialog && activeBookmark && activeTab?.sessionId && <TunnelDialog bookmark={activeBookmark} sessionId={activeTab.sessionId} onClose={() => setTunnelDialog(false)} onError={showError} />}
@@ -647,7 +650,7 @@ export function App(): React.JSX.Element {
   </div>
 }
 
-function AiCommandDialog({ bookmark, sessionId, connected, settings, onSettingsChange, onSettings, onClose, onError }: { bookmark: Bookmark; sessionId?: string; connected: boolean; settings: AiSettings; onSettingsChange(settings: AiSettings): void; onSettings(): void; onClose(): void; onError(message: string): void }): React.JSX.Element {
+function AiCommandDialog({ bookmark, sessionId, connected, settings, getTerminalContext, onSettingsChange, onSettings, onClose, onError }: { bookmark: Bookmark; sessionId?: string; connected: boolean; settings: AiSettings; getTerminalContext(): string; onSettingsChange(settings: AiSettings): void; onSettings(): void; onClose(): void; onError(message: string): void }): React.JSX.Element {
   const [requirement, setRequirement] = useState('')
   const [shell, setShell] = useState<AiShell>(settings.defaultShell)
   const [suggestion, setSuggestion] = useState<AiCommandSuggestion | null>(null)
@@ -658,6 +661,8 @@ function AiCommandDialog({ bookmark, sessionId, connected, settings, onSettingsC
   const [error, setError] = useState('')
   const [confirming, setConfirming] = useState<AiRiskAssessment | null>(null)
   const [confirmationText, setConfirmationText] = useState('')
+  const [includeTerminalContext, setIncludeTerminalContext] = useState(false)
+  const [redactTerminalContext, setRedactTerminalContext] = useState(true)
 
   const effectiveAssessment = (local: AiRiskAssessment): AiRiskAssessment => {
     if (!suggestion || edited) return local
@@ -675,9 +680,11 @@ function AiCommandDialog({ bookmark, sessionId, connected, settings, onSettingsC
   }
   const generate = async (): Promise<void> => {
     if (!requirement.trim()) return
+    const terminalContext = includeTerminalContext ? getTerminalContext() : undefined
+    if (includeTerminalContext && !terminalContext?.trim()) { setError('当前终端没有可附带的文本内容'); return }
     setLoading(true); setError(''); setSuggestion(null); setCommand(''); setEdited(false)
     try {
-      const result = await window.api.ai.generate(requirement.trim(), shell)
+      const result = await window.api.ai.generate(requirement.trim(), shell, terminalContext, includeTerminalContext && redactTerminalContext)
       setSuggestion(result); setCommand(result.command)
     } catch (generateError) { setError(errorMessage(generateError)) }
     finally { setLoading(false) }
@@ -731,6 +738,8 @@ function AiCommandDialog({ bookmark, sessionId, connected, settings, onSettingsC
     <div className="ai-target"><Server size={16} /><strong>{bookmark.name}</strong><span>{bookmark.username}@{bookmark.host}:{bookmark.port}</span><span className={`status-dot ${connected ? 'connected' : 'disconnected'}`} /></div>
     {!settings.model.trim() ? <div className="ai-unconfigured"><Bot size={28} /><strong>尚未配置 AI 模型</strong><button className="primary-button" onClick={onSettings}><SettingsIcon size={15} />打开 AI 设置</button></div> : <>
       <div className="ai-prompt-row"><label>目标 Shell<select value={shell} onChange={(event) => void selectShell(event.target.value as AiShell)}><option value="linux">Linux Shell</option><option value="powerShell">PowerShell</option><option value="cmd">Windows cmd</option><option value="macos">macOS Shell</option></select></label><label className="ai-requirement">需要完成什么<textarea autoFocus rows={4} maxLength={8000} value={requirement} onChange={(event) => setRequirement(event.target.value)} placeholder="例如：从 app.log 中找出更新条数大于 0 的日志" onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); void generate() } }} /></label></div>
+      <label className="check-label ai-context-option" title={`最多附带 ${aiTerminalContextChars} 个字符`}><input type="checkbox" checked={includeTerminalContext} onChange={(event) => setIncludeTerminalContext(event.target.checked)} />附带终端最近 {aiTerminalContextLines} 行（将发送给 AI）</label>
+      <label className="check-label ai-context-option ai-redaction-option"><input type="checkbox" disabled={!includeTerminalContext} checked={redactTerminalContext} onChange={(event) => setRedactTerminalContext(event.target.checked)} />发送前自动脱敏（手机号、邮箱、证件号等）</label>
       <div className="ai-generate-actions"><button className="primary-button" disabled={loading || !requirement.trim()} onClick={() => void generate()}><WandSparkles size={15} />{loading ? '正在生成…' : suggestion ? '重新生成' : '生成命令'}</button></div>
       {error && <div className="ai-error">{error}</div>}
       {suggestion && <div className="ai-result">

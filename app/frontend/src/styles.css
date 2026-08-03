@@ -427,6 +427,9 @@ body.sidebar-item-dragging, body.sidebar-item-dragging * { cursor: grabbing !imp
 .ai-prompt-row select:focus, .ai-prompt-row textarea:focus, .ai-command-editor:focus, .ai-danger-confirm input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--focus-ring); }
 .ai-prompt-row select { height: 34px; padding: 0 8px; }
 .ai-prompt-row textarea { min-height: 92px; resize: vertical; }
+.ai-context-option { color: var(--text-muted); font-size: 11px; }
+.ai-redaction-option { margin-left: 22px; }
+.ai-redaction-option:has(input:disabled) { opacity: .5; }
 .ai-generate-actions { display: flex; justify-content: flex-end; }
 .ai-error { padding: 8px 10px; overflow-wrap: anywhere; color: var(--danger); border-left: 3px solid var(--danger); background: var(--danger-surface); font-size: 11px; }
 .ai-result { min-width: 0; padding-top: 13px; display: grid; gap: 10px; border-top: 1px solid var(--border); }
@@ -539,6 +542,7 @@ body.sidebar-item-dragging, body.sidebar-item-dragging * { cursor: grabbing !imp
 .platform-win32 .tunnel-status strong,
 .platform-win32 .tunnel-status small,
 .platform-win32 .dialog-copy dl { font-size: 12px; }
+.platform-win32 .ai-context-option { font-size: 12px; }
 
 @media (max-width: 1100px) {
   .sftp-pane { grid-template-columns: minmax(210px, 1fr) 38px minmax(210px, 1fr); }

@@ -148,6 +148,10 @@ pub struct AiSettingsInput {
 pub struct AiGenerateRequest {
     pub requirement: String,
     pub shell: AiShell,
+    #[serde(default)]
+    pub terminal_context: Option<String>,
+    #[serde(default)]
+    pub redact_terminal_context: bool,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]

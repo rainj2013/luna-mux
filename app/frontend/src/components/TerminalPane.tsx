@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import { Terminal, type IBufferLine } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
@@ -47,8 +47,29 @@ function findTerminalMatches(term: Terminal, query: string): TerminalSearchMatch
   return matches
 }
 
+function recentTerminalText(term: Terminal, maxLines: number, maxChars: number): string {
+  const buffer = term.buffer.active
+  const lines: string[] = []
+  for (let row = 0; row < buffer.length; row += 1) {
+    const line = buffer.getLine(row)
+    if (!line) continue
+    const text = line.translateToString(true)
+    if (line.isWrapped && lines.length) lines[lines.length - 1] += text
+    else lines.push(text)
+  }
+  while (lines.length && !lines[lines.length - 1]!.trim()) lines.pop()
+  const text = lines.slice(-Math.max(1, maxLines)).join('\n')
+  const characters = Array.from(text)
+  return characters.length > maxChars ? characters.slice(-maxChars).join('') : text
+}
+
+export interface TerminalPaneHandle {
+  getRecentLines(maxLines: number, maxChars: number): string
+}
+
 interface TerminalPaneProps {
   sessionId?: string
+  connected: boolean
   visible: boolean
   settings: TerminalSettings
   backgroundImage: string
@@ -56,7 +77,7 @@ interface TerminalPaneProps {
   onOpenSettings?: () => void
 }
 
-export function TerminalPane({ sessionId, visible, settings, backgroundImage, onConnect, onOpenSettings }: TerminalPaneProps): React.JSX.Element {
+export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function TerminalPane({ sessionId, connected, visible, settings, backgroundImage, onConnect, onOpenSettings }, ref): React.JSX.Element {
   const container = useRef<HTMLDivElement>(null)
   const terminal = useRef<Terminal | null>(null)
   const fitAddon = useRef<FitAddon | null>(null)
@@ -76,6 +97,10 @@ export function TerminalPane({ sessionId, visible, settings, backgroundImage, on
   const shouldRenderTerminal = Boolean(sessionId) || started
   const rendererBackground = settings.backgroundImagePath && backgroundImage ? 'rgba(0, 0, 0, 0)' : colorWithOpacity(settings.backgroundColor, settings.backgroundOpacity)
 
+  useImperativeHandle(ref, () => ({
+    getRecentLines: (maxLines, maxChars) => terminal.current ? recentTerminalText(terminal.current, maxLines, maxChars) : ''
+  }), [])
+
   useEffect(() => {
     sessionIdRef.current = sessionId
     if (sessionId) setStarted(true)
@@ -90,9 +115,21 @@ export function TerminalPane({ sessionId, visible, settings, backgroundImage, on
   }, [sessionId])
 
   useEffect(() => {
+    if (!connected || !visible || !sessionId) return
+    const frame = requestAnimationFrame(() => {
+      const term = terminal.current
+      if (!term) return
+      fitAddon.current?.fit()
+      window.api.sessions.resize(sessionId, term.cols, term.rows)
+      term.focus()
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [connected, visible, sessionId])
+
+  useEffect(() => {
     if (!shouldRenderTerminal || !container.current || terminal.current) return
     const term = new Terminal({
-      cursorBlink: true, convertEol: true, allowTransparency: true, fontFamily: settings.fontFamily,
+      cursorBlink: true, convertEol: false, allowTransparency: true, fontFamily: settings.fontFamily,
       fontSize: settings.fontSize, lineHeight: 1.25, scrollback: 5000,
       theme: { background: rendererBackground, foreground: settings.foregroundColor, cursor: '#78d64b', ...terminalSelectionTheme }
     })
@@ -289,4 +326,4 @@ export function TerminalPane({ sessionId, visible, settings, backgroundImage, on
       <button role="menuitem" onClick={() => { setContextMenu(null); onOpenSettings?.() }}><Palette size={15} />外观设置</button>
     </div>}
   </div>
-}
+})

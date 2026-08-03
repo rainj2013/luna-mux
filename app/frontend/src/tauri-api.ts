@@ -107,7 +107,7 @@ export async function createTauriApi(): Promise<AppApi> {
       saveSettings: (settings: AiSettingsInput) => call('ai_settings_save', { settings }),
       deleteApiKey: () => call('ai_settings_delete_key'),
       testSettings: (settings: AiSettingsInput) => call('ai_settings_test', { settings }),
-      generate: (requirement, shell: AiShell) => call('ai_command_generate', { request: { requirement, shell } }),
+      generate: (requirement, shell: AiShell, terminalContext, redactTerminalContext) => call('ai_command_generate', { request: { requirement, shell, terminalContext, redactTerminalContext } }),
       analyze: (command) => call('ai_command_analyze', { command })
     },
     state: {
