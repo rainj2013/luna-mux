@@ -1,4 +1,7 @@
-use std::{sync::LazyLock, time::Duration};
+use std::{
+    sync::{LazyLock, Mutex},
+    time::Duration,
+};
 
 use futures::StreamExt;
 use regex::{Captures, Regex};
@@ -73,6 +76,93 @@ struct ModelSuggestion {
     risk_level: Option<String>,
 }
 
+#[derive(Default)]
+pub struct AiDiagnostics {
+    last: Mutex<Option<(String, AiRawExchange)>>,
+}
+
+impl AiDiagnostics {
+    fn begin(&self, endpoint: &Url, api_key_configured: bool, body: &Value) -> String {
+        let id = uuid::Uuid::new_v4().to_string();
+        let request_headers = if api_key_configured {
+            "Content-Type: application/json\nAuthorization: Bearer [HIDDEN]"
+        } else {
+            "Content-Type: application/json"
+        };
+        let exchange = AiRawExchange {
+            occurred_at: chrono::Utc::now().to_rfc3339(),
+            endpoint: diagnostic_endpoint(endpoint),
+            request_headers: request_headers.into(),
+            request_body: serde_json::to_string_pretty(body).unwrap_or_else(|_| body.to_string()),
+            response_status: None,
+            response_headers: String::new(),
+            response_body: String::new(),
+            error: String::new(),
+        };
+        if let Ok(mut last) = self.last.lock() {
+            *last = Some((id.clone(), exchange));
+        }
+        id
+    }
+
+    fn finish(&self, id: &str, status: Option<u16>, headers: String, body: String, error: String) {
+        if let Ok(mut last) = self.last.lock()
+            && let Some((current_id, exchange)) = last.as_mut()
+            && current_id == id
+        {
+            exchange.response_status = status;
+            exchange.response_headers = headers;
+            exchange.response_body = body;
+            exchange.error = error;
+        }
+    }
+
+    fn annotate_error(&self, id: &str, error: &str) {
+        if let Ok(mut last) = self.last.lock()
+            && let Some((current_id, exchange)) = last.as_mut()
+            && current_id == id
+        {
+            exchange.error = error.to_string();
+        }
+    }
+
+    pub fn get(&self) -> Option<AiRawExchange> {
+        self.last
+            .lock()
+            .ok()
+            .and_then(|last| last.as_ref().map(|(_, exchange)| exchange.clone()))
+    }
+
+    pub fn clear(&self) {
+        if let Ok(mut last) = self.last.lock() {
+            *last = None;
+        }
+    }
+}
+
+fn diagnostic_endpoint(endpoint: &Url) -> String {
+    let pairs = endpoint
+        .query_pairs()
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect::<Vec<_>>();
+    if pairs.is_empty() {
+        return endpoint.to_string();
+    }
+    let mut sanitized = endpoint.clone();
+    sanitized.set_query(None);
+    {
+        let mut query = sanitized.query_pairs_mut();
+        for (key, value) in pairs {
+            let normalized = key.to_ascii_lowercase();
+            let sensitive = ["key", "token", "secret", "password", "signature", "auth"]
+                .iter()
+                .any(|marker| normalized.contains(marker));
+            query.append_pair(&key, if sensitive { "[HIDDEN]" } else { &value });
+        }
+    }
+    sanitized.to_string()
+}
+
 pub fn get_settings(db: &Database) -> AiSettings {
     let stored = db.get_setting(SETTINGS_KEY, StoredAiSettings::default());
     AiSettings {
@@ -110,7 +200,11 @@ pub fn delete_api_key(db: &Database) -> AiSettings {
     get_settings(db)
 }
 
-pub async fn test_settings(db: &Database, input: AiSettingsInput) -> Result<(), String> {
+pub async fn test_settings(
+    db: &Database,
+    diagnostics: &AiDiagnostics,
+    input: AiSettingsInput,
+) -> Result<(), String> {
     let endpoint = validate_endpoint(input.base_url.trim())?;
     let model = input.model.trim();
     if model.is_empty() {
@@ -127,12 +221,17 @@ pub async fn test_settings(db: &Database, input: AiSettingsInput) -> Result<(), 
             { "role": "user", "content": "Connection test" }
         ]
     });
-    let response = send_request(endpoint, api_key.as_deref(), body).await?;
-    extract_content(&response).map(|_| ())
+    let (response, diagnostics_id) =
+        send_request(diagnostics, endpoint, api_key.as_deref(), body).await?;
+    extract_content(&response).map(|_| ()).map_err(|error| {
+        diagnostics.annotate_error(&diagnostics_id, &error);
+        error
+    })
 }
 
 pub async fn generate_command(
     db: &Database,
+    diagnostics: &AiDiagnostics,
     request: AiGenerateRequest,
 ) -> Result<AiCommandSuggestion, String> {
     let requirement = request.requirement.trim();
@@ -176,9 +275,16 @@ pub async fn generate_command(
             { "role": "user", "content": user_content }
         ]
     });
-    let response = send_request(endpoint, db.get_ai_api_key().as_deref(), body).await?;
-    let content = extract_content(&response)?;
-    let parsed = parse_suggestion(content)?;
+    let (response, diagnostics_id) =
+        send_request(diagnostics, endpoint, db.get_ai_api_key().as_deref(), body).await?;
+    let content = extract_content(&response).map_err(|error| {
+        diagnostics.annotate_error(&diagnostics_id, &error);
+        error
+    })?;
+    let parsed = parse_suggestion(content).map_err(|error| {
+        diagnostics.annotate_error(&diagnostics_id, &error);
+        error
+    })?;
     let local = analyze_command(&parsed.command)?;
     let model_risk = parse_risk(parsed.risk_level.as_deref());
     let risk_level = max_risk(local.risk_level, model_risk);
@@ -371,11 +477,28 @@ fn validate_endpoint(base_url: &str) -> Result<Url, String> {
     Ok(url)
 }
 
-async fn send_request(endpoint: Url, api_key: Option<&str>, body: Value) -> Result<Value, String> {
+async fn send_request(
+    diagnostics: &AiDiagnostics,
+    endpoint: Url,
+    api_key: Option<&str>,
+    body: Value,
+) -> Result<(Value, String), String> {
+    let diagnostics_id =
+        diagnostics.begin(&endpoint, api_key.is_some_and(|key| !key.is_empty()), &body);
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(60))
         .build()
-        .map_err(|error| format!("无法初始化 AI 请求：{error}"))?;
+        .map_err(|error| {
+            let message = format!("无法初始化 AI 请求：{error}");
+            diagnostics.finish(
+                &diagnostics_id,
+                None,
+                String::new(),
+                String::new(),
+                message.clone(),
+            );
+            message
+        })?;
     let mut request = client.post(endpoint).json(&body);
     if let Some(api_key) = api_key.filter(|value| !value.is_empty()) {
         request = request.bearer_auth(api_key);
@@ -386,35 +509,108 @@ async fn send_request(endpoint: Url, api_key: Option<&str>, body: Value) -> Resu
         } else {
             format!("AI 请求失败：{error}")
         }
-    })?;
+    });
+    let response = match response {
+        Ok(response) => response,
+        Err(error) => {
+            diagnostics.finish(
+                &diagnostics_id,
+                None,
+                String::new(),
+                String::new(),
+                error.clone(),
+            );
+            return Err(error);
+        }
+    };
     let status = response.status();
+    let response_headers = diagnostic_response_headers(response.headers());
     let mut stream = response.bytes_stream();
     let mut bytes = Vec::new();
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|error| format!("读取 AI 响应失败：{error}"))?;
+        let chunk = match chunk {
+            Ok(chunk) => chunk,
+            Err(error) => {
+                let message = format!("读取 AI 响应失败：{error}");
+                diagnostics.finish(
+                    &diagnostics_id,
+                    Some(status.as_u16()),
+                    response_headers,
+                    String::from_utf8_lossy(&bytes).into_owned(),
+                    message.clone(),
+                );
+                return Err(message);
+            }
+        };
         if bytes.len() + chunk.len() > MAX_RESPONSE_BYTES {
-            return Err("AI 响应超过 1 MB 限制".into());
+            let message = "AI 响应超过 1 MB 限制".to_string();
+            diagnostics.finish(
+                &diagnostics_id,
+                Some(status.as_u16()),
+                response_headers,
+                String::from_utf8_lossy(&bytes).into_owned(),
+                message.clone(),
+            );
+            return Err(message);
         }
         bytes.extend_from_slice(&chunk);
     }
-    let value: Value = serde_json::from_slice(&bytes).map_err(|_| {
-        if status.is_success() {
-            "AI 返回的内容不是有效 JSON".to_string()
-        } else {
-            format!("AI 服务返回 HTTP {status}")
-        }
-    })?;
+    let response_body = String::from_utf8_lossy(&bytes).into_owned();
+    let value: Value = serde_json::from_slice(&bytes)
+        .map_err(|_| {
+            if status.is_success() {
+                "AI 返回的内容不是有效 JSON".to_string()
+            } else {
+                format!("AI 服务返回 HTTP {status}")
+            }
+        })
+        .map_err(|error| {
+            diagnostics.finish(
+                &diagnostics_id,
+                Some(status.as_u16()),
+                response_headers.clone(),
+                response_body.clone(),
+                error.clone(),
+            );
+            error
+        })?;
     if !status.is_success() {
         let message = value
             .pointer("/error/message")
             .and_then(Value::as_str)
             .unwrap_or("请求被 AI 服务拒绝");
-        return Err(format!(
-            "AI 服务返回 HTTP {status}：{}",
-            truncate(message, 400)
-        ));
+        let error = format!("AI 服务返回 HTTP {status}：{}", truncate(message, 400));
+        diagnostics.finish(
+            &diagnostics_id,
+            Some(status.as_u16()),
+            response_headers,
+            response_body,
+            error.clone(),
+        );
+        return Err(error);
     }
-    Ok(value)
+    diagnostics.finish(
+        &diagnostics_id,
+        Some(status.as_u16()),
+        response_headers,
+        response_body,
+        String::new(),
+    );
+    Ok((value, diagnostics_id))
+}
+
+fn diagnostic_response_headers(headers: &reqwest::header::HeaderMap) -> String {
+    headers
+        .iter()
+        .filter_map(|(name, value)| {
+            let name = name.as_str();
+            let included = matches!(name, "content-type" | "retry-after" | "x-request-id")
+                || name.starts_with("x-ratelimit-")
+                || name.starts_with("ratelimit-");
+            included.then(|| format!("{name}: {}", value.to_str().unwrap_or("[non-UTF8]")))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn extract_content(response: &Value) -> Result<&str, String> {
@@ -491,6 +687,12 @@ mod tests {
             "http://127.0.0.1:11434/v1/chat/completions"
         );
         assert!(validate_endpoint("file:///tmp/model").is_err());
+        assert_eq!(
+            diagnostic_endpoint(
+                &Url::parse("https://example.com/v1?api_key=secret&region=cn").unwrap()
+            ),
+            "https://example.com/v1?api_key=%5BHIDDEN%5D&region=cn"
+        );
     }
 
     #[test]

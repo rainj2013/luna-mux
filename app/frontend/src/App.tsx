@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { confirm as confirmDialog } from '@tauri-apps/plugin-dialog'
-import { ArrowRight, Bookmark as BookmarkIcon, Bot, Check, ChevronDown, ChevronRight, CircleHelp, CirclePlus, Copy, Edit3, Eye, EyeOff, FileInput, Folder, FolderOpen, FolderPlus, GripVertical, Image as ImageIcon, KeyRound, Minus, Monitor, Moon, Network, Palette, PanelLeftClose, PanelLeftOpen, Play, Plug, Power, Rocket, RotateCcw, Search, Send, Server, Settings as SettingsIcon, ShieldAlert, Square, SquareTerminal, Star, Sun, Trash2, WandSparkles, X } from 'lucide-react'
-import { DEFAULT_AI_SETTINGS, DEFAULT_TERMINAL_SETTINGS, type AiCommandSuggestion, type AiRiskAssessment, type AiSettings, type AiSettingsInput, type AiShell, type AppEvent, type AppIconId, type AppIconSettings, type Bookmark, type BookmarkInput, type ConflictResolution, type ConnectInput, type DeploymentDiffEntry, type DeploymentProfile, type HostKeyPrompt, type PortForwardProfile, type SessionStatus, type SshConfigPreview, type TerminalSettings, type TransferTask, type TunnelSummary, type UiTheme } from './types'
+import { ArrowRight, Bookmark as BookmarkIcon, Bot, Check, ChevronDown, ChevronRight, CircleHelp, CirclePlus, Copy, Edit3, Eye, EyeOff, FileInput, FileJson2, Folder, FolderOpen, FolderPlus, GripVertical, Image as ImageIcon, KeyRound, Minus, Monitor, Moon, Network, Palette, PanelLeftClose, PanelLeftOpen, Play, Plug, Power, Rocket, RotateCcw, Search, Send, Server, Settings as SettingsIcon, ShieldAlert, Square, SquareTerminal, Star, Sun, Trash2, WandSparkles, X } from 'lucide-react'
+import { DEFAULT_AI_SETTINGS, DEFAULT_TERMINAL_SETTINGS, type AiCommandSuggestion, type AiRawExchange, type AiRiskAssessment, type AiSettings, type AiSettingsInput, type AiShell, type AppEvent, type AppIconId, type AppIconSettings, type Bookmark, type BookmarkInput, type ConflictResolution, type ConnectInput, type DeploymentDiffEntry, type DeploymentProfile, type HostKeyPrompt, type PortForwardProfile, type SessionStatus, type SshConfigPreview, type TerminalSettings, type TransferTask, type TunnelSummary, type UiTheme } from './types'
 import { TerminalPane, type TerminalPaneHandle } from './components/TerminalPane'
 import { SftpPane } from './components/SftpPane'
 import { HelpDialog } from './components/HelpDialog'
@@ -663,6 +663,7 @@ function AiCommandDialog({ bookmark, sessionId, connected, settings, getTerminal
   const [confirmationText, setConfirmationText] = useState('')
   const [includeTerminalContext, setIncludeTerminalContext] = useState(false)
   const [redactTerminalContext, setRedactTerminalContext] = useState(true)
+  const [rawExchange, setRawExchange] = useState<AiRawExchange | null>(null)
 
   const effectiveAssessment = (local: AiRiskAssessment): AiRiskAssessment => {
     if (!suggestion || edited) return local
@@ -726,6 +727,16 @@ function AiCommandDialog({ bookmark, sessionId, connected, settings, getTerminal
   }
   const riskText = suggestion ? ({ low: '低风险', medium: '需注意', high: '高风险' } as const)[suggestion.riskLevel] : ''
 
+  const openRawExchange = async (): Promise<void> => {
+    try {
+      const exchange = await window.api.ai.getLastExchange()
+      if (!exchange) { setError('暂无 AI 请求诊断数据'); return }
+      setRawExchange(exchange)
+    } catch (diagnosticError) { setError(errorMessage(diagnosticError)) }
+  }
+
+  if (rawExchange) return <AiDiagnosticsDialog exchange={rawExchange} onClose={() => setRawExchange(null)} onClear={async () => { try { await window.api.ai.clearLastExchange(); setRawExchange(null) } catch (clearError) { onError(errorMessage(clearError)) } }} />
+
   if (confirming) return <Modal title="确认执行高风险命令" onClose={() => setConfirming(null)} wide><div className="ai-danger-confirm">
     <div className="ai-danger-heading"><ShieldAlert size={22} /><div><strong>该命令可能造成不可逆修改</strong><span>{bookmark.username}@{bookmark.host}:{bookmark.port}</span></div></div>
     <pre>{command.trim()}</pre>
@@ -740,7 +751,7 @@ function AiCommandDialog({ bookmark, sessionId, connected, settings, getTerminal
       <div className="ai-prompt-row"><label>目标 Shell<select value={shell} onChange={(event) => void selectShell(event.target.value as AiShell)}><option value="linux">Linux Shell</option><option value="powerShell">PowerShell</option><option value="cmd">Windows cmd</option><option value="macos">macOS Shell</option></select></label><label className="ai-requirement">需要完成什么<textarea autoFocus rows={4} maxLength={8000} value={requirement} onChange={(event) => setRequirement(event.target.value)} placeholder="例如：从 app.log 中找出更新条数大于 0 的日志" onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); void generate() } }} /></label></div>
       <label className="check-label ai-context-option" title={`最多附带 ${aiTerminalContextChars} 个字符`}><input type="checkbox" checked={includeTerminalContext} onChange={(event) => setIncludeTerminalContext(event.target.checked)} />附带终端最近 {aiTerminalContextLines} 行（将发送给 AI）</label>
       <label className="check-label ai-context-option ai-redaction-option"><input type="checkbox" disabled={!includeTerminalContext} checked={redactTerminalContext} onChange={(event) => setRedactTerminalContext(event.target.checked)} />发送前自动脱敏（手机号、邮箱、证件号等）</label>
-      <div className="ai-generate-actions"><button className="primary-button" disabled={loading || !requirement.trim()} onClick={() => void generate()}><WandSparkles size={15} />{loading ? '正在生成…' : suggestion ? '重新生成' : '生成命令'}</button></div>
+      <div className="ai-generate-actions"><button className="secondary-button" onClick={() => void openRawExchange()}><FileJson2 size={15} />原始数据</button><button className="primary-button" disabled={loading || !requirement.trim()} onClick={() => void generate()}><WandSparkles size={15} />{loading ? '正在生成…' : suggestion ? '重新生成' : '生成命令'}</button></div>
       {error && <div className="ai-error">{error}</div>}
       {suggestion && <div className="ai-result">
         <div className="ai-result-heading"><strong>生成结果</strong><span className={`ai-risk ${suggestion.riskLevel}`}>{riskText}</span>{edited && <span className="ai-edited">命令已修改，原说明可能不再适用</span>}</div>
@@ -751,6 +762,25 @@ function AiCommandDialog({ bookmark, sessionId, connected, settings, getTerminal
         <div className="dialog-actions spread"><button className="secondary-button" onClick={() => void window.api.system.writeClipboard(command).catch((copyError) => setError(errorMessage(copyError)))}><Copy size={15} />复制</button><div><button className="secondary-button" disabled={!connected || !command.trim() || executing} onClick={() => void fillCommand()}><Send size={15} />填入终端</button><button className="primary-button" disabled={!connected || !command.trim() || executing} onClick={() => void requestExecution()}><Play size={15} />执行</button></div></div>
       </div>}
     </>}
+  </div></Modal>
+}
+
+function prettyRawJson(value: string): string {
+  try { return JSON.stringify(JSON.parse(value), null, 2) }
+  catch { return value }
+}
+
+function AiDiagnosticsDialog({ exchange, onClose, onClear }: { exchange: AiRawExchange; onClose(): void; onClear(): void }): React.JSX.Element {
+  const [view, setView] = useState<'request' | 'response'>('response')
+  const headers = view === 'request' ? exchange.requestHeaders : exchange.responseHeaders
+  const body = prettyRawJson(view === 'request' ? exchange.requestBody : exchange.responseBody)
+  const copy = [view === 'request' ? `POST ${exchange.endpoint}` : `HTTP ${exchange.responseStatus ?? '无响应'}`, headers, body, exchange.error && `Error: ${exchange.error}`].filter(Boolean).join('\n\n')
+  return <Modal title="AI 原始请求与响应" onClose={onClose} wide><div className="ai-diagnostics">
+    <div className="ai-diagnostics-meta"><span title={exchange.endpoint}>POST {exchange.endpoint}</span><time>{new Date(exchange.occurredAt).toLocaleString()}</time>{exchange.responseStatus ? <strong className={exchange.responseStatus >= 400 ? 'error' : ''}>HTTP {exchange.responseStatus}</strong> : <strong className="error">无响应</strong>}</div>
+    {exchange.error && <div className="ai-error">{exchange.error}</div>}
+    <div className="ai-diagnostics-tabs" role="tablist" aria-label="原始数据类别"><button role="tab" aria-selected={view === 'request'} className={view === 'request' ? 'active' : ''} onClick={() => setView('request')}>请求</button><button role="tab" aria-selected={view === 'response'} className={view === 'response' ? 'active' : ''} onClick={() => setView('response')}>响应</button></div>
+    <div className="ai-diagnostics-content">{headers && <section><strong>Headers</strong><pre>{headers}</pre></section>}<section><strong>Body</strong><pre>{body || '（空）'}</pre></section></div>
+    <div className="dialog-actions spread"><button className="danger-button" onClick={onClear}><Trash2 size={15} />清除</button><div><button className="secondary-button" onClick={() => void window.api.system.writeClipboard(copy)}><Copy size={15} />复制</button><button className="primary-button" onClick={onClose}>返回</button></div></div>
   </div></Modal>
 }
 

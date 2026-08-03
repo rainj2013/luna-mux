@@ -181,6 +181,19 @@ pub struct AiCommandSuggestion {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AiRawExchange {
+    pub occurred_at: String,
+    pub endpoint: String,
+    pub request_headers: String,
+    pub request_body: String,
+    pub response_status: Option<u16>,
+    pub response_headers: String,
+    pub response_body: String,
+    pub error: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HostKeyPrompt {
     pub session_id: String,
     pub host: String,

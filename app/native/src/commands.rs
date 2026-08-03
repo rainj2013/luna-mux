@@ -25,6 +25,7 @@ pub struct AppState {
     pub sessions: Arc<SessionManager>,
     pub transfers: Arc<TransferManager>,
     pub tunnels: Arc<TunnelManager>,
+    pub ai_diagnostics: ai::AiDiagnostics,
     pub allowed_imports: Mutex<HashSet<PathBuf>>,
     pub exit_cleanup_started: AtomicBool,
 }
@@ -672,7 +673,7 @@ pub async fn ai_settings_test(
     state: State<'_, AppState>,
     settings: AiSettingsInput,
 ) -> Result<(), String> {
-    ai::test_settings(&state.db, settings).await
+    ai::test_settings(&state.db, &state.ai_diagnostics, settings).await
 }
 
 #[tauri::command]
@@ -680,12 +681,22 @@ pub async fn ai_command_generate(
     state: State<'_, AppState>,
     request: AiGenerateRequest,
 ) -> Result<AiCommandSuggestion, String> {
-    ai::generate_command(&state.db, request).await
+    ai::generate_command(&state.db, &state.ai_diagnostics, request).await
 }
 
 #[tauri::command]
 pub fn ai_command_analyze(command: String) -> Result<AiRiskAssessment, String> {
     ai::analyze_command(&command)
+}
+
+#[tauri::command]
+pub fn ai_diagnostics_get(state: State<AppState>) -> Option<AiRawExchange> {
+    state.ai_diagnostics.get()
+}
+
+#[tauri::command]
+pub fn ai_diagnostics_clear(state: State<AppState>) {
+    state.ai_diagnostics.clear();
 }
 #[tauri::command]
 pub async fn settings_choose_terminal_background(app: AppHandle) -> Option<String> {

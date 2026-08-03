@@ -106,6 +106,7 @@ pub fn run() {
                 sessions,
                 transfers,
                 tunnels,
+                ai_diagnostics: ai::AiDiagnostics::default(),
                 allowed_imports: Mutex::new(HashSet::new()),
                 exit_cleanup_started: AtomicBool::new(false),
             });
@@ -187,7 +188,9 @@ pub fn run() {
             ai_settings_delete_key,
             ai_settings_test,
             ai_command_generate,
-            ai_command_analyze
+            ai_command_analyze,
+            ai_diagnostics_get,
+            ai_diagnostics_clear
         ])
         .build(tauri::generate_context!())
         .expect("failed to build SSH Client")

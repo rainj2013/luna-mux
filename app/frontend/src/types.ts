@@ -167,6 +167,17 @@ export interface AiRiskAssessment {
   warnings: string[]
 }
 
+export interface AiRawExchange {
+  occurredAt: string
+  endpoint: string
+  requestHeaders: string
+  requestBody: string
+  responseStatus?: number
+  responseHeaders: string
+  responseBody: string
+  error: string
+}
+
 export const DEFAULT_AI_SETTINGS: AiSettings = {
   baseUrl: 'https://api.openai.com/v1',
   model: '',
@@ -339,6 +350,8 @@ export interface AppApi {
     testSettings(settings: AiSettingsInput): Promise<void>
     generate(requirement: string, shell: AiShell, terminalContext?: string, redactTerminalContext?: boolean): Promise<AiCommandSuggestion>
     analyze(command: string): Promise<AiRiskAssessment>
+    getLastExchange(): Promise<AiRawExchange | null>
+    clearLastExchange(): Promise<void>
   }
   state: {
     getOpenBookmarks(): Promise<string[]>
