@@ -113,6 +113,105 @@ pub fn bookmarks_save(state: State<AppState>, input: BookmarkInput) -> Result<Bo
     state.db.save_bookmark(input)
 }
 #[tauri::command]
+pub fn bookmarks_reorder(
+    state: State<AppState>,
+    ids: Vec<String>,
+) -> Result<Vec<Bookmark>, String> {
+    state.db.reorder_bookmarks(&ids)
+}
+#[tauri::command]
+pub fn bookmarks_move_to_group(
+    state: State<AppState>,
+    id: String,
+    group_name: String,
+) -> Result<Vec<Bookmark>, String> {
+    state.db.move_bookmark_to_group(&id, &group_name)
+}
+#[tauri::command]
+pub fn bookmark_groups_list(state: State<AppState>) -> Result<Vec<String>, String> {
+    state.db.list_bookmark_groups()
+}
+#[tauri::command]
+pub fn bookmark_groups_create(state: State<AppState>, name: String) -> Result<Vec<String>, String> {
+    state.db.create_bookmark_group(&name)
+}
+#[tauri::command]
+pub fn bookmark_groups_rename(
+    state: State<AppState>,
+    old_name: String,
+    new_name: String,
+) -> Result<Vec<String>, String> {
+    state.db.rename_bookmark_group(&old_name, &new_name)
+}
+#[tauri::command]
+pub fn bookmark_groups_delete(
+    state: State<AppState>,
+    name: String,
+) -> Result<BookmarkGroupDeleteResult, String> {
+    state.db.delete_bookmark_group(&name)
+}
+#[tauri::command]
+pub fn bookmark_groups_reorder(
+    state: State<AppState>,
+    groups: Vec<String>,
+) -> Result<Vec<String>, String> {
+    state.db.reorder_bookmark_groups(&groups)
+}
+#[tauri::command]
+pub fn bookmarks_duplicate(state: State<AppState>, id: String) -> Result<Bookmark, String> {
+    let source = state
+        .db
+        .get_bookmark(&id)?
+        .ok_or_else(|| "要复制的连接不存在".to_string())?;
+    let existing_names = state
+        .db
+        .list_bookmarks()?
+        .into_iter()
+        .map(|bookmark| bookmark.name)
+        .collect::<HashSet<_>>();
+    let base_name = format!("{} 副本", source.name);
+    let mut name = base_name.clone();
+    let mut suffix = 2;
+    while existing_names.contains(&name) {
+        name = format!("{base_name} {suffix}");
+        suffix += 1;
+    }
+    let duplicate = state.db.save_bookmark(BookmarkInput {
+        id: None,
+        name,
+        host: source.host,
+        port: source.port,
+        username: source.username,
+        auth_type: source.auth_type,
+        private_key_path: source.private_key_path,
+        jump_bookmark_id: source.jump_bookmark_id,
+        group_name: source.group_name,
+        favorite: false,
+        keepalive_enabled: source.keepalive_enabled,
+        keepalive_interval_seconds: source.keepalive_interval_seconds,
+        keepalive_count_max: source.keepalive_count_max,
+        note: source.note,
+    })?;
+    let mut ids = state
+        .db
+        .list_bookmarks()?
+        .into_iter()
+        .map(|bookmark| bookmark.id)
+        .filter(|bookmark_id| bookmark_id != &duplicate.id)
+        .collect::<Vec<_>>();
+    let position = ids
+        .iter()
+        .position(|bookmark_id| bookmark_id == &id)
+        .map(|index| index + 1)
+        .unwrap_or(ids.len());
+    ids.insert(position, duplicate.id.clone());
+    state.db.reorder_bookmarks(&ids)?;
+    state
+        .db
+        .get_bookmark(&duplicate.id)?
+        .ok_or_else(|| "复制连接失败".to_string())
+}
+#[tauri::command]
 pub fn bookmarks_remove(state: State<AppState>, id: String) -> Result<(), String> {
     if let Some(dependent) = state
         .db
@@ -484,6 +583,17 @@ pub fn state_get_sidebar_collapsed(state: State<AppState>) -> bool {
 #[tauri::command]
 pub fn state_set_sidebar_collapsed(state: State<AppState>, collapsed: bool) -> Result<(), String> {
     state.db.set_setting("sidebarCollapsed", &collapsed)
+}
+#[tauri::command]
+pub fn state_get_collapsed_bookmark_groups(state: State<AppState>) -> Vec<String> {
+    state.db.get_setting("collapsedBookmarkGroups", vec![])
+}
+#[tauri::command]
+pub fn state_set_collapsed_bookmark_groups(
+    state: State<AppState>,
+    groups: Vec<String>,
+) -> Result<(), String> {
+    state.db.set_setting("collapsedBookmarkGroups", &groups)
 }
 #[tauri::command]
 pub fn state_get_sidebar_width(state: State<AppState>) -> u32 {

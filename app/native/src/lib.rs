@@ -7,6 +7,8 @@ mod sessions;
 mod ssh_config;
 mod transfers;
 mod tunnels;
+#[cfg(target_os = "windows")]
+mod windows_app_icon;
 
 use std::{
     collections::HashSet,
@@ -23,6 +25,27 @@ use sessions::SessionManager;
 use tauri::{Manager, RunEvent, Theme};
 use transfers::TransferManager;
 use tunnels::TunnelManager;
+
+#[cfg(target_os = "windows")]
+fn disable_browser_accelerator_keys(window: &tauri::WebviewWindow) -> Result<(), String> {
+    use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings3;
+    use windows::core::Interface;
+
+    window
+        .with_webview(|webview| unsafe {
+            let result = (|| -> windows::core::Result<()> {
+                let core_webview = webview.controller().CoreWebView2()?;
+                let settings = core_webview.Settings()?;
+                let settings3 = settings.cast::<ICoreWebView2Settings3>()?;
+                settings3.SetAreBrowserAcceleratorKeysEnabled(false)
+            })();
+
+            if let Err(error) = result {
+                eprintln!("failed to disable WebView2 browser accelerator keys: {error}");
+            }
+        })
+        .map_err(|error| error.to_string())
+}
 
 pub fn run() {
     let builder = tauri::Builder::default()
@@ -65,9 +88,12 @@ pub fn run() {
                 })
                 .map_err(|error| error.to_string())?;
             #[cfg(target_os = "windows")]
-            window
-                .set_decorations(false)
-                .map_err(|error| error.to_string())?;
+            {
+                window
+                    .set_decorations(false)
+                    .map_err(|error| error.to_string())?;
+                disable_browser_accelerator_keys(&window)?;
+            }
             let selected_icon = database.get_setting("appIcon", models::AppIconId::Ssh);
             app_icon::apply_at_startup(app.handle(), &selected_icon)?;
             let sessions = SessionManager::new(app.handle().clone(), database.clone());
@@ -89,6 +115,14 @@ pub fn run() {
             system_open_external,
             bookmarks_list,
             bookmarks_save,
+            bookmarks_reorder,
+            bookmarks_move_to_group,
+            bookmark_groups_list,
+            bookmark_groups_create,
+            bookmark_groups_rename,
+            bookmark_groups_delete,
+            bookmark_groups_reorder,
+            bookmarks_duplicate,
             bookmarks_remove,
             bookmarks_forget_credential,
             bookmarks_preview_ssh_config,
@@ -135,6 +169,8 @@ pub fn run() {
             state_set_open_bookmarks,
             state_get_sidebar_collapsed,
             state_set_sidebar_collapsed,
+            state_get_collapsed_bookmark_groups,
+            state_set_collapsed_bookmark_groups,
             state_get_sidebar_width,
             state_set_sidebar_width,
             settings_get_ui_theme,

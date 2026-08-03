@@ -10,13 +10,15 @@ export function colorWithOpacity(color: string, opacity: number): string {
 
 export function terminalBackgroundStyle(settings: TerminalSettings, imageDataUrl: string): CSSProperties {
   if (!settings.backgroundImagePath || !imageDataUrl) return {}
+  const overlay = { '--terminal-background-overlay': colorWithOpacity(settings.backgroundColor, settings.backgroundOpacity) }
   if (settings.backgroundImageFit === 'tile') {
-    return { backgroundImage: `url("${imageDataUrl}")`, backgroundPosition: 'left top', backgroundRepeat: 'repeat', backgroundSize: 'auto' }
+    return { ...overlay, backgroundImage: `url("${imageDataUrl}")`, backgroundPosition: 'left top', backgroundRepeat: 'repeat', backgroundSize: 'auto' } as CSSProperties
   }
   return {
+    ...overlay,
     backgroundImage: `url("${imageDataUrl}")`,
     backgroundPosition: 'center',
     backgroundRepeat: 'no-repeat',
     backgroundSize: settings.backgroundImageFit === 'stretch' ? '100% 100%' : settings.backgroundImageFit
-  }
+  } as CSSProperties
 }

@@ -4475,6 +4475,7 @@ dependencies = [
  "dirs",
  "fast-socks5",
  "futures",
+ "ico",
  "image",
  "keyring",
  "objc2",
@@ -4497,6 +4498,8 @@ dependencies = [
  "url",
  "uuid",
  "walkdir",
+ "webview2-com",
+ "windows 0.61.3",
  "zeroize",
 ]
 

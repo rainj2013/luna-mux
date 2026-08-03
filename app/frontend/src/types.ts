@@ -18,11 +18,17 @@ export interface Bookmark {
   keepaliveCountMax: number
   note: string
   hasSavedCredential: boolean
+  sortOrder: number
   createdAt: string
   updatedAt: string
 }
 
-export type BookmarkInput = Omit<Bookmark, 'id' | 'hasSavedCredential' | 'lastConnectedAt' | 'createdAt' | 'updatedAt'>
+export type BookmarkInput = Omit<Bookmark, 'id' | 'hasSavedCredential' | 'lastConnectedAt' | 'sortOrder' | 'createdAt' | 'updatedAt'>
+
+export interface BookmarkGroupDeleteResult {
+  groups: string[]
+  deletedBookmarkIds: string[]
+}
 
 export interface SshConfigImportEntry {
   alias: string
@@ -224,10 +230,20 @@ export interface AppApi {
   bookmarks: {
     list(): Promise<Bookmark[]>
     save(input: BookmarkInput & { id?: string }): Promise<Bookmark>
+    reorder(ids: string[]): Promise<Bookmark[]>
+    moveToGroup(id: string, groupName: string): Promise<Bookmark[]>
+    duplicate(id: string): Promise<Bookmark>
     remove(id: string): Promise<void>
     forgetCredential(id: string): Promise<void>
     previewSshConfig(): Promise<SshConfigPreview | null>
     importSshConfig(path: string, aliases: string[]): Promise<Bookmark[]>
+  }
+  bookmarkGroups: {
+    list(): Promise<string[]>
+    create(name: string): Promise<string[]>
+    rename(oldName: string, newName: string): Promise<string[]>
+    delete(name: string): Promise<BookmarkGroupDeleteResult>
+    reorder(groups: string[]): Promise<string[]>
   }
   sessions: {
     list(): Promise<SessionSummary[]>
@@ -284,6 +300,8 @@ export interface AppApi {
     setOpenBookmarks(ids: string[]): Promise<void>
     getSidebarCollapsed(): Promise<boolean>
     setSidebarCollapsed(collapsed: boolean): Promise<void>
+    getCollapsedBookmarkGroups(): Promise<string[]>
+    setCollapsedBookmarkGroups(groups: string[]): Promise<void>
     getSidebarWidth(): Promise<number>
     setSidebarWidth(width: number): Promise<void>
   }

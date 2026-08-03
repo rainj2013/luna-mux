@@ -19,6 +19,7 @@ pub struct Bookmark {
     pub keepalive_count_max: u32,
     pub note: String,
     pub has_saved_credential: bool,
+    pub sort_order: i64,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -41,6 +42,13 @@ pub struct BookmarkInput {
     pub keepalive_interval_seconds: u32,
     pub keepalive_count_max: u32,
     pub note: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BookmarkGroupDeleteResult {
+    pub groups: Vec<String>,
+    pub deleted_bookmark_ids: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
