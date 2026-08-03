@@ -736,7 +736,7 @@ function AiCommandDialog({ bookmark, sessionId, connected, settings, getTerminal
 
   if (rawExchange) return <AiDiagnosticsDialog exchange={rawExchange} onClose={() => setRawExchange(null)} onClear={async () => { try { await window.api.ai.clearLastExchange(); setRawExchange(null) } catch (clearError) { onError(errorMessage(clearError)) } }} />
 
-  if (confirming) {
+  const executionConfirmation = confirming ? (() => {
     const confirmationCopy = {
       low: { title: '确认执行命令', heading: '请确认将在当前会话中执行此命令' },
       medium: { title: '确认执行需注意的命令', heading: '该命令可能修改系统或文件内容' },
@@ -744,16 +744,16 @@ function AiCommandDialog({ bookmark, sessionId, connected, settings, getTerminal
     } as const
     const copy = confirmationCopy[confirming.riskLevel]
     const requiresTextConfirmation = confirming.riskLevel === 'high'
-    return <Modal title={copy.title} onClose={() => setConfirming(null)} wide><div className={`ai-execution-confirm ${confirming.riskLevel}`}>
+    return <Modal title={copy.title} onClose={() => setConfirming(null)} wide raised><div className={`ai-execution-confirm ${confirming.riskLevel}`}>
       <div className="ai-confirm-heading">{confirming.riskLevel === 'low' ? <SquareTerminal size={22} /> : <ShieldAlert size={22} />}<div><strong>{copy.heading}</strong><span>{bookmark.username}@{bookmark.host}:{bookmark.port}</span></div></div>
       <pre>{command.trim()}</pre>
       {confirming.warnings.length > 0 && <ul>{confirming.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>}
       {requiresTextConfirmation && <label>输入“执行”以继续<input autoFocus value={confirmationText} onChange={(event) => setConfirmationText(event.target.value)} /></label>}
       <div className="dialog-actions"><button className="secondary-button" disabled={executing} onClick={() => setConfirming(null)}>取消</button><button className={requiresTextConfirmation ? 'danger-button' : 'primary-button'} disabled={(requiresTextConfirmation && confirmationText !== '执行') || executing} onClick={() => void executeConfirmed()}><Play size={15} />{executing ? '正在执行…' : '执行命令'}</button></div>
     </div></Modal>
-  }
+  })() : null
 
-  return <Modal title="AI 命令助手" onClose={onClose} wide><div className="ai-command-dialog">
+  return <><Modal title="AI 命令助手" onClose={confirming ? () => undefined : onClose} wide><div className="ai-command-dialog">
     <div className="ai-target"><Server size={16} /><strong>{bookmark.name}</strong><span>{bookmark.username}@{bookmark.host}:{bookmark.port}</span><span className={`status-dot ${connected ? 'connected' : 'disconnected'}`} /></div>
     {!settings.model.trim() ? <div className="ai-unconfigured"><Bot size={28} /><strong>尚未配置 AI 模型</strong><button className="primary-button" onClick={onSettings}><SettingsIcon size={15} />打开 AI 设置</button></div> : <>
       <div className="ai-prompt-row"><label>目标 Shell<select value={shell} onChange={(event) => void selectShell(event.target.value as AiShell)}><option value="linux">Linux Shell</option><option value="powerShell">PowerShell</option><option value="cmd">Windows cmd</option><option value="macos">macOS Shell</option></select></label><label className="ai-requirement">需要完成什么<textarea autoFocus rows={4} maxLength={8000} value={requirement} onChange={(event) => setRequirement(event.target.value)} placeholder="例如：从 app.log 中找出更新条数大于 0 的日志" onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); void generate() } }} /></label></div>
@@ -770,7 +770,7 @@ function AiCommandDialog({ bookmark, sessionId, connected, settings, getTerminal
         <div className="dialog-actions spread"><button className="secondary-button" onClick={() => void window.api.system.writeClipboard(command).catch((copyError) => setError(errorMessage(copyError)))}><Copy size={15} />复制</button><div><button className="secondary-button" disabled={!connected || !command.trim() || executing} onClick={() => void fillCommand()}><Send size={15} />填入终端</button><button className="primary-button" disabled={!connected || !command.trim() || executing} onClick={() => void requestExecution()}><Play size={15} />执行</button></div></div>
       </div>}
     </>}
-  </div></Modal>
+  </div></Modal>{executionConfirmation}</>
 }
 
 function prettyRawJson(value: string): string {
@@ -1033,8 +1033,8 @@ function ConflictDialog({ conflict, onDecision }: { conflict: { sourcePath: stri
   return <Modal title="目标位置已有同名文件" onClose={() => onDecision('skip', false)}><div className="dialog-copy"><p className="path-line">{conflict.destinationPath}</p><label className="check-label"><input type="checkbox" checked={apply} onChange={(event) => setApply(event.target.checked)} />应用到当前批次中的所有冲突</label><div className="dialog-actions spread"><button className="secondary-button" onClick={() => onDecision('skip', apply)}>跳过</button><button className="secondary-button" onClick={() => onDecision('rename', apply)}>自动重命名</button><button className="danger-button" onClick={() => onDecision('overwrite', apply)}>覆盖</button></div></div></Modal>
 }
 
-function Modal({ title, onClose, children, wide = false }: { title: string; onClose(): void; children: React.ReactNode; wide?: boolean }): React.JSX.Element {
-  return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}><section className={`modal ${wide ? 'wide' : ''}`} role="dialog" aria-modal="true"><header><strong>{title}</strong><button className="icon-button" onClick={onClose}><X size={18} /></button></header>{children}</section></div>
+function Modal({ title, onClose, children, wide = false, raised = false }: { title: string; onClose(): void; children: React.ReactNode; wide?: boolean; raised?: boolean }): React.JSX.Element {
+  return <div className={`modal-backdrop ${raised ? 'raised' : ''}`} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}><section className={`modal ${wide ? 'wide' : ''}`} role="dialog" aria-modal="true"><header><strong>{title}</strong><button className="icon-button" onClick={onClose}><X size={18} /></button></header>{children}</section></div>
 }
 
 function TransferPanel({ transfers, view, setView, onRetry, onCancel, onClear }: { transfers: TransferTask[]; view: 'queue' | 'history'; setView(value: 'queue' | 'history'): void; onRetry(task: TransferTask): void; onCancel(task: TransferTask): void; onClear(): void }): React.JSX.Element {

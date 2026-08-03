@@ -313,6 +313,7 @@ body.sidebar-item-dragging, body.sidebar-item-dragging * { cursor: grabbing !imp
 .error-text { color: var(--danger) !important; }
 
 .modal-backdrop { position: fixed; z-index: 100; inset: 0; display: grid; place-items: center; padding: 20px; background: var(--overlay); }
+.modal-backdrop.raised { z-index: 180; }
 .modal { width: min(500px, 100%); max-height: calc(100vh - 40px); overflow: auto; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface); box-shadow: 0 16px 48px var(--shadow); }
 .modal.wide { width: min(760px, 100%); }
 .modal > header { height: 46px; padding: 0 12px 0 17px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); }
