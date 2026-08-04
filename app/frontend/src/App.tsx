@@ -450,6 +450,7 @@ export function App(): React.JSX.Element {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key === 'F1' && !document.querySelector('.modal-backdrop, .help-backdrop')) {
         event.preventDefault()
+        event.stopPropagation()
         setHelpDialog(true)
         return
       }
@@ -457,23 +458,26 @@ export function App(): React.JSX.Element {
       const commandKey = window.api.platform === 'darwin' ? event.metaKey : event.ctrlKey
       if (commandKey && event.shiftKey && event.key.toLowerCase() === 't' && activeBookmark) {
         event.preventDefault()
+        event.stopPropagation()
         openBookmark(activeBookmark, { newSession: true })
         return
       }
       if (commandKey && !event.shiftKey && event.key.toLowerCase() === 'w' && activeTab) {
         event.preventDefault()
+        event.stopPropagation()
         closeTab(activeTab)
         return
       }
       if (event.ctrlKey && event.key === 'Tab' && tabs.length > 1) {
         event.preventDefault()
+        event.stopPropagation()
         const index = tabs.findIndex((tab) => tab.key === activeKey)
         const offset = event.shiftKey ? -1 : 1
         setActiveKey(tabs[(index + offset + tabs.length) % tabs.length]!.key)
       }
     }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
   }, [activeBookmark, activeTab, activeKey, tabs])
 
   const statusText: Record<SessionStatus, string> = { connecting: '连接中', connected: '已连接', disconnected: '未连接', error: '连接失败' }
