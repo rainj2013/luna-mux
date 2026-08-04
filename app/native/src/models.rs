@@ -51,6 +51,63 @@ pub struct BookmarkGroupDeleteResult {
     pub deleted_bookmark_ids: Vec<String>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BookmarkArchiveEntry {
+    pub id: String,
+    pub name: String,
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub auth_type: AuthType,
+    pub private_key_path: String,
+    pub jump_bookmark_id: String,
+    pub group_name: String,
+    pub favorite: bool,
+    pub keepalive_enabled: bool,
+    pub keepalive_interval_seconds: u32,
+    pub keepalive_count_max: u32,
+    pub note: String,
+}
+
+impl BookmarkArchiveEntry {
+    pub fn to_input(&self, id: Option<String>, jump_bookmark_id: String) -> BookmarkInput {
+        BookmarkInput {
+            id,
+            name: self.name.clone(),
+            host: self.host.clone(),
+            port: self.port,
+            username: self.username.clone(),
+            auth_type: self.auth_type.clone(),
+            private_key_path: self.private_key_path.clone(),
+            jump_bookmark_id,
+            group_name: self.group_name.trim().to_string(),
+            favorite: self.favorite,
+            keepalive_enabled: self.keepalive_enabled,
+            keepalive_interval_seconds: self.keepalive_interval_seconds,
+            keepalive_count_max: self.keepalive_count_max,
+            note: self.note.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BookmarkArchive {
+    pub format: String,
+    pub version: u32,
+    pub exported_at: String,
+    pub groups: Vec<String>,
+    pub connections: Vec<BookmarkArchiveEntry>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BookmarkArchiveImportResult {
+    pub imported_connections: usize,
+    pub imported_groups: usize,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum AuthType {
@@ -124,12 +181,39 @@ impl Default for AiShell {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum AiProvider {
+    #[default]
+    Auto,
+    OpenAi,
+    Anthropic,
+    Qwen,
+    DeepSeek,
+    Kimi,
+    Glm,
+    MiniMax,
+    Grok,
+    Gemini,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum AiThinkingMode {
+    #[default]
+    Default,
+    Disabled,
+    Enabled,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AiSettings {
     pub base_url: String,
     pub model: String,
     pub default_shell: AiShell,
+    pub provider: AiProvider,
+    pub thinking_mode: AiThinkingMode,
     pub api_key_configured: bool,
 }
 
@@ -139,6 +223,10 @@ pub struct AiSettingsInput {
     pub base_url: String,
     pub model: String,
     pub default_shell: AiShell,
+    #[serde(default)]
+    pub provider: AiProvider,
+    #[serde(default)]
+    pub thinking_mode: AiThinkingMode,
     #[serde(default)]
     pub api_key: Option<String>,
 }

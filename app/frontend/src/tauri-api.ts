@@ -44,7 +44,9 @@ export async function createTauriApi(): Promise<AppApi> {
       remove: (id) => call('bookmarks_remove', { id }),
       forgetCredential: (id) => call('bookmarks_forget_credential', { id }),
       previewSshConfig: () => call('bookmarks_preview_ssh_config'),
-      importSshConfig: (path, aliases) => call('bookmarks_import_ssh_config', { path, aliases })
+      importSshConfig: (path, aliases) => call('bookmarks_import_ssh_config', { path, aliases }),
+      exportArchive: () => call('bookmarks_export_archive'),
+      importArchive: () => call('bookmarks_import_archive')
     },
     bookmarkGroups: {
       list: () => call('bookmark_groups_list'),
@@ -54,7 +56,6 @@ export async function createTauriApi(): Promise<AppApi> {
       reorder: (groups) => call('bookmark_groups_reorder', { groups })
     },
     sessions: {
-      list: () => call('sessions_list'),
       connect: (input: ConnectInput) => call('sessions_connect', { input }),
       disconnect: (id) => call('sessions_disconnect', { id }),
       write: (id, data) => send('sessions_write', { id, data }),
@@ -113,8 +114,6 @@ export async function createTauriApi(): Promise<AppApi> {
       clearLastExchange: () => call('ai_diagnostics_clear')
     },
     state: {
-      getOpenBookmarks: () => call('state_get_open_bookmarks'),
-      setOpenBookmarks: (ids) => call('state_set_open_bookmarks', { ids }),
       getSidebarCollapsed: () => call('state_get_sidebar_collapsed'),
       setSidebarCollapsed: (collapsed) => call('state_set_sidebar_collapsed', { collapsed }),
       getCollapsedBookmarkGroups: () => call('state_get_collapsed_bookmark_groups'),

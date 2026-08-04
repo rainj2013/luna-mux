@@ -33,12 +33,12 @@ function createSections(commandKey: string): HelpSection[] {
     },
     {
       id: 'connections', title: '连接与认证', icon: Server,
-      searchText: '连接 认证 密码 私钥 agent 跳板机 分组 收藏 搜索 keepalive 保活 config 导入 host proxyjump 凭据 指纹',
+      searchText: '连接 认证 密码 私钥 agent 跳板机 分组 收藏 搜索 keepalive 保活 config 导入 导出 备份 host proxyjump 凭据 指纹',
       content: <>
         <h2>连接与认证</h2>
         <h3>管理连接</h3>
         <ul>
-          <li>侧边栏顶部依次提供 OpenSSH Config 导入、新增、编辑和删除。</li>
+          <li>侧边栏顶部提供新增和删除；右键侧边栏空白处可使用完整的连接及分组管理功能。</li>
           <li>连接可以设置分组和收藏；收藏连接优先排列，搜索会匹配名称、地址、用户名、分组和备注。</li>
           <li>密码或私钥口令可保存到系统安全存储，也可以在编辑连接时清除。</li>
         </ul>
@@ -57,6 +57,13 @@ function createSections(commandKey: string): HelpSection[] {
           <li>支持映射 <code>HostName</code>、<code>User</code>、<code>Port</code>、第一个 <code>IdentityFile</code> 和 <code>ProxyJump</code>。</li>
           <li>仅显示具体 Host；通配符 Host 不会作为连接导入。</li>
           <li>出于安全原因，不执行 <code>Match exec</code>、<code>ProxyCommand</code> 或 shell 命令展开。</li>
+        </ul>
+        <h3>连接备份</h3>
+        <p>右键侧边栏空白处，可将全部连接和分组导出为 JSON 备份，也可将备份追加导入。</p>
+        <ul>
+          <li>备份保留分组及顺序、连接顺序、收藏、备注、Keepalive 和跳板机关系。</li>
+          <li>密码、私钥口令及其他系统安全存储中的凭据不会导出，导入后需重新验证或输入。</li>
+          <li>OpenSSH Config 导入用于读取 <code>~/.ssh/config</code>；连接备份用于迁移本软件中的完整配置，两者用途不同。</li>
         </ul>
       </>
     },

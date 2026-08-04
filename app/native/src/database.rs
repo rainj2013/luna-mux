@@ -368,6 +368,10 @@ impl Database {
         Ok(normalized)
     }
 
+    pub fn set_bookmark_groups(&self, groups: &[String]) -> Result<(), String> {
+        self.set_setting("bookmarkGroups", &groups)
+    }
+
     pub fn move_bookmark_to_group(
         &self,
         id: &str,

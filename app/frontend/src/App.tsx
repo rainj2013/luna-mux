@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowRight, Bookmark as BookmarkIcon, Bot, Check, ChevronDown, ChevronRight, CircleHelp, CirclePlus, Copy, Edit3, Eye, EyeOff, FileInput, FileJson2, Folder, FolderOpen, FolderPlus, GripVertical, Image as ImageIcon, KeyRound, Minus, Monitor, Moon, Network, Palette, PanelLeftClose, PanelLeftOpen, Play, Plug, Power, Rocket, RotateCcw, Search, Send, Server, Settings as SettingsIcon, ShieldAlert, Square, SquareTerminal, Star, Sun, Trash2, WandSparkles, X } from 'lucide-react'
-import { DEFAULT_AI_SETTINGS, DEFAULT_TERMINAL_SETTINGS, type AiCommandSuggestion, type AiRawExchange, type AiRiskAssessment, type AiSettings, type AiSettingsInput, type AiShell, type AppEvent, type AppIconId, type AppIconSettings, type Bookmark, type BookmarkInput, type ConflictResolution, type ConnectInput, type DeploymentDiffEntry, type DeploymentProfile, type HostKeyPrompt, type PortForwardProfile, type SessionStatus, type SshConfigPreview, type TerminalSettings, type TransferTask, type TunnelSummary, type UiTheme } from './types'
+import { ArrowRight, Bookmark as BookmarkIcon, Bot, Check, ChevronDown, ChevronRight, CircleHelp, CirclePlus, Copy, Download, Edit3, Eye, EyeOff, FileInput, FileJson2, Folder, FolderOpen, FolderPlus, GripVertical, Image as ImageIcon, KeyRound, Minus, Monitor, Moon, Network, Palette, PanelLeftClose, PanelLeftOpen, Play, Plug, Power, Rocket, RotateCcw, Search, Send, Server, Settings as SettingsIcon, ShieldAlert, Square, SquareTerminal, Star, Sun, Trash2, Upload, WandSparkles, X } from 'lucide-react'
+import { DEFAULT_AI_SETTINGS, DEFAULT_TERMINAL_SETTINGS, type AiCommandSuggestion, type AiProvider, type AiRawExchange, type AiRiskAssessment, type AiSettings, type AiSettingsInput, type AiShell, type AiThinkingMode, type AppEvent, type AppIconId, type AppIconSettings, type Bookmark, type BookmarkInput, type ConflictResolution, type ConnectInput, type DeploymentDiffEntry, type DeploymentProfile, type HostKeyPrompt, type PortForwardProfile, type SessionStatus, type SshConfigPreview, type TerminalSettings, type TransferTask, type TunnelSummary, type UiTheme } from './types'
 import { TerminalPane, type TerminalPaneHandle } from './components/TerminalPane'
 import { SftpPane } from './components/SftpPane'
 import { HelpDialog } from './components/HelpDialog'
@@ -73,6 +73,7 @@ export function App(): React.JSX.Element {
   const [groupDialog, setGroupDialog] = useState<GroupDialogState | null>(null)
   const [confirmation, setConfirmation] = useState<PendingConfirmation | null>(null)
   const [toast, setToast] = useState('')
+  const [toastKind, setToastKind] = useState<'error' | 'success'>('error')
   const stateRestored = useRef(false)
   const sidebarWidthRef = useRef(defaultSidebarWidth)
   const sidebarPointerDragRef = useRef<SidebarPointerDrag | null>(null)
@@ -80,7 +81,8 @@ export function App(): React.JSX.Element {
   const suppressSidebarClickRef = useRef(false)
   const terminalPaneRefs = useRef(new Map<string, TerminalPaneHandle>())
 
-  const showError = (message: string): void => { setToast(message); setTimeout(() => setToast(''), 4500) }
+  const showToast = (message: string, kind: 'error' | 'success' = 'error'): void => { setToastKind(kind); setToast(message); setTimeout(() => setToast(''), 4500) }
+  const showError = (message: string): void => showToast(message)
   const confirmAction: ConfirmAction = (options) => new Promise((resolve) => setConfirmation({ ...options, resolve }))
   const resolveConfirmation = (accepted: boolean): void => {
     if (!confirmation) return
@@ -305,7 +307,7 @@ export function App(): React.JSX.Element {
     event.preventDefault()
     event.stopPropagation()
     if (options.bookmark) setSelectedBookmarkId(options.bookmark.id)
-    setSidebarContextMenu({ x: Math.max(4, Math.min(event.clientX, window.innerWidth - 210)), y: Math.max(4, Math.min(event.clientY, window.innerHeight - 230)), ...options })
+    setSidebarContextMenu({ x: Math.max(4, Math.min(event.clientX, window.innerWidth - 210)), y: Math.max(4, Math.min(event.clientY, window.innerHeight - 340)), ...options })
   }
 
   const saveGroup = async (name: string): Promise<void> => {
@@ -481,7 +483,7 @@ export function App(): React.JSX.Element {
       const terminalChanged = JSON.stringify(settings) !== JSON.stringify(terminalSettings)
       const themeChanged = theme !== uiTheme
       const iconChanged = appIcon !== appIcons.selected
-      const aiChanged = ai.baseUrl !== aiSettings.baseUrl || ai.model !== aiSettings.model || ai.defaultShell !== aiSettings.defaultShell || Boolean(ai.apiKey)
+      const aiChanged = ai.baseUrl !== aiSettings.baseUrl || ai.model !== aiSettings.model || ai.defaultShell !== aiSettings.defaultShell || ai.provider !== aiSettings.provider || ai.thinkingMode !== aiSettings.thinkingMode || Boolean(ai.apiKey)
       const [saved, savedTheme, selected, savedAi] = await Promise.all([
         terminalChanged ? window.api.settings.saveTerminal(settings) : Promise.resolve(terminalSettings),
         themeChanged ? window.api.settings.saveUiTheme(theme) : Promise.resolve(uiTheme),
@@ -562,6 +564,20 @@ export function App(): React.JSX.Element {
     if (event.key === 'Home') saveSidebarWidth(minSidebarWidth)
     else if (event.key === 'End') saveSidebarWidth(maxSidebarWidth)
     else saveSidebarWidth(sidebarWidth + (event.key === 'ArrowLeft' ? -10 : 10))
+  }
+  const exportConnectionArchive = async (): Promise<void> => {
+    try {
+      const path = await window.api.bookmarks.exportArchive()
+      if (path) showToast(`连接备份已导出：${path}`, 'success')
+    } catch (error) { showError(errorMessage(error)) }
+  }
+  const importConnectionArchive = async (): Promise<void> => {
+    try {
+      const result = await window.api.bookmarks.importArchive()
+      if (!result) return
+      await reloadSidebarData()
+      showToast(`已导入 ${result.importedConnections} 个连接、${result.importedGroups} 个新分组；凭据未导入`, 'success')
+    } catch (error) { showError(errorMessage(error)) }
   }
 
   const contextBookmark = sidebarContextMenu?.bookmark ?? selectedBookmark
@@ -644,7 +660,10 @@ export function App(): React.JSX.Element {
         <button role="menuitem" onClick={() => { const group = sidebarContextMenu.group ?? ''; setSidebarContextMenu(null); setGroupDialog({ mode: 'rename', group }) }}><Edit3 size={15} />重命名分组</button>
         <button role="menuitem" className="danger" onClick={() => { const group = sidebarContextMenu.group ?? ''; setSidebarContextMenu(null); void deleteBookmarkGroup(group) }}><Trash2 size={15} />删除分组及连接</button>
       </> : <>
-        <button role="menuitem" onClick={() => { setSidebarContextMenu(null); void chooseSshConfig() }}><FileInput size={15} />导入连接</button>
+        <button role="menuitem" onClick={() => { setSidebarContextMenu(null); void chooseSshConfig() }}><FileInput size={15} />导入 OpenSSH Config</button>
+        <button role="menuitem" onClick={() => { setSidebarContextMenu(null); void importConnectionArchive() }}><Upload size={15} />导入连接备份</button>
+        <button role="menuitem" onClick={() => { setSidebarContextMenu(null); void exportConnectionArchive() }}><Download size={15} />导出连接备份</button>
+        <div className="context-menu-separator" />
         <button role="menuitem" onClick={() => { setSidebarContextMenu(null); setBookmarkDialog('new') }}><CirclePlus size={15} />新增连接</button>
         <button role="menuitem" disabled={!contextBookmark} onClick={() => { setSidebarContextMenu(null); if (contextBookmark) setBookmarkDialog(contextBookmark) }}><Edit3 size={15} />编辑连接</button>
         <button role="menuitem" disabled={!contextBookmark} onClick={() => { setSidebarContextMenu(null); if (contextBookmark) void duplicateBookmark(contextBookmark) }}><Copy size={15} />复制配置</button>
@@ -665,7 +684,7 @@ export function App(): React.JSX.Element {
     {tunnelDialog && activeBookmark && activeTab?.sessionId && <TunnelDialog bookmark={activeBookmark} sessionId={activeTab.sessionId} onClose={() => setTunnelDialog(false)} onError={showError} />}
     {importPreview && <SshConfigImportDialog preview={importPreview} onClose={() => setImportPreview(null)} onImported={async () => { setImportPreview(null); await reloadSidebarData() }} onError={showError} />}
     {confirmation && <ConfirmationDialog confirmation={confirmation} onDecision={resolveConfirmation} />}
-    {toast && <div className="toast">{toast}</div>}
+    {toast && <div className={`toast ${toastKind}`}>{toast}</div>}
   </div>
 }
 
@@ -694,7 +713,7 @@ function AiCommandDialog({ bookmark, sessionId, connected, settings, getTerminal
   const selectShell = async (value: AiShell): Promise<void> => {
     setShell(value)
     try {
-      const saved = await window.api.ai.saveSettings({ baseUrl: settings.baseUrl, model: settings.model, defaultShell: value })
+      const saved = await window.api.ai.saveSettings({ baseUrl: settings.baseUrl, model: settings.model, defaultShell: value, provider: settings.provider, thinkingMode: settings.thinkingMode })
       onSettingsChange(saved)
     } catch (saveError) { onError(errorMessage(saveError)) }
   }
@@ -763,7 +782,7 @@ function AiCommandDialog({ bookmark, sessionId, connected, settings, getTerminal
     } as const
     const copy = confirmationCopy[confirming.riskLevel]
     const requiresTextConfirmation = confirming.riskLevel === 'high'
-    return <Modal title={copy.title} onClose={() => setConfirming(null)} wide raised><div className={`ai-execution-confirm ${confirming.riskLevel}`}>
+    return <Modal title={copy.title} onClose={() => setConfirming(null)} raised className="secondary-confirm-dialog"><div className={`ai-execution-confirm ${confirming.riskLevel}`}>
       <div className="ai-confirm-heading">{confirming.riskLevel === 'low' ? <SquareTerminal size={22} /> : <ShieldAlert size={22} />}<div><strong>{copy.heading}</strong><span>{bookmark.username}@{bookmark.host}:{bookmark.port}</span></div></div>
       <pre>{command.trim()}</pre>
       {confirming.warnings.length > 0 && <ul>{confirming.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>}
@@ -772,23 +791,23 @@ function AiCommandDialog({ bookmark, sessionId, connected, settings, getTerminal
     </div></Modal>
   })() : null
 
-  return <><Modal title="AI 命令助手" onClose={confirming ? () => undefined : onClose} wide><div className="ai-command-dialog">
-    <div className="ai-target"><Server size={16} /><strong>{bookmark.name}</strong><span>{bookmark.username}@{bookmark.host}:{bookmark.port}</span><button type="button" className="icon-button" title="查看 AI 原始请求与响应" onClick={() => void openRawExchange()}><FileJson2 size={15} /></button><span className={`status-dot ${connected ? 'connected' : 'disconnected'}`} /></div>
+  return <><Modal title="AI 命令助手" onClose={confirming ? () => undefined : onClose} wide className="workflow-dialog"><div className="ai-command-dialog">
+    <div className="ai-command-content"><div className="ai-target"><Server size={16} /><strong>{bookmark.name}</strong><span>{bookmark.username}@{bookmark.host}:{bookmark.port}</span><button type="button" className="icon-button" title="查看 AI 原始请求与响应" onClick={() => void openRawExchange()}><FileJson2 size={15} /></button><span className={`status-dot ${connected ? 'connected' : 'disconnected'}`} /></div>
     {!settings.model.trim() ? <div className="ai-unconfigured"><Bot size={28} /><strong>尚未配置 AI 模型</strong><button className="primary-button" onClick={onSettings}><SettingsIcon size={15} />打开 AI 设置</button></div> : <>
-      <div className="ai-prompt-row"><label>目标 Shell<select value={shell} onChange={(event) => void selectShell(event.target.value as AiShell)}><option value="linux">Linux Shell</option><option value="powerShell">PowerShell</option><option value="cmd">Windows cmd</option><option value="macos">macOS Shell</option></select></label><label className="ai-requirement">需要完成什么<textarea autoFocus rows={4} maxLength={8000} value={requirement} onChange={(event) => setRequirement(event.target.value)} placeholder="例如：从 app.log 中找出更新条数大于 0 的日志" onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); void generate() } }} /></label></div>
-      <label className="check-label ai-context-option" title={`最多附带 ${aiTerminalContextChars} 个字符`}><input type="checkbox" checked={includeTerminalContext} onChange={(event) => setIncludeTerminalContext(event.target.checked)} />附带终端最近 {aiTerminalContextLines} 行（将发送给 AI）</label>
-      <label className="check-label ai-context-option ai-redaction-option"><input type="checkbox" disabled={!includeTerminalContext} checked={redactTerminalContext} onChange={(event) => setRedactTerminalContext(event.target.checked)} />发送前自动脱敏（手机号、邮箱、证件号等）</label>
-      <div className="ai-generate-actions"><button className="primary-button" disabled={loading || !requirement.trim()} onClick={() => void generate()}><WandSparkles size={15} />{loading ? '正在生成…' : suggestion ? '重新生成' : '生成命令'}</button></div>
+      <section className="ai-compose">
+        <div className="ai-prompt-row"><label>目标 Shell<select value={shell} onChange={(event) => void selectShell(event.target.value as AiShell)}><option value="linux">Linux Shell</option><option value="powerShell">PowerShell</option><option value="cmd">Windows cmd</option><option value="macos">macOS Shell</option></select></label><label className="ai-requirement">需要完成什么<textarea autoFocus rows={4} maxLength={8000} value={requirement} onChange={(event) => setRequirement(event.target.value)} placeholder="例如：从 app.log 中找出更新条数大于 0 的日志" onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); void generate() } }} /></label></div>
+        <div className="ai-compose-actions"><div className="ai-context-options"><label className="check-label ai-context-option" title={`最多附带 ${aiTerminalContextChars} 个字符，并随请求发送给 AI`}><input type="checkbox" checked={includeTerminalContext} onChange={(event) => setIncludeTerminalContext(event.target.checked)} />附带终端最近 {aiTerminalContextLines} 行</label><label className="check-label ai-context-option" title="发送前掩码手机号、邮箱、证件号等敏感信息"><input type="checkbox" disabled={!includeTerminalContext} checked={redactTerminalContext} onChange={(event) => setRedactTerminalContext(event.target.checked)} />自动脱敏敏感信息</label></div><button className="primary-button" disabled={loading || !requirement.trim()} onClick={() => void generate()}><WandSparkles size={15} />{loading ? '正在生成…' : suggestion ? '重新生成' : '生成命令'}</button></div>
+      </section>
       {error && <div className="ai-error">{error}</div>}
       {suggestion && <div className="ai-result">
-        <div className="ai-result-heading"><strong>生成结果</strong><span className={`ai-risk ${suggestion.riskLevel}`}>{riskText}</span>{edited && <span className="ai-edited">命令已修改，原说明可能不再适用</span>}</div>
+        <div className="ai-result-heading"><div><strong>生成结果</strong><span className={`ai-risk ${suggestion.riskLevel}`}>{riskText}</span></div>{edited && <span className="ai-edited">命令已修改，原说明可能不再适用</span>}</div>
         <textarea className="ai-command-editor" rows={4} spellCheck={false} value={command} onChange={(event) => { setCommand(event.target.value); setEdited(event.target.value !== suggestion.command) }} />
         {suggestion.explanation && <p>{suggestion.explanation}</p>}
         {suggestion.assumptions.length > 0 && <details className="ai-notes"><summary>假设 <span>{suggestion.assumptions.length}</span></summary><ul>{suggestion.assumptions.map((item) => <li key={item}>{item}</li>)}</ul></details>}
         {suggestion.warnings.length > 0 && <details className="ai-notes warning"><summary>注意 <span>{suggestion.warnings.length}</span></summary><ul>{suggestion.warnings.map((item) => <li key={item}>{item}</li>)}</ul></details>}
-        <div className="dialog-actions spread"><button className="secondary-button" onClick={() => void window.api.system.writeClipboard(command).catch((copyError) => setError(errorMessage(copyError)))}><Copy size={15} />复制</button><div><button className="secondary-button" disabled={!connected || !command.trim() || executing} onClick={() => void fillCommand()}><Send size={15} />填入终端</button><button className="primary-button" disabled={!connected || !command.trim() || executing} onClick={() => void requestExecution()}><Play size={15} />执行</button></div></div>
       </div>}
     </>}
+    </div><div className="ai-command-footer"><button className="secondary-button" disabled={!command.trim()} onClick={() => void window.api.system.writeClipboard(command).catch((copyError) => setError(errorMessage(copyError)))}><Copy size={15} />复制</button><div><button className="secondary-button" disabled={!connected || !command.trim() || executing} onClick={() => void fillCommand()}><Send size={15} />填入终端</button><button className="primary-button" disabled={!connected || !command.trim() || executing} onClick={() => void requestExecution()}><Play size={15} />执行</button></div></div>
   </div></Modal>{executionConfirmation}</>
 }
 
@@ -802,7 +821,7 @@ function AiDiagnosticsDialog({ exchange, onClose, onClear }: { exchange: AiRawEx
   const headers = view === 'request' ? exchange.requestHeaders : exchange.responseHeaders
   const body = prettyRawJson(view === 'request' ? exchange.requestBody : exchange.responseBody)
   const copy = [view === 'request' ? `POST ${exchange.endpoint}` : `HTTP ${exchange.responseStatus ?? '无响应'}`, headers, body, exchange.error && `Error: ${exchange.error}`].filter(Boolean).join('\n\n')
-  return <Modal title="AI 原始请求与响应" onClose={onClose} wide><div className="ai-diagnostics">
+  return <Modal title="AI 原始请求与响应" onClose={onClose} wide className="workflow-dialog"><div className="ai-diagnostics">
     <div className="ai-diagnostics-meta"><span title={exchange.endpoint}>POST {exchange.endpoint}</span><time>{new Date(exchange.occurredAt).toLocaleString()}</time>{exchange.responseStatus ? <strong className={exchange.responseStatus >= 400 ? 'error' : ''}>HTTP {exchange.responseStatus}</strong> : <strong className="error">无响应</strong>}</div>
     {exchange.error && <div className="ai-error">{exchange.error}</div>}
     <div className="ai-diagnostics-tabs" role="tablist" aria-label="原始数据类别"><button role="tab" aria-selected={view === 'request'} className={view === 'request' ? 'active' : ''} onClick={() => setView('request')}>请求</button><button role="tab" aria-selected={view === 'response'} className={view === 'response' ? 'active' : ''} onClick={() => setView('response')}>响应</button></div>
@@ -941,7 +960,7 @@ function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, u
   const [section, setSection] = useState<SettingsSection>(initialSection)
   const set = <K extends keyof TerminalSettings>(key: K, value: TerminalSettings[K]): void => setForm((current) => ({ ...current, [key]: value }))
   const setAi = <K extends keyof AiSettings>(key: K, value: AiSettings[K]): void => { setAiTested(false); setAiForm((current) => ({ ...current, [key]: value })) }
-  const aiInput = (): AiSettingsInput => ({ baseUrl: aiForm.baseUrl, model: aiForm.model, defaultShell: aiForm.defaultShell, ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}) })
+  const aiInput = (): AiSettingsInput => ({ baseUrl: aiForm.baseUrl, model: aiForm.model, defaultShell: aiForm.defaultShell, provider: aiForm.provider, thinkingMode: aiForm.thinkingMode, ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}) })
   const selectTheme = (value: UiTheme): void => { setTheme(value); onThemePreview(value) }
   const chooseBackground = async (): Promise<void> => {
     try {
@@ -968,6 +987,10 @@ function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, u
     catch (error) { onError(errorMessage(error)) }
   }
   const themeOptions: { value: UiTheme; label: string; icon: typeof Monitor }[] = [{ value: 'system', label: '跟随系统', icon: Monitor }, { value: 'light', label: '浅色', icon: Sun }, { value: 'dark', label: '深色', icon: Moon }]
+  const providerOptions: { value: AiProvider; label: string }[] = [{ value: 'auto', label: '自动识别' }, { value: 'openAi', label: 'OpenAI' }, { value: 'anthropic', label: 'Anthropic' }, { value: 'qwen', label: 'Qwen' }, { value: 'deepSeek', label: 'DeepSeek' }, { value: 'kimi', label: 'Kimi' }, { value: 'glm', label: 'GLM' }, { value: 'miniMax', label: 'MiniMax' }, { value: 'grok', label: 'Grok' }, { value: 'gemini', label: 'Gemini' }]
+  const providerClue = `${aiForm.provider} ${aiForm.baseUrl} ${aiForm.model}`.toLowerCase()
+  const thinkingCannotDisable = providerClue.includes('grok') || providerClue.includes('api.x.ai') || providerClue.includes('kimi-k3') || providerClue.includes('k2.7') || providerClue.includes('gemini-3') || (providerClue.includes('gemini-2.5') && providerClue.includes('pro'))
+  const thinkingHint = aiForm.thinkingMode === 'default' ? '不附加思考控制参数，由服务端决定。' : thinkingCannotDisable && aiForm.thinkingMode === 'disabled' ? '该模型无法完全关闭思考，将改用最低可用推理强度。' : '参数会随测试连接和命令生成请求一同发送。'
   return <Modal title="设置" onClose={onClose} wide className="settings-dialog"><form className="form-grid terminal-settings-form" onSubmit={(event) => { event.preventDefault(); onSave(form, previewImage, appIcon, theme, aiInput()) }}>
     <div className="settings-tabs" role="tablist" aria-label="设置类别"><button type="button" role="tab" aria-selected={section === 'appearance'} className={section === 'appearance' ? 'active' : ''} onClick={() => setSection('appearance')}><Palette size={15} />界面</button><button type="button" role="tab" aria-selected={section === 'terminal'} className={section === 'terminal' ? 'active' : ''} onClick={() => setSection('terminal')}><SquareTerminal size={15} />终端</button><button type="button" role="tab" aria-selected={section === 'ai'} className={section === 'ai' ? 'active' : ''} onClick={() => setSection('ai')}><Bot size={15} />AI</button></div>
     <div className={`settings-content ${section}`}>
@@ -976,6 +999,8 @@ function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, u
       <label>模型名称<input value={aiForm.model} onChange={(event) => setAi('model', event.target.value)} placeholder="gpt-5" /></label>
       <label>API Key<div className="input-button"><input type="password" autoComplete="off" value={apiKey} onChange={(event) => { setApiKey(event.target.value); setAiTested(false) }} placeholder={aiForm.apiKeyConfigured ? '已安全保存，留空则保持不变' : '可选'} /><button type="button" className="icon-button danger" title="删除已保存的 API Key" disabled={!aiForm.apiKeyConfigured} onClick={() => void deleteAiKey()}><Trash2 size={15} /></button></div></label>
       <label>默认目标 Shell<select value={aiForm.defaultShell} onChange={(event) => setAi('defaultShell', event.target.value as AiShell)}><option value="linux">Linux Shell</option><option value="powerShell">PowerShell</option><option value="cmd">Windows cmd</option><option value="macos">macOS Shell</option></select></label>
+      <div className="ai-provider-row"><label>模型厂商<select value={aiForm.provider} onChange={(event) => setAi('provider', event.target.value as AiProvider)}>{providerOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label><label>思考模式<select value={aiForm.thinkingMode} onChange={(event) => setAi('thinkingMode', event.target.value as AiThinkingMode)}><option value="default">跟随模型默认</option><option value="disabled">尽量关闭</option><option value="enabled">开启</option></select></label></div>
+      <small className="ai-thinking-hint">{thinkingHint}</small>
       <div className="ai-settings-test"><button type="button" className="secondary-button" disabled={testingAi || !aiForm.model.trim()} onClick={() => void testAi()}>{testingAi ? '正在测试…' : '测试连接'}</button>{aiTested && <span><Check size={14} />连接成功</span>}</div>
     </div> : <>
       <div className="terminal-preview" style={terminalBackgroundStyle(form, previewImage)}><div style={{ color: form.foregroundColor, background: colorWithOpacity(form.backgroundColor, form.backgroundOpacity), fontFamily: form.fontFamily, fontSize: form.fontSize }}><span>user@host:~$</span> ls -la<br />drwxr-xr-x&nbsp;&nbsp;projects</div></div>
@@ -1059,7 +1084,7 @@ function Modal({ title, onClose, children, wide = false, raised = false, classNa
 }
 
 function ConfirmationDialog({ confirmation, onDecision }: { confirmation: ConfirmationOptions; onDecision(accepted: boolean): void }): React.JSX.Element {
-  return <Modal title={confirmation.title} onClose={() => onDecision(false)} raised><div className={`confirmation-dialog ${confirmation.kind}`}>
+  return <Modal title={confirmation.title} onClose={() => onDecision(false)} raised className="secondary-confirm-dialog"><div className={`confirmation-dialog ${confirmation.kind}`}>
     <div className="confirmation-heading">{confirmation.kind === 'danger' ? <Trash2 size={22} /> : <ShieldAlert size={22} />}<div><strong>{confirmation.message}</strong>{confirmation.detail && <span>{confirmation.detail}</span>}</div></div>
     <div className="dialog-actions"><button type="button" autoFocus className="secondary-button" onClick={() => onDecision(false)}>取消</button><button type="button" className={confirmation.kind === 'danger' ? 'danger-button' : 'primary-button'} onClick={() => onDecision(true)}>{confirmation.kind === 'danger' ? <Trash2 size={15} /> : <Rocket size={15} />}{confirmation.confirmLabel}</button></div>
   </div></Modal>

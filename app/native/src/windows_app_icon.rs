@@ -11,7 +11,7 @@ use windows::{
     Win32::{
         System::Com::{
             CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
-            CoUninitialize, IPersistFile, STGM_READWRITE,
+            CoUninitialize, IPersistFile, STGM_READ, STGM_READWRITE,
         },
         UI::Shell::{
             IShellLinkW, SHCNE_ASSOCCHANGED, SHCNE_UPDATEITEM, SHCNF_IDLIST, SHCNF_PATHW,
@@ -32,7 +32,9 @@ pub async fn update_shortcuts(app: &AppHandle, icon: &AppIconId) -> Result<PathB
     let icon = icon.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let icon_path = write_icon_file(&data_dir, &icon)?;
-        update_matching_shortcuts(&current_exe, &icon_path)?;
+        if !cfg!(debug_assertions) {
+            update_matching_shortcuts(&current_exe, &icon_path)?;
+        }
         Ok(icon_path)
     })
     .await
@@ -99,6 +101,9 @@ fn update_matching_shortcuts_initialized(
         .filter(|path| {
             path.extension()
                 .is_some_and(|value| value.eq_ignore_ascii_case("lnk"))
+                && path
+                    .file_stem()
+                    .is_some_and(|value| value.eq_ignore_ascii_case("SSH Client"))
         })
     {
         if let Err(error) = update_shortcut(&shortcut, current_exe, icon_path) {
@@ -115,11 +120,10 @@ fn update_shortcut(
     icon_path: &Path,
 ) -> Result<(), String> {
     let shortcut_wide = wide(shortcut_path);
-    let icon_wide = wide(icon_path);
     let link: IShellLinkW = unsafe { CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER) }
         .map_err(|error| error.to_string())?;
     let persist: IPersistFile = link.cast().map_err(|error| error.to_string())?;
-    unsafe { persist.Load(PCWSTR(shortcut_wide.as_ptr()), STGM_READWRITE) }
+    unsafe { persist.Load(PCWSTR(shortcut_wide.as_ptr()), STGM_READ) }
         .map_err(|error| error.to_string())?;
 
     let mut target = vec![0u16; 32_768];
@@ -134,6 +138,9 @@ fn update_shortcut(
         return Ok(());
     }
 
+    let icon_wide = wide(icon_path);
+    unsafe { persist.Load(PCWSTR(shortcut_wide.as_ptr()), STGM_READWRITE) }
+        .map_err(|error| error.to_string())?;
     unsafe {
         link.SetIconLocation(PCWSTR(icon_wide.as_ptr()), 0)
             .and_then(|_| persist.Save(PCWSTR(shortcut_wide.as_ptr()), true))

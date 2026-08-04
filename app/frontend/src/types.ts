@@ -139,11 +139,15 @@ export type AppIconId = 'ssh' | 'classic' | 'neon' | 'light'
 export type UiTheme = 'system' | 'light' | 'dark'
 export type AiShell = 'linux' | 'powerShell' | 'cmd' | 'macos'
 export type AiRiskLevel = 'low' | 'medium' | 'high'
+export type AiProvider = 'auto' | 'openAi' | 'anthropic' | 'qwen' | 'deepSeek' | 'kimi' | 'glm' | 'miniMax' | 'grok' | 'gemini'
+export type AiThinkingMode = 'default' | 'disabled' | 'enabled'
 
 export interface AiSettings {
   baseUrl: string
   model: string
   defaultShell: AiShell
+  provider: AiProvider
+  thinkingMode: AiThinkingMode
   apiKeyConfigured: boolean
 }
 
@@ -151,6 +155,8 @@ export interface AiSettingsInput {
   baseUrl: string
   model: string
   defaultShell: AiShell
+  provider: AiProvider
+  thinkingMode: AiThinkingMode
   apiKey?: string
 }
 
@@ -182,6 +188,8 @@ export const DEFAULT_AI_SETTINGS: AiSettings = {
   baseUrl: 'https://api.openai.com/v1',
   model: '',
   defaultShell: 'linux',
+  provider: 'auto',
+  thinkingMode: 'default',
   apiKeyConfigured: false
 }
 
@@ -284,6 +292,8 @@ export interface AppApi {
     forgetCredential(id: string): Promise<void>
     previewSshConfig(): Promise<SshConfigPreview | null>
     importSshConfig(path: string, aliases: string[]): Promise<Bookmark[]>
+    exportArchive(): Promise<string | null>
+    importArchive(): Promise<{ importedConnections: number; importedGroups: number } | null>
   }
   bookmarkGroups: {
     list(): Promise<string[]>
@@ -293,7 +303,6 @@ export interface AppApi {
     reorder(groups: string[]): Promise<string[]>
   }
   sessions: {
-    list(): Promise<SessionSummary[]>
     connect(input: ConnectInput): Promise<SessionSummary>
     disconnect(id: string): Promise<void>
     write(id: string, data: string): void
@@ -354,8 +363,6 @@ export interface AppApi {
     clearLastExchange(): Promise<void>
   }
   state: {
-    getOpenBookmarks(): Promise<string[]>
-    setOpenBookmarks(ids: string[]): Promise<void>
     getSidebarCollapsed(): Promise<boolean>
     setSidebarCollapsed(collapsed: boolean): Promise<void>
     getCollapsedBookmarkGroups(): Promise<string[]>

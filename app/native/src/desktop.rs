@@ -1,5 +1,8 @@
+use tauri::{AppHandle, Emitter};
+
+#[cfg(target_os = "macos")]
 use tauri::{
-    AppHandle, Emitter, Runtime,
+    Runtime,
     menu::{Menu, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder},
 };
 

@@ -64,10 +64,6 @@ pub fn system_open_external(app: AppHandle, value: String) -> Result<(), String>
 }
 
 #[tauri::command]
-pub fn sessions_list(state: State<AppState>) -> Vec<SessionSummary> {
-    state.sessions.list()
-}
-#[tauri::command]
 pub fn sessions_connect(
     state: State<AppState>,
     input: ConnectInput,
@@ -570,20 +566,158 @@ pub async fn files_choose_private_key(app: AppHandle) -> Option<String> {
 }
 
 #[tauri::command]
-pub fn state_get_open_bookmarks(state: State<AppState>) -> Vec<String> {
-    state.db.get_setting("openBookmarks", vec![])
-}
-#[tauri::command]
-pub fn state_set_open_bookmarks(state: State<AppState>, ids: Vec<String>) -> Result<(), String> {
-    state.db.set_setting("openBookmarks", &ids)
-}
-#[tauri::command]
 pub fn state_get_sidebar_collapsed(state: State<AppState>) -> bool {
     state.db.get_setting("sidebarCollapsed", false)
 }
 #[tauri::command]
 pub fn state_set_sidebar_collapsed(state: State<AppState>, collapsed: bool) -> Result<(), String> {
     state.db.set_setting("sidebarCollapsed", &collapsed)
+}
+
+#[tauri::command]
+pub async fn bookmarks_export_archive(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    let default = format!(
+        "ssh-client-connections-{}.json",
+        Utc::now().format("%Y-%m-%d")
+    );
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .set_title("导出连接备份")
+        .set_file_name(default)
+        .add_filter("SSH Client 连接备份", &["json"])
+        .save_file(move |path| {
+            let _ = sender.send(path);
+        });
+    let Some(path) = selected_path(receiver.await.ok().flatten()) else {
+        return Ok(None);
+    };
+    let connections = state
+        .db
+        .list_bookmarks()?
+        .into_iter()
+        .map(|item| BookmarkArchiveEntry {
+            id: item.id,
+            name: item.name,
+            host: item.host,
+            port: item.port,
+            username: item.username,
+            auth_type: item.auth_type,
+            private_key_path: item.private_key_path,
+            jump_bookmark_id: item.jump_bookmark_id,
+            group_name: item.group_name,
+            favorite: item.favorite,
+            keepalive_enabled: item.keepalive_enabled,
+            keepalive_interval_seconds: item.keepalive_interval_seconds,
+            keepalive_count_max: item.keepalive_count_max,
+            note: item.note,
+        })
+        .collect();
+    let archive = BookmarkArchive {
+        format: "ssh-client-connections".into(),
+        version: 1,
+        exported_at: Utc::now().to_rfc3339(),
+        groups: state.db.list_bookmark_groups()?,
+        connections,
+    };
+    fs::write(
+        &path,
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(&archive).map_err(|e| e.to_string())?
+        ),
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(Some(path))
+}
+
+#[tauri::command]
+pub async fn bookmarks_import_archive(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<BookmarkArchiveImportResult>, String> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .set_title("导入连接备份")
+        .add_filter("SSH Client 连接备份", &["json"])
+        .pick_file(move |path| {
+            let _ = sender.send(path);
+        });
+    let Some(path) = selected_path(receiver.await.ok().flatten()) else {
+        return Ok(None);
+    };
+    let metadata = fs::metadata(&path).map_err(|e| e.to_string())?;
+    if !metadata.is_file() || metadata.len() > 10 * 1024 * 1024 {
+        return Err("连接备份必须是小于 10 MB 的普通 JSON 文件".into());
+    }
+    let archive: BookmarkArchive =
+        serde_json::from_str(&fs::read_to_string(&path).map_err(|e| e.to_string())?)
+            .map_err(|e| format!("连接备份格式无效：{e}"))?;
+    if archive.format != "ssh-client-connections" || archive.version != 1 {
+        return Err("不支持此连接备份格式或版本".into());
+    }
+    if archive.connections.len() > 10_000 || archive.groups.len() > 1_000 {
+        return Err("连接备份包含的连接或分组数量过多".into());
+    }
+    let archive_ids = archive
+        .connections
+        .iter()
+        .map(|item| item.id.as_str())
+        .collect::<HashSet<_>>();
+    if archive_ids.len() != archive.connections.len() {
+        return Err("连接备份中存在重复的连接 ID".into());
+    }
+    if archive.connections.iter().any(|item| {
+        item.id.trim().is_empty()
+            || item.name.trim().is_empty()
+            || item.host.trim().is_empty()
+            || item.username.trim().is_empty()
+            || item.port == 0
+            || (!item.jump_bookmark_id.is_empty()
+                && !archive_ids.contains(item.jump_bookmark_id.as_str()))
+    }) {
+        return Err("连接备份中存在无效的连接或跳板机引用".into());
+    }
+    let mut groups = state.db.list_bookmark_groups()?;
+    let before_groups = groups.len();
+    for group in archive
+        .groups
+        .iter()
+        .chain(archive.connections.iter().map(|item| &item.group_name))
+    {
+        let group = group.trim();
+        if !groups.iter().any(|existing| existing == group) {
+            groups.push(group.to_string());
+        }
+    }
+    state.db.set_bookmark_groups(&groups)?;
+
+    let id_map = archive
+        .connections
+        .iter()
+        .map(|item| (item.id.clone(), Uuid::new_v4().to_string()))
+        .collect::<HashMap<_, _>>();
+    for item in &archive.connections {
+        state
+            .db
+            .save_bookmark(item.to_input(id_map.get(&item.id).cloned(), String::new()))?;
+    }
+    for item in &archive.connections {
+        let Some(jump_id) = id_map.get(&item.jump_bookmark_id) else {
+            continue;
+        };
+        state
+            .db
+            .save_bookmark(item.to_input(id_map.get(&item.id).cloned(), jump_id.clone()))?;
+    }
+    Ok(Some(BookmarkArchiveImportResult {
+        imported_connections: archive.connections.len(),
+        imported_groups: groups.len() - before_groups,
+    }))
 }
 #[tauri::command]
 pub fn state_get_collapsed_bookmark_groups(state: State<AppState>) -> Vec<String> {
