@@ -36,6 +36,7 @@ const DEFAULT_TERMINAL_SIZE: (u32, u32) = (100, 30);
 const REMOTE_LIST_MODE_UNKNOWN: u8 = 0;
 const REMOTE_LIST_MODE_EXEC: u8 = 1;
 const REMOTE_LIST_MODE_SFTP: u8 = 2;
+const REMOTE_LIST_MARKER: &str = "__SSH_CLIENT_REMOTE_LIST_V1__";
 const REMOTE_LIST_SCRIPT: &str = r#"import base64,json,os,sys
 path=os.fsdecode(base64.b64decode(sys.argv[1]))
 items=[]
@@ -46,7 +47,9 @@ with os.scandir(path) as entries:
    items.append({'name':entry.name,'path':os.path.join(path,entry.name),'kind':kind})
   except OSError:
    items.append({'name':entry.name,'path':os.path.join(path,entry.name),'kind':'other'})
-sys.stdout.write(json.dumps(items))"#;
+json_bytes=json.dumps(items,separators=(',',':'),ensure_ascii=False).encode('utf-8','replace')
+payload=base64.b64encode(json_bytes).decode()
+sys.stdout.write('__SSH_CLIENT_REMOTE_LIST_V1__'+payload+'\n')"#;
 
 #[derive(Debug)]
 enum RemoteExecError {
@@ -799,7 +802,20 @@ impl SessionManager {
             shell_quote(&encoded_path)
         );
         let output = self.exec_remote(active, &command).await?;
-        parse_remote_entries(&output)
+        let parsed = parse_remote_entries(&output);
+        #[cfg(debug_assertions)]
+        match &parsed {
+            Ok(entries) => eprintln!(
+                "remote directory Python protocol succeeded: path={path:?}, entries={}",
+                entries.len()
+            ),
+            Err(_) => eprintln!(
+                "remote directory Python protocol failed: path={path:?}, bytes={}, response={:?}",
+                output.len(),
+                output.chars().take(512).collect::<String>()
+            ),
+        }
+        parsed
     }
     async fn list_remote_with_sftp(
         &self,
@@ -1051,7 +1067,14 @@ fn shell_quote(value: &str) -> String {
 }
 
 fn parse_remote_entries(output: &str) -> Result<Vec<DirectoryEntry>, RemoteExecError> {
-    serde_json::from_str(output).map_err(|_| RemoteExecError::Failed("远端目录响应格式错误".into()))
+    let (_, framed) = output
+        .rsplit_once(REMOTE_LIST_MARKER)
+        .ok_or(RemoteExecError::Unavailable)?;
+    let payload = framed.lines().next().unwrap_or_default().trim();
+    let json = STANDARD
+        .decode(payload)
+        .map_err(|_| RemoteExecError::Unavailable)?;
+    serde_json::from_slice(&json).map_err(|_| RemoteExecError::Unavailable)
 }
 
 #[derive(Default)]
@@ -1089,7 +1112,7 @@ impl Utf8Decoder {
 
 #[cfg(test)]
 mod tests {
-    use super::{EntryKind, Utf8Decoder, parse_remote_entries, shell_quote};
+    use super::{EntryKind, REMOTE_LIST_MARKER, Utf8Decoder, parse_remote_entries, shell_quote};
 
     #[test]
     fn quotes_remote_command_arguments() {
@@ -1098,14 +1121,43 @@ mod tests {
 
     #[test]
     fn parses_fast_remote_directory_response() {
-        let entries =
-            parse_remote_entries(r#"[{"name":"logs","path":"/srv/logs","kind":"directory"}]"#)
-                .expect("valid directory response");
+        let payload = base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            r#"[{"name":"logs","path":"/srv/logs","kind":"directory"}]"#,
+        );
+        let entries = parse_remote_entries(&format!("{REMOTE_LIST_MARKER}{payload}\n"))
+            .expect("valid directory response");
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].name, "logs");
         assert!(matches!(entries[0].kind, EntryKind::Directory));
         assert_eq!(entries[0].size, None);
         assert_eq!(entries[0].modified_at, None);
+    }
+
+    #[test]
+    fn ignores_shell_output_around_remote_directory_response() {
+        let payload = base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            r#"[{"name":"logs","path":"/srv/logs","kind":"directory"}]"#,
+        );
+        let output = format!(
+            "Authorized access only\n{REMOTE_LIST_MARKER}{payload}\nSession audit enabled\n"
+        );
+        assert_eq!(
+            parse_remote_entries(&output)
+                .expect("framed response")
+                .first()
+                .map(|entry| entry.name.as_str()),
+            Some("logs")
+        );
+    }
+
+    #[test]
+    fn falls_back_to_sftp_when_remote_directory_frame_is_missing() {
+        assert!(matches!(
+            parse_remote_entries("Welcome to the server\n[]"),
+            Err(super::RemoteExecError::Unavailable)
+        ));
     }
 
     #[test]
