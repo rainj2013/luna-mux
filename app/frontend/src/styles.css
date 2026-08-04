@@ -318,6 +318,7 @@ body.sidebar-item-dragging, body.sidebar-item-dragging * { cursor: grabbing !imp
 .modal.wide { width: min(760px, 100%); }
 .modal > header { height: 46px; padding: 0 12px 0 17px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); }
 .modal > header strong { font-size: 14px; }
+.settings-dialog { height: min(650px, calc(100vh - 40px)); display: grid; grid-template-rows: 46px minmax(0, 1fr); overflow: hidden; }
 .confirmation-dialog { padding: 17px; display: grid; gap: 18px; }
 .confirmation-heading { min-width: 0; display: flex; align-items: center; gap: 11px; color: var(--warning); }
 .confirmation-dialog.danger .confirmation-heading { color: var(--danger); }
@@ -389,7 +390,7 @@ body.sidebar-item-dragging, body.sidebar-item-dragging * { cursor: grabbing !imp
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 2px; }
 .dialog-actions.spread { justify-content: space-between; }
 .dialog-actions > div { display: flex; gap: 8px; }
-.terminal-settings-form { min-height: 0; gap: 12px; }
+.terminal-settings-form { min-height: 0; align-content: start; gap: 12px; overflow-y: auto; }
 .settings-tabs { height: 36px; display: flex; gap: 18px; border-bottom: 1px solid var(--border); }
 .settings-tabs button { position: relative; height: 36px; padding: 0 1px; display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted); background: transparent; border: 0; cursor: pointer; font-size: 11px; }
 .settings-tabs button:hover { color: var(--text-strong); }
@@ -486,6 +487,7 @@ body.sidebar-item-dragging, body.sidebar-item-dragging * { cursor: grabbing !imp
 .ai-diagnostics-content section > strong { font-size: 10px; color: var(--text-muted); }
 .ai-diagnostics-content pre { margin: 0; padding: 10px 11px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-strong); border: 1px solid var(--border); border-radius: 5px; background: var(--app-bg); font: 10px/1.55 Consolas, "SFMono-Regular", monospace; }
 .form-grid > .dialog-actions:last-child { position: sticky; z-index: 2; bottom: -17px; margin: 0 -17px -17px; padding: 12px 17px; background: var(--sticky-surface); border-top: 1px solid var(--border); backdrop-filter: blur(8px); }
+.terminal-settings-form > .dialog-actions:last-child { margin-top: auto; }
 .connection-target { padding: 12px; display: flex; align-items: center; gap: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-subtle); font-size: 12px; }
 .connection-route { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) 20px minmax(0, 1fr); align-items: center; gap: 8px; }
 .connection-route > span { min-width: 0; padding: 10px 11px; display: flex; flex-direction: column; gap: 3px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-subtle); }
