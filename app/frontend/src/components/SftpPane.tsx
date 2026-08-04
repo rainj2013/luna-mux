@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { ArrowLeft, ArrowRight, ArrowUp, ChevronLeft, ChevronRight, Eye, File, Folder, FolderPlus, Link, Pencil, Plug, RefreshCw, Search, Server, Star, Trash2, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, ArrowUp, ChevronLeft, ChevronRight, Eye, EyeOff, File, FileText, Folder, FolderPlus, Link, Pencil, Plug, RefreshCw, Search, Server, Star, Trash2, X } from 'lucide-react'
 import type { DirectoryEntry, FilePreview } from '../types'
 
 function remoteParentPath(path: string): string { return path === '/' ? '/' : path.slice(0, path.lastIndexOf('/')) || '/' }
@@ -82,13 +82,14 @@ function FileBrowser(props: BrowserProps): React.JSX.Element {
     </header>
     <div className="file-actions">
       <label className="file-filter"><Search size={14} /><input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="筛选当前目录" /></label>
-      <button className={`icon-button ${showHidden ? 'active' : ''}`} title={showHidden ? '隐藏点文件' : '显示点文件'} onClick={() => setShowHidden((value) => !value)}><Eye size={15} /></button>
+      <button className={`icon-button ${showHidden ? 'active' : ''}`} title={showHidden ? '不显示隐藏文件' : '显示隐藏文件'} aria-label={showHidden ? '不显示隐藏文件' : '显示隐藏文件'} onClick={() => setShowHidden((value) => !value)}>{showHidden ? <EyeOff size={15} /> : <Eye size={15} />}</button>
       <button className={`icon-button ${props.favorites.includes(props.path) ? 'active' : ''}`} title="收藏当前路径" onClick={props.onToggleFavorite}><Star size={15} /></button>
       {props.favorites.length > 0 && <select aria-label={`${props.title}收藏路径`} value="" onChange={(event) => { if (event.target.value) props.onPath(event.target.value) }}><option value="">收藏路径</option>{props.favorites.map((path) => <option key={path} value={path}>{path}</option>)}</select>}
       <span className="file-action-spacer" />
       <button className="icon-button" title="新建目录" onClick={props.onCreateDirectory}><FolderPlus size={15} /></button>
-      <button className="icon-button" title="预览文件" disabled={!previewable} onClick={() => previewable && props.onPreview(selectedEntries[0]!.path)}><Eye size={15} /></button>
+      <button className="icon-button" title="预览文件内容" aria-label="预览文件内容" disabled={!previewable} onClick={() => previewable && props.onPreview(selectedEntries[0]!.path)}><FileText size={15} /></button>
       <button className="icon-button" title="重命名" disabled={selectedEntries.length !== 1} onClick={() => selectedEntries[0] && props.onRename(selectedEntries[0].path)}><Pencil size={15} /></button>
+      <span className="file-action-divider" />
       <button className="icon-button danger" title="删除" disabled={selectedEntries.length === 0} onClick={() => props.onDelete(selectedEntries.map((entry) => entry.path))}><Trash2 size={15} /></button>
     </div>
     <div className="file-header"><span>名称</span></div>

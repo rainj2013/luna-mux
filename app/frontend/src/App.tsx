@@ -10,7 +10,7 @@ interface WorkspaceTab { key: string; bookmarkId: string; sessionId?: string; st
 interface ConnectionTarget { newSession?: boolean; tabKey?: string }
 interface SidebarContextMenu { x: number; y: number; group?: string; bookmark?: Bookmark }
 interface GroupDialogState { mode: 'create' | 'rename'; group?: string }
-type SettingsSection = 'appearance' | 'terminal' | 'application' | 'ai'
+type SettingsSection = 'appearance' | 'terminal' | 'ai'
 type SidebarPointerDrag = { pointerId: number; type: 'bookmark' | 'group'; value: string; startX: number; startY: number; active: boolean }
 type SidebarPointerDrop = { type: 'bookmark'; id: string; group: string; position: 'before' | 'after' } | { type: 'group'; group: string; position: 'before' | 'after' | 'inside' }
 type ConfirmationOptions = { title: string; message: string; detail?: string; kind: 'warning' | 'danger'; confirmLabel: string }
@@ -478,7 +478,16 @@ export function App(): React.JSX.Element {
 
   const saveSettings = async (settings: TerminalSettings, previewImage: string, appIcon: AppIconId, theme: UiTheme, ai: AiSettingsInput): Promise<void> => {
     try {
-      const [saved, savedTheme, selected, savedAi] = await Promise.all([window.api.settings.saveTerminal(settings), window.api.settings.saveUiTheme(theme), window.api.settings.setAppIcon(appIcon), window.api.ai.saveSettings(ai)])
+      const terminalChanged = JSON.stringify(settings) !== JSON.stringify(terminalSettings)
+      const themeChanged = theme !== uiTheme
+      const iconChanged = appIcon !== appIcons.selected
+      const aiChanged = ai.baseUrl !== aiSettings.baseUrl || ai.model !== aiSettings.model || ai.defaultShell !== aiSettings.defaultShell || Boolean(ai.apiKey)
+      const [saved, savedTheme, selected, savedAi] = await Promise.all([
+        terminalChanged ? window.api.settings.saveTerminal(settings) : Promise.resolve(terminalSettings),
+        themeChanged ? window.api.settings.saveUiTheme(theme) : Promise.resolve(uiTheme),
+        iconChanged ? window.api.settings.setAppIcon(appIcon) : Promise.resolve(appIcons.selected),
+        aiChanged ? window.api.ai.saveSettings(ai) : Promise.resolve(aiSettings),
+      ])
       let image = saved.backgroundImagePath === settings.backgroundImagePath ? previewImage : ''
       if (saved.backgroundImagePath && !image) image = await window.api.settings.loadTerminalBackground(saved.backgroundImagePath)
       setTerminalSettings(saved)
@@ -764,19 +773,19 @@ function AiCommandDialog({ bookmark, sessionId, connected, settings, getTerminal
   })() : null
 
   return <><Modal title="AI 命令助手" onClose={confirming ? () => undefined : onClose} wide><div className="ai-command-dialog">
-    <div className="ai-target"><Server size={16} /><strong>{bookmark.name}</strong><span>{bookmark.username}@{bookmark.host}:{bookmark.port}</span><span className={`status-dot ${connected ? 'connected' : 'disconnected'}`} /></div>
+    <div className="ai-target"><Server size={16} /><strong>{bookmark.name}</strong><span>{bookmark.username}@{bookmark.host}:{bookmark.port}</span><button type="button" className="icon-button" title="查看 AI 原始请求与响应" onClick={() => void openRawExchange()}><FileJson2 size={15} /></button><span className={`status-dot ${connected ? 'connected' : 'disconnected'}`} /></div>
     {!settings.model.trim() ? <div className="ai-unconfigured"><Bot size={28} /><strong>尚未配置 AI 模型</strong><button className="primary-button" onClick={onSettings}><SettingsIcon size={15} />打开 AI 设置</button></div> : <>
       <div className="ai-prompt-row"><label>目标 Shell<select value={shell} onChange={(event) => void selectShell(event.target.value as AiShell)}><option value="linux">Linux Shell</option><option value="powerShell">PowerShell</option><option value="cmd">Windows cmd</option><option value="macos">macOS Shell</option></select></label><label className="ai-requirement">需要完成什么<textarea autoFocus rows={4} maxLength={8000} value={requirement} onChange={(event) => setRequirement(event.target.value)} placeholder="例如：从 app.log 中找出更新条数大于 0 的日志" onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); void generate() } }} /></label></div>
       <label className="check-label ai-context-option" title={`最多附带 ${aiTerminalContextChars} 个字符`}><input type="checkbox" checked={includeTerminalContext} onChange={(event) => setIncludeTerminalContext(event.target.checked)} />附带终端最近 {aiTerminalContextLines} 行（将发送给 AI）</label>
       <label className="check-label ai-context-option ai-redaction-option"><input type="checkbox" disabled={!includeTerminalContext} checked={redactTerminalContext} onChange={(event) => setRedactTerminalContext(event.target.checked)} />发送前自动脱敏（手机号、邮箱、证件号等）</label>
-      <div className="ai-generate-actions"><button className="secondary-button" onClick={() => void openRawExchange()}><FileJson2 size={15} />原始数据</button><button className="primary-button" disabled={loading || !requirement.trim()} onClick={() => void generate()}><WandSparkles size={15} />{loading ? '正在生成…' : suggestion ? '重新生成' : '生成命令'}</button></div>
+      <div className="ai-generate-actions"><button className="primary-button" disabled={loading || !requirement.trim()} onClick={() => void generate()}><WandSparkles size={15} />{loading ? '正在生成…' : suggestion ? '重新生成' : '生成命令'}</button></div>
       {error && <div className="ai-error">{error}</div>}
       {suggestion && <div className="ai-result">
         <div className="ai-result-heading"><strong>生成结果</strong><span className={`ai-risk ${suggestion.riskLevel}`}>{riskText}</span>{edited && <span className="ai-edited">命令已修改，原说明可能不再适用</span>}</div>
-        <textarea className="ai-command-editor" rows={3} spellCheck={false} value={command} onChange={(event) => { setCommand(event.target.value); setEdited(event.target.value !== suggestion.command) }} />
+        <textarea className="ai-command-editor" rows={4} spellCheck={false} value={command} onChange={(event) => { setCommand(event.target.value); setEdited(event.target.value !== suggestion.command) }} />
         {suggestion.explanation && <p>{suggestion.explanation}</p>}
-        {suggestion.assumptions.length > 0 && <div className="ai-notes"><strong>假设</strong><ul>{suggestion.assumptions.map((item) => <li key={item}>{item}</li>)}</ul></div>}
-        {suggestion.warnings.length > 0 && <div className="ai-notes warning"><strong>注意</strong><ul>{suggestion.warnings.map((item) => <li key={item}>{item}</li>)}</ul></div>}
+        {suggestion.assumptions.length > 0 && <details className="ai-notes"><summary>假设 <span>{suggestion.assumptions.length}</span></summary><ul>{suggestion.assumptions.map((item) => <li key={item}>{item}</li>)}</ul></details>}
+        {suggestion.warnings.length > 0 && <details className="ai-notes warning"><summary>注意 <span>{suggestion.warnings.length}</span></summary><ul>{suggestion.warnings.map((item) => <li key={item}>{item}</li>)}</ul></details>}
         <div className="dialog-actions spread"><button className="secondary-button" onClick={() => void window.api.system.writeClipboard(command).catch((copyError) => setError(errorMessage(copyError)))}><Copy size={15} />复制</button><div><button className="secondary-button" disabled={!connected || !command.trim() || executing} onClick={() => void fillCommand()}><Send size={15} />填入终端</button><button className="primary-button" disabled={!connected || !command.trim() || executing} onClick={() => void requestExecution()}><Play size={15} />执行</button></div></div>
       </div>}
     </>}
@@ -959,9 +968,10 @@ function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, u
     catch (error) { onError(errorMessage(error)) }
   }
   const themeOptions: { value: UiTheme; label: string; icon: typeof Monitor }[] = [{ value: 'system', label: '跟随系统', icon: Monitor }, { value: 'light', label: '浅色', icon: Sun }, { value: 'dark', label: '深色', icon: Moon }]
-  return <Modal title="设置" onClose={onClose} className="settings-dialog"><form className="form-grid terminal-settings-form" onSubmit={(event) => { event.preventDefault(); onSave(form, previewImage, appIcon, theme, aiInput()) }}>
-    <div className="settings-tabs" role="tablist" aria-label="设置类别"><button type="button" role="tab" aria-selected={section === 'appearance'} className={section === 'appearance' ? 'active' : ''} onClick={() => setSection('appearance')}><Palette size={15} />界面</button><button type="button" role="tab" aria-selected={section === 'terminal'} className={section === 'terminal' ? 'active' : ''} onClick={() => setSection('terminal')}><SquareTerminal size={15} />终端</button><button type="button" role="tab" aria-selected={section === 'application'} className={section === 'application' ? 'active' : ''} onClick={() => setSection('application')}><ImageIcon size={15} />应用图标</button><button type="button" role="tab" aria-selected={section === 'ai'} className={section === 'ai' ? 'active' : ''} onClick={() => setSection('ai')}><Bot size={15} />AI</button></div>
-    {section === 'appearance' ? <fieldset className="ui-theme-settings"><legend>界面主题</legend><div className="theme-options" role="radiogroup" aria-label="界面主题">{themeOptions.map((option) => { const Icon = option.icon; return <button key={option.value} type="button" role="radio" aria-checked={theme === option.value} className={theme === option.value ? 'active' : ''} onClick={() => selectTheme(option.value)}><Icon size={17} /><span>{option.label}</span></button> })}</div></fieldset> : section === 'application' ? <><fieldset className="app-icon-settings"><legend>选择应用图标</legend><div className="app-icon-options">{appIcons.options.map((icon) => <label key={icon.id} className={appIcon === icon.id ? 'selected' : ''}><input type="radio" name="app-icon" checked={appIcon === icon.id} onChange={() => setAppIcon(icon.id)} /><img src={icon.dataUrl} alt="" /><span>{icon.name}</span></label>)}</div></fieldset><div className="diagnostic-export"><button type="button" className="secondary-button" onClick={async () => { try { const path = await window.api.diagnostics.export(); if (path) setDiagnosticPath(path) } catch (error) { onError(errorMessage(error)) } }}><FileInput size={15} />导出诊断信息</button>{diagnosticPath && <small title={diagnosticPath}>{diagnosticPath}</small>}</div></> : section === 'ai' ? <div className="ai-settings">
+  return <Modal title="设置" onClose={onClose} wide className="settings-dialog"><form className="form-grid terminal-settings-form" onSubmit={(event) => { event.preventDefault(); onSave(form, previewImage, appIcon, theme, aiInput()) }}>
+    <div className="settings-tabs" role="tablist" aria-label="设置类别"><button type="button" role="tab" aria-selected={section === 'appearance'} className={section === 'appearance' ? 'active' : ''} onClick={() => setSection('appearance')}><Palette size={15} />界面</button><button type="button" role="tab" aria-selected={section === 'terminal'} className={section === 'terminal' ? 'active' : ''} onClick={() => setSection('terminal')}><SquareTerminal size={15} />终端</button><button type="button" role="tab" aria-selected={section === 'ai'} className={section === 'ai' ? 'active' : ''} onClick={() => setSection('ai')}><Bot size={15} />AI</button></div>
+    <div className={`settings-content ${section}`}>
+    {section === 'appearance' ? <><fieldset className="ui-theme-settings"><legend>界面主题</legend><div className="theme-options" role="radiogroup" aria-label="界面主题">{themeOptions.map((option) => { const Icon = option.icon; return <button key={option.value} type="button" role="radio" aria-checked={theme === option.value} className={theme === option.value ? 'active' : ''} onClick={() => selectTheme(option.value)}><Icon size={17} /><span>{option.label}</span></button> })}</div></fieldset><fieldset className="app-icon-settings"><legend>应用图标</legend><div className="app-icon-options">{appIcons.options.map((icon) => <label key={icon.id} className={appIcon === icon.id ? 'selected' : ''}><input type="radio" name="app-icon" checked={appIcon === icon.id} onChange={() => setAppIcon(icon.id)} /><img src={icon.dataUrl} alt="" /><span>{icon.name}</span></label>)}</div></fieldset><section className="diagnostic-section"><strong>诊断</strong><div className="diagnostic-export"><button type="button" className="secondary-button" onClick={async () => { try { const path = await window.api.diagnostics.export(); if (path) setDiagnosticPath(path) } catch (error) { onError(errorMessage(error)) } }}><FileInput size={15} />导出诊断信息</button>{diagnosticPath && <small title={diagnosticPath}>{diagnosticPath}</small>}</div></section></> : section === 'ai' ? <div className="ai-settings">
       <label>API Base URL<input required type="url" value={aiForm.baseUrl} onChange={(event) => setAi('baseUrl', event.target.value)} placeholder="https://api.openai.com/v1" /></label>
       <label>模型名称<input value={aiForm.model} onChange={(event) => setAi('model', event.target.value)} placeholder="gpt-5" /></label>
       <label>API Key<div className="input-button"><input type="password" autoComplete="off" value={apiKey} onChange={(event) => { setApiKey(event.target.value); setAiTested(false) }} placeholder={aiForm.apiKeyConfigured ? '已安全保存，留空则保持不变' : '可选'} /><button type="button" className="icon-button danger" title="删除已保存的 API Key" disabled={!aiForm.apiKeyConfigured} onClick={() => void deleteAiKey()}><Trash2 size={15} /></button></div></label>
@@ -976,6 +986,7 @@ function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, u
       <label>背景图片<div className="input-button background-image-input"><input readOnly value={form.backgroundImagePath} placeholder="未选择" /><button type="button" className="secondary-button" onClick={() => void chooseBackground()}><ImageIcon size={15} />选择</button><button type="button" className="icon-button background-clear" title="清除背景图片" disabled={!form.backgroundImagePath} onClick={() => { set('backgroundImagePath', ''); setPreviewImage('') }}><Trash2 size={15} /></button></div></label>
       <label>图片显示方式<select value={form.backgroundImageFit} onChange={(event) => set('backgroundImageFit', event.target.value as TerminalSettings['backgroundImageFit'])}><option value="cover">覆盖窗口</option><option value="contain">完整显示</option><option value="stretch">拉伸</option><option value="tile">平铺</option></select></label>
     </>}
+    </div>
     <div className="dialog-actions spread"><button type="button" className="secondary-button" onClick={reset}><RotateCcw size={15} />恢复默认</button><div><button type="button" className="secondary-button" onClick={onClose}>取消</button><button className="primary-button" type="submit">保存</button></div></div>
   </form></Modal>
 }
