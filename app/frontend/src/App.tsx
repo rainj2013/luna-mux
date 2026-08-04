@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { confirm as confirmDialog } from '@tauri-apps/plugin-dialog'
 import { ArrowRight, Bookmark as BookmarkIcon, Bot, Check, ChevronDown, ChevronRight, CircleHelp, CirclePlus, Copy, Edit3, Eye, EyeOff, FileInput, FileJson2, Folder, FolderOpen, FolderPlus, GripVertical, Image as ImageIcon, KeyRound, Minus, Monitor, Moon, Network, Palette, PanelLeftClose, PanelLeftOpen, Play, Plug, Power, Rocket, RotateCcw, Search, Send, Server, Settings as SettingsIcon, ShieldAlert, Square, SquareTerminal, Star, Sun, Trash2, WandSparkles, X } from 'lucide-react'
 import { DEFAULT_AI_SETTINGS, DEFAULT_TERMINAL_SETTINGS, type AiCommandSuggestion, type AiRawExchange, type AiRiskAssessment, type AiSettings, type AiSettingsInput, type AiShell, type AppEvent, type AppIconId, type AppIconSettings, type Bookmark, type BookmarkInput, type ConflictResolution, type ConnectInput, type DeploymentDiffEntry, type DeploymentProfile, type HostKeyPrompt, type PortForwardProfile, type SessionStatus, type SshConfigPreview, type TerminalSettings, type TransferTask, type TunnelSummary, type UiTheme } from './types'
 import { TerminalPane, type TerminalPaneHandle } from './components/TerminalPane'
@@ -14,6 +13,9 @@ interface GroupDialogState { mode: 'create' | 'rename'; group?: string }
 type SettingsSection = 'appearance' | 'terminal' | 'application' | 'ai'
 type SidebarPointerDrag = { pointerId: number; type: 'bookmark' | 'group'; value: string; startX: number; startY: number; active: boolean }
 type SidebarPointerDrop = { type: 'bookmark'; id: string; group: string; position: 'before' | 'after' } | { type: 'group'; group: string; position: 'before' | 'after' | 'inside' }
+type ConfirmationOptions = { title: string; message: string; detail?: string; kind: 'warning' | 'danger'; confirmLabel: string }
+type ConfirmAction = (options: ConfirmationOptions) => Promise<boolean>
+type PendingConfirmation = ConfirmationOptions & { resolve(value: boolean): void }
 
 const emptyBookmark: BookmarkInput = { name: '', host: '', port: 22, username: '', authType: 'password', privateKeyPath: '', jumpBookmarkId: '', groupName: '', favorite: false, keepaliveEnabled: true, keepaliveIntervalSeconds: 15, keepaliveCountMax: 3, note: '' }
 type ConnectionCredentials = Omit<ConnectInput, 'bookmarkId' | 'newSession'>
@@ -69,6 +71,7 @@ export function App(): React.JSX.Element {
   const [importPreview, setImportPreview] = useState<SshConfigPreview | null>(null)
   const [sidebarContextMenu, setSidebarContextMenu] = useState<SidebarContextMenu | null>(null)
   const [groupDialog, setGroupDialog] = useState<GroupDialogState | null>(null)
+  const [confirmation, setConfirmation] = useState<PendingConfirmation | null>(null)
   const [toast, setToast] = useState('')
   const stateRestored = useRef(false)
   const sidebarWidthRef = useRef(defaultSidebarWidth)
@@ -78,6 +81,12 @@ export function App(): React.JSX.Element {
   const terminalPaneRefs = useRef(new Map<string, TerminalPaneHandle>())
 
   const showError = (message: string): void => { setToast(message); setTimeout(() => setToast(''), 4500) }
+  const confirmAction: ConfirmAction = (options) => new Promise((resolve) => setConfirmation({ ...options, resolve }))
+  const resolveConfirmation = (accepted: boolean): void => {
+    if (!confirmation) return
+    confirmation.resolve(accepted)
+    setConfirmation(null)
+  }
   const openSettings = (section: SettingsSection = 'appearance'): void => { setSettingsInitialSection(section); setSettingsDialog(true) }
   const reloadBookmarks = async (): Promise<void> => setBookmarks(await window.api.bookmarks.list())
   const reloadSidebarData = async (): Promise<void> => {
@@ -378,7 +387,7 @@ export function App(): React.JSX.Element {
   }
 
   const removeBookmark = async (bookmark: Bookmark): Promise<void> => {
-    if (!await confirmDialog(`确定删除连接“${bookmark.name}”吗？`, { title: '删除连接', kind: 'warning' })) return
+    if (!await confirmAction({ title: '删除连接', message: `确定删除连接“${bookmark.name}”吗？`, detail: '关联的已打开会话也会关闭，此操作无法撤销。', kind: 'danger', confirmLabel: '删除连接' })) return
     try {
       await window.api.bookmarks.remove(bookmark.id)
       for (const tab of tabs.filter((item) => item.bookmarkId === bookmark.id)) closeTab(tab)
@@ -390,7 +399,7 @@ export function App(): React.JSX.Element {
   const deleteBookmarkGroup = async (group: string): Promise<void> => {
     const label = group || '未分组'
     const count = bookmarks.filter((bookmark) => bookmark.groupName === group).length
-    if (!await confirmDialog(`确定删除分组“${label}”及其中的 ${count} 个连接吗？此操作无法撤销。`, { title: '删除分组', kind: 'warning' })) return
+    if (!await confirmAction({ title: '删除分组', message: `确定删除分组“${label}”吗？`, detail: `分组中的 ${count} 个连接将一并删除，此操作无法撤销。`, kind: 'danger', confirmLabel: '删除分组及连接' })) return
     try {
       const result = await window.api.bookmarkGroups.delete(group)
       const deleted = new Set(result.deletedBookmarkIds)
@@ -640,12 +649,13 @@ export function App(): React.JSX.Element {
     {authRequest && <AuthDialog bookmark={authRequest.bookmark} jumpBookmark={authRequest.bookmark.jumpBookmarkId ? bookmarkMap.get(authRequest.bookmark.jumpBookmarkId) : undefined} onClose={() => setAuthRequest(null)} onConnect={(credentials) => void connect(authRequest.bookmark, credentials, authRequest.target)} />}
     {hostPrompts[0] && <HostKeyDialog prompt={hostPrompts[0]} onDecision={(accept) => { const prompt = hostPrompts[0]; if (!prompt) return; window.api.sessions.hostKeyDecision(prompt.sessionId, accept); setHostPrompts((current) => current.filter((item) => item !== prompt)) }} />}
     {conflict && <ConflictDialog conflict={conflict} onDecision={(resolution, apply) => { window.api.transfers.resolveConflict(conflict.taskId, resolution, apply); setConflict(null) }} />}
-    {settingsDialog && <SettingsDialog initialSection={settingsInitialSection} settings={terminalSettings} backgroundImage={terminalBackground} appIcons={appIcons} uiTheme={uiTheme} aiSettings={aiSettings} onAiSettingsChange={setAiSettings} onThemePreview={setUiThemePreview} onClose={() => { setUiThemePreview(null); setSettingsDialog(false) }} onSave={(settings, image, icon, theme, ai) => void saveSettings(settings, image, icon, theme, ai)} onError={showError} />}
+    {settingsDialog && <SettingsDialog initialSection={settingsInitialSection} settings={terminalSettings} backgroundImage={terminalBackground} appIcons={appIcons} uiTheme={uiTheme} aiSettings={aiSettings} onAiSettingsChange={setAiSettings} onThemePreview={setUiThemePreview} onClose={() => { setUiThemePreview(null); setSettingsDialog(false) }} onSave={(settings, image, icon, theme, ai) => void saveSettings(settings, image, icon, theme, ai)} onConfirm={confirmAction} onError={showError} />}
     {aiDialog && activeBookmark && activeTab && <AiCommandDialog bookmark={activeBookmark} sessionId={activeTab.sessionId} connected={activeTab.status === 'connected'} settings={aiSettings} getTerminalContext={() => terminalPaneRefs.current.get(activeTab.key)?.getRecentLines(aiTerminalContextLines, aiTerminalContextChars) ?? ''} onSettingsChange={setAiSettings} onSettings={() => { setAiDialog(false); openSettings('ai') }} onClose={() => setAiDialog(false)} onError={showError} />}
     {helpDialog && <HelpDialog onClose={() => setHelpDialog(false)} />}
-    {deploymentDialog && activeBookmark && activeTab?.sessionId && <DeploymentDialog bookmark={activeBookmark} sessionId={activeTab.sessionId} onClose={() => setDeploymentDialog(false)} onError={showError} />}
+    {deploymentDialog && activeBookmark && activeTab?.sessionId && <DeploymentDialog bookmark={activeBookmark} sessionId={activeTab.sessionId} onClose={() => setDeploymentDialog(false)} onConfirm={confirmAction} onError={showError} />}
     {tunnelDialog && activeBookmark && activeTab?.sessionId && <TunnelDialog bookmark={activeBookmark} sessionId={activeTab.sessionId} onClose={() => setTunnelDialog(false)} onError={showError} />}
     {importPreview && <SshConfigImportDialog preview={importPreview} onClose={() => setImportPreview(null)} onImported={async () => { setImportPreview(null); await reloadSidebarData() }} onError={showError} />}
+    {confirmation && <ConfirmationDialog confirmation={confirmation} onDecision={resolveConfirmation} />}
     {toast && <div className="toast">{toast}</div>}
   </div>
 }
@@ -870,7 +880,7 @@ function TunnelDialog({ bookmark, sessionId, onClose, onError }: { bookmark: Boo
   </div></Modal>
 }
 
-function DeploymentDialog({ bookmark, sessionId, onClose, onError }: { bookmark: Bookmark; sessionId: string; onClose(): void; onError(message: string): void }): React.JSX.Element {
+function DeploymentDialog({ bookmark, sessionId, onClose, onConfirm, onError }: { bookmark: Bookmark; sessionId: string; onClose(): void; onConfirm: ConfirmAction; onError(message: string): void }): React.JSX.Element {
   const empty = (): DeploymentProfile => ({ id: crypto.randomUUID(), bookmarkId: bookmark.id, name: '', localDirectory: '', remoteDirectory: '/', deleteExtraneous: false })
   const [profiles, setProfiles] = useState<DeploymentProfile[]>([])
   const [profile, setProfile] = useState<DeploymentProfile>(empty)
@@ -896,7 +906,7 @@ function DeploymentDialog({ bookmark, sessionId, onClose, onError }: { bookmark:
     if (!diff) return
     const changed = diff.filter((item) => ['new', 'changed'].includes(item.status)).length
     const removals = profile.deleteExtraneous ? diff.filter((item) => item.status === 'remote-only').length : 0
-    if (!await confirmDialog(`将上传 ${changed} 个文件${removals ? `，并在上传全部成功后删除 ${removals} 个远端文件` : ''}。确定继续吗？`, { title: '确认部署', kind: 'warning' })) return
+    if (!await onConfirm({ title: '确认部署', message: `将上传 ${changed} 个文件${removals ? `，并删除 ${removals} 个远端文件` : ''}。`, detail: removals ? '仅当全部文件上传成功后才会删除远端文件。' : '请确认部署目标和差异列表无误。', kind: 'warning', confirmLabel: '开始部署' })) return
     try { await window.api.deployments.execute(profile.id, sessionId); onClose() }
     catch (error) { onError(errorMessage(error)) }
   }
@@ -909,7 +919,7 @@ function DeploymentDialog({ bookmark, sessionId, onClose, onError }: { bookmark:
   </div></Modal>
 }
 
-function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, uiTheme, aiSettings, onAiSettingsChange, onThemePreview, onClose, onSave, onError }: { initialSection: SettingsSection; settings: TerminalSettings; backgroundImage: string; appIcons: AppIconSettings; uiTheme: UiTheme; aiSettings: AiSettings; onAiSettingsChange(settings: AiSettings): void; onThemePreview(theme: UiTheme): void; onClose(): void; onSave(settings: TerminalSettings, backgroundImage: string, appIcon: AppIconId, uiTheme: UiTheme, ai: AiSettingsInput): void; onError(message: string): void }): React.JSX.Element {
+function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, uiTheme, aiSettings, onAiSettingsChange, onThemePreview, onClose, onSave, onConfirm, onError }: { initialSection: SettingsSection; settings: TerminalSettings; backgroundImage: string; appIcons: AppIconSettings; uiTheme: UiTheme; aiSettings: AiSettings; onAiSettingsChange(settings: AiSettings): void; onThemePreview(theme: UiTheme): void; onClose(): void; onSave(settings: TerminalSettings, backgroundImage: string, appIcon: AppIconId, uiTheme: UiTheme, ai: AiSettingsInput): void; onConfirm: ConfirmAction; onError(message: string): void }): React.JSX.Element {
   const [form, setForm] = useState<TerminalSettings>({ ...settings })
   const [previewImage, setPreviewImage] = useState(backgroundImage)
   const [appIcon, setAppIcon] = useState(appIcons.selected)
@@ -944,7 +954,7 @@ function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, u
     finally { setTestingAi(false) }
   }
   const deleteAiKey = async (): Promise<void> => {
-    if (!await confirmDialog('确定删除已保存的 AI API Key 吗？', { title: '删除 API Key', kind: 'warning' })) return
+    if (!await onConfirm({ title: '删除 API Key', message: '确定删除已保存的 AI API Key 吗？', detail: '删除后需要重新填写密钥才能调用当前 AI 服务。', kind: 'danger', confirmLabel: '删除 API Key' })) return
     try { const saved = await window.api.ai.deleteApiKey(); setApiKey(''); setAiForm((current) => ({ ...current, apiKeyConfigured: saved.apiKeyConfigured })); onAiSettingsChange(saved) }
     catch (error) { onError(errorMessage(error)) }
   }
@@ -1035,6 +1045,13 @@ function ConflictDialog({ conflict, onDecision }: { conflict: { sourcePath: stri
 
 function Modal({ title, onClose, children, wide = false, raised = false }: { title: string; onClose(): void; children: React.ReactNode; wide?: boolean; raised?: boolean }): React.JSX.Element {
   return <div className={`modal-backdrop ${raised ? 'raised' : ''}`} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}><section className={`modal ${wide ? 'wide' : ''}`} role="dialog" aria-modal="true"><header><strong>{title}</strong><button className="icon-button" onClick={onClose}><X size={18} /></button></header>{children}</section></div>
+}
+
+function ConfirmationDialog({ confirmation, onDecision }: { confirmation: ConfirmationOptions; onDecision(accepted: boolean): void }): React.JSX.Element {
+  return <Modal title={confirmation.title} onClose={() => onDecision(false)} raised><div className={`confirmation-dialog ${confirmation.kind}`}>
+    <div className="confirmation-heading">{confirmation.kind === 'danger' ? <Trash2 size={22} /> : <ShieldAlert size={22} />}<div><strong>{confirmation.message}</strong>{confirmation.detail && <span>{confirmation.detail}</span>}</div></div>
+    <div className="dialog-actions"><button type="button" autoFocus className="secondary-button" onClick={() => onDecision(false)}>取消</button><button type="button" className={confirmation.kind === 'danger' ? 'danger-button' : 'primary-button'} onClick={() => onDecision(true)}>{confirmation.kind === 'danger' ? <Trash2 size={15} /> : <Rocket size={15} />}{confirmation.confirmLabel}</button></div>
+  </div></Modal>
 }
 
 function TransferPanel({ transfers, view, setView, onRetry, onCancel, onClear }: { transfers: TransferTask[]; view: 'queue' | 'history'; setView(value: 'queue' | 'history'): void; onRetry(task: TransferTask): void; onCancel(task: TransferTask): void; onClear(): void }): React.JSX.Element {
