@@ -110,6 +110,8 @@ export async function createTauriApi(): Promise<AppApi> {
       testSettings: (settings: AiSettingsInput) => call('ai_settings_test', { settings }),
       generate: (requirement, shell: AiShell, terminalContext, redactTerminalContext) => call('ai_command_generate', { request: { requirement, shell, terminalContext, redactTerminalContext } }),
       analyze: (command) => call('ai_command_analyze', { command }),
+      listHistory: () => call('ai_command_history_list'),
+      clearHistory: () => call('ai_command_history_clear'),
       getLastExchange: () => call('ai_diagnostics_get'),
       clearLastExchange: () => call('ai_diagnostics_clear')
     },
@@ -126,6 +128,7 @@ export async function createTauriApi(): Promise<AppApi> {
       saveUiTheme: (theme: UiTheme) => call('settings_save_ui_theme', { theme }),
       getTerminal: () => call('settings_get_terminal'),
       saveTerminal: (settings: TerminalSettings) => call('settings_save_terminal', { settings }),
+      listSystemFonts: () => call('settings_list_system_fonts'),
       chooseTerminalBackground: () => call('settings_choose_terminal_background'),
       loadTerminalBackground: (path) => call('settings_load_terminal_background', { path }),
       getAppIcons: () => call('settings_get_app_icons'),

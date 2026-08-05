@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowRight, Bookmark as BookmarkIcon, Bot, Check, ChevronDown, ChevronRight, CircleHelp, CirclePlus, Copy, Download, Edit3, Eye, EyeOff, FileInput, FileJson2, Folder, FolderOpen, FolderPlus, GripVertical, Image as ImageIcon, KeyRound, Minus, Monitor, Moon, Network, Palette, PanelLeftClose, PanelLeftOpen, Play, Plug, Power, Rocket, RotateCcw, Search, Send, Server, Settings as SettingsIcon, ShieldAlert, Square, SquareTerminal, Star, Sun, Trash2, Upload, WandSparkles, X } from 'lucide-react'
-import { DEFAULT_AI_SETTINGS, DEFAULT_TERMINAL_SETTINGS, type AiCommandSuggestion, type AiProvider, type AiRawExchange, type AiRiskAssessment, type AiSettings, type AiSettingsInput, type AiShell, type AiThinkingMode, type AppEvent, type AppIconId, type AppIconSettings, type Bookmark, type BookmarkInput, type ConflictResolution, type ConnectInput, type DeploymentDiffEntry, type DeploymentProfile, type HostKeyPrompt, type PortForwardProfile, type SessionStatus, type SshConfigPreview, type TerminalSettings, type TransferTask, type TunnelSummary, type UiTheme } from './types'
+import { ArrowRight, Bookmark as BookmarkIcon, Bot, Check, ChevronDown, ChevronRight, CircleHelp, CirclePlus, Copy, Download, Edit3, Eye, EyeOff, FileInput, FileJson2, Folder, FolderOpen, FolderPlus, GripVertical, History as HistoryIcon, Image as ImageIcon, KeyRound, Minus, Monitor, Moon, Network, Palette, PanelLeftClose, PanelLeftOpen, Play, Plug, Power, Rocket, RotateCcw, Search, Send, Server, Settings as SettingsIcon, ShieldAlert, Square, SquareTerminal, Star, Sun, Trash2, Upload, WandSparkles, X } from 'lucide-react'
+import { BUNDLED_TERMINAL_FONT, DEFAULT_AI_SETTINGS, DEFAULT_TERMINAL_SETTINGS, type AiCommandHistoryEntry, type AiCommandSuggestion, type AiProvider, type AiRawExchange, type AiRiskAssessment, type AiSettings, type AiSettingsInput, type AiShell, type AiThinkingMode, type AppEvent, type AppIconId, type AppIconSettings, type Bookmark, type BookmarkInput, type ConflictResolution, type ConnectInput, type DeploymentDiffEntry, type DeploymentProfile, type HostKeyPrompt, type PortForwardProfile, type SessionStatus, type SshConfigPreview, type TerminalSettings, type TransferTask, type TunnelSummary, type UiTheme } from './types'
 import { TerminalPane, type TerminalPaneHandle } from './components/TerminalPane'
 import { SftpPane } from './components/SftpPane'
 import { HelpDialog } from './components/HelpDialog'
@@ -24,6 +24,15 @@ const minSidebarWidth = 200
 const maxSidebarWidth = 480
 const aiTerminalContextLines = 100
 const aiTerminalContextChars = 16_000
+
+function primaryFontName(fontFamily: string): string {
+  return fontFamily.split(',')[0]?.trim().replace(/^["']|["']$/g, '') || 'JetBrains Mono'
+}
+
+function terminalFontStack(fontName: string): string {
+  const escaped = fontName.trim().replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+  return escaped ? `"${escaped}", "JetBrains Mono", monospace` : BUNDLED_TERMINAL_FONT
+}
 
 function clampSidebarWidth(width: number): number {
   return Math.min(maxSidebarWidth, Math.max(minSidebarWidth, Math.round(width)))
@@ -706,6 +715,7 @@ function AiCommandDialog({ bookmark, sessionId, connected, settings, getTerminal
   const [includeTerminalContext, setIncludeTerminalContext] = useState(false)
   const [redactTerminalContext, setRedactTerminalContext] = useState(true)
   const [rawExchange, setRawExchange] = useState<AiRawExchange | null>(null)
+  const [history, setHistory] = useState<AiCommandHistoryEntry[] | null>(null)
 
   const effectiveAssessment = (local: AiRiskAssessment): AiRiskAssessment => {
     if (!suggestion || edited) return local
@@ -776,7 +786,23 @@ function AiCommandDialog({ bookmark, sessionId, connected, settings, getTerminal
     } catch (diagnosticError) { setError(errorMessage(diagnosticError)) }
   }
 
+  const openHistory = async (): Promise<void> => {
+    try { setHistory(await window.api.ai.listHistory()) }
+    catch (historyError) { setError(errorMessage(historyError)) }
+  }
+
+  const useHistoryEntry = (entry: AiCommandHistoryEntry): void => {
+    setRequirement(entry.requirement)
+    setShell(entry.shell)
+    setSuggestion(entry)
+    setCommand(entry.command)
+    setEdited(false)
+    setError('')
+    setHistory(null)
+  }
+
   if (rawExchange) return <AiDiagnosticsDialog exchange={rawExchange} onClose={() => setRawExchange(null)} onClear={async () => { try { await window.api.ai.clearLastExchange(); setRawExchange(null) } catch (clearError) { onError(errorMessage(clearError)) } }} />
+  if (history) return <AiCommandHistoryDialog entries={history} onUse={useHistoryEntry} onClose={() => setHistory(null)} onClear={async () => { try { await window.api.ai.clearHistory(); setHistory([]) } catch (clearError) { onError(errorMessage(clearError)) } }} />
 
   const executionConfirmation = confirming ? (() => {
     const confirmationCopy = {
@@ -796,7 +822,7 @@ function AiCommandDialog({ bookmark, sessionId, connected, settings, getTerminal
   })() : null
 
   return <><Modal title="AI 命令助手" onClose={confirming ? () => undefined : onClose} wide className="workflow-dialog"><div className="ai-command-dialog">
-    <div className="ai-command-content"><div className="ai-target"><Server size={16} /><strong>{bookmark.name}</strong><span>{bookmark.username}@{bookmark.host}:{bookmark.port}</span><button type="button" className="icon-button" title="查看 AI 原始请求与响应" onClick={() => void openRawExchange()}><FileJson2 size={15} /></button><span className={`status-dot ${connected ? 'connected' : 'disconnected'}`} /></div>
+    <div className="ai-command-content"><div className="ai-target"><Server size={16} /><strong>{bookmark.name}</strong><span>{bookmark.username}@{bookmark.host}:{bookmark.port}</span><button type="button" className="icon-button" title="最近生成的命令" onClick={() => void openHistory()}><HistoryIcon size={15} /></button><button type="button" className="icon-button" title="查看 AI 原始请求与响应" onClick={() => void openRawExchange()}><FileJson2 size={15} /></button><span className={`status-dot ${connected ? 'connected' : 'disconnected'}`} /></div>
     {!settings.model.trim() ? <div className="ai-unconfigured"><Bot size={28} /><strong>尚未配置 AI 模型</strong><button className="primary-button" onClick={onSettings}><SettingsIcon size={15} />打开 AI 设置</button></div> : <>
       <section className="ai-compose">
         <div className="ai-prompt-row"><label>目标 Shell<select value={shell} onChange={(event) => void selectShell(event.target.value as AiShell)}><option value="linux">Linux Shell</option><option value="powerShell">PowerShell</option><option value="cmd">Windows cmd</option><option value="macos">macOS Shell</option></select></label><label className="ai-requirement">需要完成什么<textarea autoFocus rows={4} maxLength={8000} value={requirement} onChange={(event) => setRequirement(event.target.value)} placeholder="例如：从 app.log 中找出更新条数大于 0 的日志" onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); void generate() } }} /></label></div>
@@ -818,6 +844,24 @@ function AiCommandDialog({ bookmark, sessionId, connected, settings, getTerminal
 function prettyRawJson(value: string): string {
   try { return JSON.stringify(JSON.parse(value), null, 2) }
   catch { return value }
+}
+
+function AiCommandHistoryDialog({ entries, onUse, onClose, onClear }: { entries: AiCommandHistoryEntry[]; onUse(entry: AiCommandHistoryEntry): void; onClose(): void; onClear(): Promise<void> }): React.JSX.Element {
+  const [confirmingClear, setConfirmingClear] = useState(false)
+  const shellNames: Record<AiShell, string> = { linux: 'Linux Shell', powerShell: 'PowerShell', cmd: 'Windows cmd', macos: 'macOS Shell' }
+  const riskNames = { low: '低风险', medium: '需注意', high: '高风险' } as const
+  return <><Modal title="AI 命令历史" onClose={confirmingClear ? () => undefined : onClose} wide className="workflow-dialog"><div className="ai-history">
+    <div className="ai-history-list">{entries.length === 0 ? <div className="ai-history-empty"><HistoryIcon size={26} /><strong>暂无历史命令</strong><span>成功生成的最近 10 条命令会显示在这里</span></div> : entries.map((entry) => <article key={entry.id} className="ai-history-entry">
+      <header><div><span>{shellNames[entry.shell]}</span><time>{new Date(entry.createdAt).toLocaleString()}</time></div><span className={`ai-risk ${entry.riskLevel}`}>{riskNames[entry.riskLevel]}</span></header>
+      <p title={entry.requirement}>{entry.requirement}</p>
+      <pre>{entry.command}</pre>
+      <div><button className="secondary-button" onClick={() => void window.api.system.writeClipboard(entry.command)}><Copy size={15} />复制</button><button className="primary-button" onClick={() => onUse(entry)}><Check size={15} />使用</button></div>
+    </article>)}</div>
+    <div className="dialog-actions spread"><button className="danger-button" disabled={entries.length === 0} onClick={() => setConfirmingClear(true)}><Trash2 size={15} />清空历史</button><button className="primary-button" onClick={onClose}>返回</button></div>
+  </div></Modal>{confirmingClear && <Modal title="清空 AI 命令历史" onClose={() => setConfirmingClear(false)} raised className="secondary-confirm-dialog"><div className="confirmation-dialog danger">
+    <div className="confirmation-heading"><Trash2 size={22} /><div><strong>确定清空全部 AI 命令历史？</strong><span>最近保存的 10 条命令将被删除，此操作无法撤销。</span></div></div>
+    <div className="dialog-actions"><button className="secondary-button" onClick={() => setConfirmingClear(false)}>取消</button><button className="danger-button" onClick={async () => { await onClear(); setConfirmingClear(false) }}><Trash2 size={15} />清空历史</button></div>
+  </div></Modal>}</>
 }
 
 function AiDiagnosticsDialog({ exchange, onClose, onClear }: { exchange: AiRawExchange; onClose(): void; onClear(): void }): React.JSX.Element {
@@ -876,6 +920,16 @@ function TunnelDialog({ bookmark, sessionId, onClose, onError }: { bookmark: Boo
   }, [bookmark.id, sessionId])
   const set = <K extends keyof PortForwardProfile>(key: K, value: PortForwardProfile[K]): void => setProfile((current) => ({ ...current, [key]: value }))
   const active = tunnels.find((item) => item.profileId === profile.id)
+  const currentTarget = ['127.0.0.1', 'localhost', '::1'].includes(profile.targetHost.trim().toLowerCase())
+  const bindPort = active?.bindPort ?? profile.bindPort
+  const bindEndpoint = `${profile.bindAddress || '未填写'}:${bindPort || '自动分配'}`
+  const targetEndpoint = profile.type === 'dynamic' ? '由客户端请求决定' : `${profile.targetHost || '未填写'}:${profile.targetPort || '未填写'}`
+  const route = profile.type === 'local'
+    ? [{ label: '本机应用连接', value: bindEndpoint, icon: Monitor }, { label: 'SSH 加密通道', value: `${bookmark.host}:${bookmark.port}`, icon: Server }, { label: currentTarget ? '当前 SSH 服务器' : '服务器可达主机', value: targetEndpoint, icon: Network }]
+    : profile.type === 'remote'
+      ? [{ label: 'SSH 服务器监听', value: bindEndpoint, icon: Server }, { label: 'SSH 加密通道', value: bookmark.name, icon: Network }, { label: currentTarget ? '当前电脑' : '本机可达主机', value: targetEndpoint, icon: Monitor }]
+      : [{ label: '本机 SOCKS5', value: bindEndpoint, icon: Monitor }, { label: 'SSH 加密通道', value: `${bookmark.host}:${bookmark.port}`, icon: Server }, { label: '请求目标', value: targetEndpoint, icon: Network }]
+  const selectTarget = (useCurrent: boolean): void => set('targetHost', useCurrent ? '127.0.0.1' : currentTarget ? '' : profile.targetHost)
   const save = async (): Promise<PortForwardProfile | undefined> => {
     try {
       const saved = await window.api.tunnels.saveProfile(profile)
@@ -902,11 +956,16 @@ function TunnelDialog({ bookmark, sessionId, onClose, onError }: { bookmark: Boo
   return <Modal title={`端口转发 · ${bookmark.name}`} onClose={onClose} wide><div className="tunnel-dialog">
     <div className="deployment-profile-bar"><select value={profile.id} onChange={(event) => { const selected = profiles.find((item) => item.id === event.target.value); if (selected) setProfile(selected) }}><option value={profile.id}>{profiles.some((item) => item.id === profile.id) ? profile.name || '未命名配置' : '新转发配置'}</option>{profiles.filter((item) => item.id !== profile.id).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><button className="secondary-button" onClick={() => setProfile(empty())}><CirclePlus size={15} />新建</button>{profiles.some((item) => item.id === profile.id) && <button className="icon-button danger" title="删除转发配置" onClick={async () => { if (active) await stop(); await window.api.tunnels.removeProfile(profile.id); const next = profiles.filter((item) => item.id !== profile.id); setProfiles(next); setProfile(next[0] ?? empty()) }}><Trash2 size={15} /></button>}</div>
     <div className="form-grid">
-      <label>配置名称<input value={profile.name} onChange={(event) => set('name', event.target.value)} placeholder="Web 服务" /></label>
+      <label>配置名称（可选）<input value={profile.name} onChange={(event) => set('name', event.target.value)} placeholder="留空时根据转发路径自动生成" /></label>
       <label>转发类型<select value={profile.type} disabled={Boolean(active)} onChange={(event) => set('type', event.target.value as PortForwardProfile['type'])}><option value="local">本地转发</option><option value="remote">远端转发</option><option value="dynamic">SOCKS5 动态转发</option></select></label>
-      <div className="form-row"><label>监听地址<input value={profile.bindAddress} disabled={Boolean(active)} onChange={(event) => set('bindAddress', event.target.value)} /></label><label>监听端口<input type="number" min="0" max="65535" disabled={Boolean(active)} value={profile.bindPort} onChange={(event) => set('bindPort', Number(event.target.value))} /></label></div>
-      {profile.type !== 'dynamic' && <div className="form-row"><label>目标地址<input value={profile.targetHost} disabled={Boolean(active)} onChange={(event) => set('targetHost', event.target.value)} /></label><label>目标端口<input type="number" min="1" max="65535" disabled={Boolean(active)} value={profile.targetPort} onChange={(event) => set('targetPort', Number(event.target.value))} /></label></div>}
-      {active && <div className={`tunnel-status ${active.status}`}><span className={`status-dot ${active.status === 'running' ? 'connected' : active.status === 'error' ? 'error' : 'connecting'}`} /><strong>{active.status === 'running' ? `${active.bindAddress}:${active.bindPort}` : active.status === 'starting' ? '正在启动' : '启动失败'}</strong>{active.error && <small>{active.error}</small>}</div>}
+      <section className="tunnel-route-preview"><span>流量路径</span><div className="tunnel-route-flow">{route.map((step, index) => { const Icon = step.icon; return <div className="tunnel-route-part" key={step.label}>{index > 0 && <ArrowRight size={15} />}<div><Icon size={16} /><span><small>{step.label}</small><strong title={step.value}>{step.value}</strong></span></div></div> })}</div></section>
+      <div className="form-row"><label>{profile.type === 'remote' ? 'SSH 服务器监听地址' : '本机监听地址'}<input value={profile.bindAddress} disabled={Boolean(active)} onChange={(event) => set('bindAddress', event.target.value)} /></label><label>监听端口<input type="number" min="0" max="65535" disabled={Boolean(active)} value={profile.bindPort} onChange={(event) => set('bindPort', Number(event.target.value))} /></label></div>
+      {profile.bindPort === 0 && <div className="tunnel-hint">端口 0 会在启动时自动分配，实际端口显示在运行状态中。</div>}
+      {window.api.platform === 'darwin' && profile.type !== 'remote' && profile.bindPort > 0 && profile.bindPort < 1024 && <div className="tunnel-hint warning">macOS 普通应用不能监听 1–1023 的特权端口。可改用 1024 以上的本机端口，目标端口保持不变。</div>}
+      {profile.type === 'local' && profile.bindPort === 6000 && <div className="tunnel-hint warning">Chrome 会阻止访问本机端口 6000。可将监听端口改为 16000，目标端口仍保留 6000。</div>}
+      {profile.type !== 'dynamic' && <div className="tunnel-target-setting"><span>目标位置</span><div className="tunnel-target-options"><button type="button" className={currentTarget ? 'active' : ''} disabled={Boolean(active)} onClick={() => selectTarget(true)}>{profile.type === 'local' ? '当前 SSH 服务器' : '当前电脑'}</button><button type="button" className={!currentTarget ? 'active' : ''} disabled={Boolean(active)} onClick={() => selectTarget(false)}>其他主机</button></div></div>}
+      {profile.type !== 'dynamic' && <div className="form-row"><label>{currentTarget ? profile.type === 'local' ? '目标地址（SSH 服务器自身）' : '目标地址（当前电脑自身）' : profile.type === 'local' ? '目标地址（从 SSH 服务器访问）' : '目标地址（从当前电脑访问）'}<input value={profile.targetHost} readOnly={currentTarget} disabled={Boolean(active)} placeholder={currentTarget ? undefined : '主机名或内网 IP'} onChange={(event) => set('targetHost', event.target.value)} /></label><label>目标端口<input type="number" min="1" max="65535" disabled={Boolean(active)} value={profile.targetPort} onChange={(event) => set('targetPort', Number(event.target.value))} /></label></div>}
+      {active && <div className={`tunnel-status ${active.status}`}><span className={`status-dot ${active.status === 'running' ? 'connected' : active.status === 'error' ? 'error' : 'connecting'}`} /><strong>{active.status === 'running' ? `运行中 · ${active.bindAddress}:${active.bindPort}` : active.status === 'starting' ? '正在启动' : '转发异常'}</strong>{active.error && <small>{active.error}</small>}</div>}
     </div>
     <div className="dialog-actions"><button className="secondary-button" onClick={onClose}>关闭</button><button className="secondary-button" disabled={Boolean(active) || loading} onClick={() => void save()}>保存</button>{active ? <button className="danger-button" disabled={loading} onClick={() => void stop()}>停止</button> : <button className="primary-button" disabled={loading} onClick={() => void start()}><Power size={15} />启动</button>}</div>
   </div></Modal>
@@ -962,10 +1021,21 @@ function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, u
   const [aiTested, setAiTested] = useState(false)
   const [diagnosticPath, setDiagnosticPath] = useState('')
   const [section, setSection] = useState<SettingsSection>(initialSection)
+  const [systemFonts, setSystemFonts] = useState<string[] | null>(null)
+  const [manualFontMode, setManualFontMode] = useState(false)
+  const [manualFontName, setManualFontName] = useState(() => primaryFontName(settings.fontFamily))
   const set = <K extends keyof TerminalSettings>(key: K, value: TerminalSettings[K]): void => setForm((current) => ({ ...current, [key]: value }))
   const setAi = <K extends keyof AiSettings>(key: K, value: AiSettings[K]): void => { setAiTested(false); setAiForm((current) => ({ ...current, [key]: value })) }
   const aiInput = (): AiSettingsInput => ({ baseUrl: aiForm.baseUrl, model: aiForm.model, defaultShell: aiForm.defaultShell, provider: aiForm.provider, thinkingMode: aiForm.thinkingMode, ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}) })
   const selectTheme = (value: UiTheme): void => { setTheme(value); onThemePreview(value) }
+  useEffect(() => {
+    if (section !== 'terminal' || systemFonts !== null) return
+    let active = true
+    void window.api.settings.listSystemFonts()
+      .then((fonts) => { if (active) setSystemFonts(fonts) })
+      .catch(() => { if (active) setSystemFonts([]) })
+    return () => { active = false }
+  }, [section, systemFonts])
   const chooseBackground = async (): Promise<void> => {
     try {
       const path = await window.api.settings.chooseTerminalBackground()
@@ -977,7 +1047,7 @@ function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, u
   }
   const reset = (): void => {
     if (section === 'ai') { setAiForm({ ...DEFAULT_AI_SETTINGS, apiKeyConfigured: aiForm.apiKeyConfigured }); setApiKey(''); setAiTested(false); return }
-    setForm({ ...DEFAULT_TERMINAL_SETTINGS }); setPreviewImage(''); setAppIcon('ssh'); selectTheme('system')
+    setForm({ ...DEFAULT_TERMINAL_SETTINGS }); setManualFontMode(false); setManualFontName('JetBrains Mono'); setPreviewImage(''); setAppIcon('ssh'); selectTheme('system')
   }
   const testAi = async (): Promise<void> => {
     setTestingAi(true); setAiTested(false)
@@ -995,6 +1065,10 @@ function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, u
   const providerClue = `${aiForm.provider} ${aiForm.baseUrl} ${aiForm.model}`.toLowerCase()
   const thinkingCannotDisable = providerClue.includes('grok') || providerClue.includes('api.x.ai') || providerClue.includes('kimi-k3') || providerClue.includes('k2.7') || providerClue.includes('gemini-3') || (providerClue.includes('gemini-2.5') && providerClue.includes('pro'))
   const thinkingHint = aiForm.thinkingMode === 'default' ? '不附加思考控制参数，由服务端决定。' : thinkingCannotDisable && aiForm.thinkingMode === 'disabled' ? '该模型无法完全关闭思考，将改用最低可用推理强度。' : '参数会随测试连接和命令生成请求一同发送。'
+  const currentFontName = primaryFontName(form.fontFamily)
+  const installedFonts = (systemFonts ?? []).filter((font) => font.toLocaleLowerCase() !== 'jetbrains mono')
+  const installedFont = installedFonts.find((font) => font.toLocaleLowerCase() === currentFontName.toLocaleLowerCase())
+  const fontChoice = manualFontMode ? '__manual__' : currentFontName === 'JetBrains Mono' ? '__bundled__' : currentFontName === 'monospace' ? '__system__' : systemFonts === null ? '__current__' : installedFont ?? '__manual__'
   return <Modal title="设置" onClose={onClose} wide className="settings-dialog"><form className="form-grid terminal-settings-form" onSubmit={(event) => { event.preventDefault(); onSave(form, previewImage, appIcon, theme, aiInput()) }}>
     <div className="settings-tabs" role="tablist" aria-label="设置类别"><button type="button" role="tab" aria-selected={section === 'appearance'} className={section === 'appearance' ? 'active' : ''} onClick={() => setSection('appearance')}><Palette size={15} />界面</button><button type="button" role="tab" aria-selected={section === 'terminal'} className={section === 'terminal' ? 'active' : ''} onClick={() => setSection('terminal')}><SquareTerminal size={15} />终端</button><button type="button" role="tab" aria-selected={section === 'ai'} className={section === 'ai' ? 'active' : ''} onClick={() => setSection('ai')}><Bot size={15} />AI</button></div>
     <div className={`settings-content ${section}`}>
@@ -1008,10 +1082,10 @@ function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, u
       <div className="ai-settings-test"><button type="button" className="secondary-button" disabled={testingAi || !aiForm.model.trim()} onClick={() => void testAi()}>{testingAi ? '正在测试…' : '测试连接'}</button>{aiTested && <span><Check size={14} />连接成功</span>}</div>
     </div> : <>
       <div className="terminal-preview" style={terminalBackgroundStyle(form, previewImage)}><div style={{ color: form.foregroundColor, background: colorWithOpacity(form.backgroundColor, form.backgroundOpacity), fontFamily: form.fontFamily, fontSize: form.fontSize }}><span>user@host:~$</span> ls -la<br />drwxr-xr-x&nbsp;&nbsp;projects</div></div>
-      <label>字体<select value={form.fontFamily} onChange={(event) => set('fontFamily', event.target.value)}><option value="Cascadia Mono, SFMono-Regular, Consolas, monospace">默认等宽字体</option><option value="Cascadia Mono, Consolas, monospace">Cascadia Mono</option><option value="SFMono-Regular, Menlo, Monaco, monospace">SF Mono</option><option value="JetBrains Mono, monospace">JetBrains Mono</option><option value="Fira Code, monospace">Fira Code</option><option value="Consolas, monospace">Consolas</option><option value="Menlo, monospace">Menlo</option><option value="monospace">系统等宽字体</option></select></label>
-      <label>字号<div className="range-control"><input type="range" min="10" max="30" step="1" value={form.fontSize} onChange={(event) => set('fontSize', Number(event.target.value))} /><output>{form.fontSize} px</output></div></label>
+      <label>字体<div className={`terminal-font-picker ${fontChoice === '__manual__' ? 'manual' : ''}`}><select value={fontChoice} onChange={(event) => { const value = event.target.value; if (value === '__manual__') { setManualFontMode(true); setManualFontName(currentFontName); return } setManualFontMode(false); if (value === '__bundled__') { set('fontFamily', BUNDLED_TERMINAL_FONT); setManualFontName('JetBrains Mono'); return } if (value === '__system__') { set('fontFamily', 'monospace'); setManualFontName('monospace'); return } set('fontFamily', terminalFontStack(value)); setManualFontName(value) }}><option value="__bundled__">JetBrains Mono（内置）</option><option value="__system__">系统默认等宽字体</option>{systemFonts === null && !['JetBrains Mono', 'monospace'].includes(currentFontName) && <option value="__current__">{currentFontName}（当前设置）</option>}{installedFonts.map((font) => <option key={font} value={font}>{font}</option>)}<option value="__manual__">输入其他字体名称…</option></select>{fontChoice === '__manual__' && <input autoFocus value={manualFontName} placeholder="字体名称" onChange={(event) => { const value = event.target.value; setManualFontName(value); if (value.trim()) set('fontFamily', terminalFontStack(value)) }} />}</div></label>
+      <label>字号<div className="range-control"><input type="range" min="10" max="30" step="1" value={form.fontSize} style={{ '--range-progress': `${((form.fontSize - 10) / 20) * 100}%` } as React.CSSProperties} onChange={(event) => set('fontSize', Number(event.target.value))} /><output>{form.fontSize} px</output></div></label>
       <div className="color-settings"><label>文字颜色<div className="color-control"><input type="color" value={form.foregroundColor} onChange={(event) => set('foregroundColor', event.target.value)} /><span>{form.foregroundColor}</span></div></label><label>背景颜色<div className="color-control"><input type="color" value={form.backgroundColor} onChange={(event) => set('backgroundColor', event.target.value)} /><span>{form.backgroundColor}</span></div></label></div>
-      <label>背景颜色不透明度<div className="range-control"><input type="range" min="0" max="1" step="0.05" value={form.backgroundOpacity} onChange={(event) => set('backgroundOpacity', Number(event.target.value))} /><output>{Math.round(form.backgroundOpacity * 100)}%</output></div></label>
+      <label>背景颜色不透明度<div className="range-control"><input type="range" min="0" max="1" step="0.05" value={form.backgroundOpacity} style={{ '--range-progress': `${form.backgroundOpacity * 100}%` } as React.CSSProperties} onChange={(event) => set('backgroundOpacity', Number(event.target.value))} /><output>{Math.round(form.backgroundOpacity * 100)}%</output></div></label>
       <label>背景图片<div className="input-button background-image-input"><input readOnly value={form.backgroundImagePath} placeholder="未选择" /><button type="button" className="secondary-button" onClick={() => void chooseBackground()}><ImageIcon size={15} />选择</button><button type="button" className="icon-button background-clear" title="清除背景图片" disabled={!form.backgroundImagePath} onClick={() => { set('backgroundImagePath', ''); setPreviewImage('') }}><Trash2 size={15} /></button></div></label>
       <label>图片显示方式<select value={form.backgroundImageFit} onChange={(event) => set('backgroundImageFit', event.target.value as TerminalSettings['backgroundImageFit'])}><option value="cover">覆盖窗口</option><option value="contain">完整显示</option><option value="stretch">拉伸</option><option value="tile">平铺</option></select></label>
     </>}

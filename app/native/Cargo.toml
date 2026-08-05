@@ -41,6 +41,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 url = "2"
 walkdir = "2"
 zeroize = "1"
+fontdb = { version = "0.23.0", default-features = false, features = ["std", "fs"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

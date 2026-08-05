@@ -269,6 +269,20 @@ pub struct AiCommandSuggestion {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AiCommandHistoryEntry {
+    pub id: String,
+    pub created_at: String,
+    pub requirement: String,
+    pub shell: AiShell,
+    pub command: String,
+    pub explanation: String,
+    pub assumptions: Vec<String>,
+    pub warnings: Vec<String>,
+    pub risk_level: AiRiskLevel,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AiRawExchange {
     pub occurred_at: String,
     pub endpoint: String,
@@ -375,7 +389,7 @@ pub struct TerminalSettings {
 impl Default for TerminalSettings {
     fn default() -> Self {
         Self {
-            font_family: "Cascadia Mono, SFMono-Regular, Consolas, monospace".into(),
+            font_family: "\"JetBrains Mono\", \"SFMono-Regular\", Consolas, monospace".into(),
             font_size: 14,
             foreground_color: "#e8eaed".into(),
             background_color: "#111315".into(),

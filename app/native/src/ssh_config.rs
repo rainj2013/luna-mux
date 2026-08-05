@@ -13,13 +13,32 @@ struct HostBlock {
 }
 
 fn expand_home(value: &str, home: &Path) -> String {
+    let home = home.to_string_lossy();
     if value == "~" {
-        return home.to_string_lossy().into_owned();
+        return home.into_owned();
     }
-    value
+    let Some(tail) = value
         .strip_prefix("~/")
-        .map(|tail| home.join(tail).to_string_lossy().into_owned())
-        .unwrap_or_else(|| value.to_string())
+        .or_else(|| value.strip_prefix("~\\"))
+    else {
+        return value.to_string();
+    };
+    let separator = if home.contains('\\') && !home.contains('/') {
+        '\\'
+    } else {
+        '/'
+    };
+    let base = home.trim_end_matches(['/', '\\']);
+    let tail = if separator == '\\' {
+        tail.replace('/', "\\")
+    } else {
+        tail.replace('\\', "/")
+    };
+    if base.is_empty() {
+        format!("{separator}{tail}")
+    } else {
+        format!("{base}{separator}{tail}")
+    }
 }
 
 fn proxy_alias(value: &str) -> String {
@@ -190,5 +209,22 @@ mod tests {
     #[test]
     fn ignores_wildcard_only_hosts() {
         assert!(parse("Host *.example.com\n User test\n", Path::new("/tmp")).is_empty());
+    }
+
+    #[test]
+    fn expands_home_using_the_home_paths_separator_style() {
+        assert_eq!(
+            expand_home("~/.ssh/id_ed25519", Path::new("/home/test")),
+            "/home/test/.ssh/id_ed25519"
+        );
+        assert_eq!(
+            expand_home("~/.ssh/id_ed25519", Path::new(r"C:\Users\test")),
+            r"C:\Users\test\.ssh\id_ed25519"
+        );
+        assert_eq!(expand_home("~", Path::new("/home/test")), "/home/test");
+        assert_eq!(
+            expand_home("/opt/keys/id_ed25519", Path::new("/home/test")),
+            "/opt/keys/id_ed25519"
+        );
     }
 }

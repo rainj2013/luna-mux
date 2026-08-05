@@ -178,6 +178,7 @@ pub fn run() {
             settings_save_ui_theme,
             settings_get_terminal,
             settings_save_terminal,
+            settings_list_system_fonts,
             settings_choose_terminal_background,
             settings_load_terminal_background,
             settings_get_app_icons,
@@ -188,6 +189,8 @@ pub fn run() {
             ai_settings_test,
             ai_command_generate,
             ai_command_analyze,
+            ai_command_history_list,
+            ai_command_history_clear,
             ai_diagnostics_get,
             ai_diagnostics_clear
         ])

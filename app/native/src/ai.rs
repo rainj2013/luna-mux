@@ -454,13 +454,25 @@ pub async fn generate_command(
             warnings.push(warning);
         }
     }
-    Ok(AiCommandSuggestion {
+    let suggestion = AiCommandSuggestion {
         command: parsed.command.trim().to_string(),
         explanation: parsed.explanation,
         assumptions: parsed.assumptions,
         warnings,
         risk_level,
-    })
+    };
+    let _ = db.add_ai_command_history(AiCommandHistoryEntry {
+        id: uuid::Uuid::new_v4().to_string(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+        requirement: requirement.to_string(),
+        shell: request.shell,
+        command: suggestion.command.clone(),
+        explanation: suggestion.explanation.clone(),
+        assumptions: suggestion.assumptions.clone(),
+        warnings: suggestion.warnings.clone(),
+        risk_level: suggestion.risk_level,
+    });
+    Ok(suggestion)
 }
 
 fn build_user_content(requirement: &str, terminal_context: Option<&str>) -> Result<String, String> {

@@ -16,6 +16,7 @@
     "test": "cargo test --manifest-path app/native/Cargo.toml"
   },
   "dependencies": {
+    "@fontsource/jetbrains-mono": "^5.2.8",
     "@tanstack/react-virtual": "^3.14.9",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-clipboard-manager": "^2.3.2",

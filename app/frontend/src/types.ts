@@ -168,6 +168,13 @@ export interface AiCommandSuggestion {
   riskLevel: AiRiskLevel
 }
 
+export interface AiCommandHistoryEntry extends AiCommandSuggestion {
+  id: string
+  createdAt: string
+  requirement: string
+  shell: AiShell
+}
+
 export interface AiRiskAssessment {
   riskLevel: AiRiskLevel
   warnings: string[]
@@ -214,8 +221,10 @@ export interface TerminalSettings {
   backgroundImageFit: TerminalBackgroundFit
 }
 
+export const BUNDLED_TERMINAL_FONT = '"JetBrains Mono", "SFMono-Regular", Consolas, monospace'
+
 export const DEFAULT_TERMINAL_SETTINGS: TerminalSettings = {
-  fontFamily: 'Cascadia Mono, SFMono-Regular, Consolas, monospace',
+  fontFamily: BUNDLED_TERMINAL_FONT,
   fontSize: 14,
   foregroundColor: '#e8eaed',
   backgroundColor: '#111315',
@@ -359,6 +368,8 @@ export interface AppApi {
     testSettings(settings: AiSettingsInput): Promise<void>
     generate(requirement: string, shell: AiShell, terminalContext?: string, redactTerminalContext?: boolean): Promise<AiCommandSuggestion>
     analyze(command: string): Promise<AiRiskAssessment>
+    listHistory(): Promise<AiCommandHistoryEntry[]>
+    clearHistory(): Promise<void>
     getLastExchange(): Promise<AiRawExchange | null>
     clearLastExchange(): Promise<void>
   }
@@ -375,6 +386,7 @@ export interface AppApi {
     saveUiTheme(theme: UiTheme): Promise<UiTheme>
     getTerminal(): Promise<TerminalSettings>
     saveTerminal(settings: TerminalSettings): Promise<TerminalSettings>
+    listSystemFonts(): Promise<string[]>
     chooseTerminalBackground(): Promise<string | null>
     loadTerminalBackground(path: string): Promise<string>
     getAppIcons(): Promise<AppIconSettings>

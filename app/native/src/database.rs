@@ -9,6 +9,8 @@ use uuid::Uuid;
 use crate::models::*;
 
 const AI_API_KEY_ACCOUNT: &str = "__ai_api_key__";
+const AI_COMMAND_HISTORY_KEY: &str = "aiCommandHistory";
+const AI_COMMAND_HISTORY_LIMIT: usize = 10;
 
 pub struct Database {
     connection: Mutex<Connection>,
@@ -527,6 +529,21 @@ impl Database {
         })
     }
 
+    pub fn list_ai_command_history(&self) -> Vec<AiCommandHistoryEntry> {
+        self.get_setting(AI_COMMAND_HISTORY_KEY, Vec::new())
+    }
+
+    pub fn add_ai_command_history(&self, entry: AiCommandHistoryEntry) -> Result<(), String> {
+        let mut history = self.list_ai_command_history();
+        history.insert(0, entry);
+        history.truncate(AI_COMMAND_HISTORY_LIMIT);
+        self.set_setting(AI_COMMAND_HISTORY_KEY, &history)
+    }
+
+    pub fn clear_ai_command_history(&self) -> Result<(), String> {
+        self.set_setting(AI_COMMAND_HISTORY_KEY, &Vec::<AiCommandHistoryEntry>::new())
+    }
+
     pub fn list_transfers(&self) -> Result<Vec<TransferTask>, String> {
         self.with_conn(|db| {
             let mut statement = db.prepare("SELECT id,sessionId,bookmarkId,direction,sourcePath,destinationPath,displayName,status,bytesTotal,bytesTransferred,speed,error,createdAt,updatedAt FROM transfers ORDER BY createdAt DESC LIMIT 500")?;
@@ -557,7 +574,7 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use super::Database;
-    use crate::models::{AuthType, BookmarkInput};
+    use crate::models::{AiCommandHistoryEntry, AiRiskLevel, AiShell, AuthType, BookmarkInput};
     use uuid::Uuid;
 
     fn input(name: &str, group_name: &str) -> BookmarkInput {
@@ -597,6 +614,45 @@ mod tests {
                 .collect::<Vec<_>>(),
             [third.id, first.id, second.id]
         );
+
+        drop(db);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("db-wal"));
+        let _ = std::fs::remove_file(path.with_extension("db-shm"));
+    }
+
+    #[test]
+    fn keeps_only_ten_most_recent_ai_commands() {
+        let path = std::env::temp_dir().join(format!("ssh-client-{}.db", Uuid::new_v4()));
+        let db = Database::open(&path, "ssh-client-ai-history-test").expect("open test database");
+        for index in 0..12 {
+            db.add_ai_command_history(AiCommandHistoryEntry {
+                id: index.to_string(),
+                created_at: format!("2026-08-05T00:00:{index:02}Z"),
+                requirement: format!("requirement {index}"),
+                shell: AiShell::Linux,
+                command: format!("command-{index}"),
+                explanation: String::new(),
+                assumptions: vec![],
+                warnings: vec![],
+                risk_level: AiRiskLevel::Low,
+            })
+            .expect("save history entry");
+        }
+
+        let history = db.list_ai_command_history();
+        assert_eq!(history.len(), 10);
+        assert_eq!(
+            history.first().map(|entry| entry.command.as_str()),
+            Some("command-11")
+        );
+        assert_eq!(
+            history.last().map(|entry| entry.command.as_str()),
+            Some("command-2")
+        );
+
+        db.clear_ai_command_history().expect("clear history");
+        assert!(db.list_ai_command_history().is_empty());
 
         drop(db);
         let _ = std::fs::remove_file(&path);

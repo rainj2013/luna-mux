@@ -1,9 +1,9 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     fs,
     io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, atomic::AtomicBool},
+    sync::{Arc, Mutex, OnceLock, atomic::AtomicBool},
     time::UNIX_EPOCH,
 };
 
@@ -764,15 +764,22 @@ pub fn settings_save_ui_theme(
 }
 #[tauri::command]
 pub fn settings_get_terminal(state: State<AppState>) -> TerminalSettings {
-    state
+    let mut settings = state
         .db
-        .get_setting("terminalSettings", TerminalSettings::default())
+        .get_setting("terminalSettings", TerminalSettings::default());
+    if settings.font_family == "Cascadia Mono, SFMono-Regular, Consolas, monospace" {
+        settings.font_family = TerminalSettings::default().font_family;
+    }
+    settings
 }
 #[tauri::command]
 pub fn settings_save_terminal(
     state: State<AppState>,
     mut settings: TerminalSettings,
 ) -> Result<TerminalSettings, String> {
+    if settings.font_family.trim().is_empty() {
+        settings.font_family = TerminalSettings::default().font_family;
+    }
     settings.font_size = settings.font_size.clamp(10, 32);
     settings.background_opacity = settings.background_opacity.clamp(0.1, 1.0);
     if !settings.background_image_path.is_empty()
@@ -782,6 +789,30 @@ pub fn settings_save_terminal(
     }
     state.db.set_setting("terminalSettings", &settings)?;
     Ok(settings)
+}
+
+fn system_monospace_fonts() -> &'static Vec<String> {
+    static FONTS: OnceLock<Vec<String>> = OnceLock::new();
+    FONTS.get_or_init(|| {
+        let mut database = fontdb::Database::new();
+        database.load_system_fonts();
+        database
+            .faces()
+            .filter(|face| face.monospaced)
+            .filter_map(|face| face.families.first().map(|(name, _)| name.trim()))
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    })
+}
+
+#[tauri::command]
+pub async fn settings_list_system_fonts() -> Vec<String> {
+    tauri::async_runtime::spawn_blocking(|| system_monospace_fonts().clone())
+        .await
+        .unwrap_or_default()
 }
 
 #[tauri::command]
@@ -821,6 +852,16 @@ pub async fn ai_command_generate(
 #[tauri::command]
 pub fn ai_command_analyze(command: String) -> Result<AiRiskAssessment, String> {
     ai::analyze_command(&command)
+}
+
+#[tauri::command]
+pub fn ai_command_history_list(state: State<AppState>) -> Vec<AiCommandHistoryEntry> {
+    state.db.list_ai_command_history()
+}
+
+#[tauri::command]
+pub fn ai_command_history_clear(state: State<AppState>) -> Result<(), String> {
+    state.db.clear_ai_command_history()
 }
 
 #[tauri::command]
@@ -1121,6 +1162,27 @@ pub async fn deployments_execute(
 fn profiles(state: &AppState) -> Vec<PortForwardProfile> {
     state.db.get_setting("portForwardProfiles", vec![])
 }
+
+fn generated_port_forward_name(profile: &PortForwardProfile) -> String {
+    let bind_port = if profile.bind_port == 0 {
+        "自动端口".to_string()
+    } else {
+        profile.bind_port.to_string()
+    };
+    let bind = format!("{}:{bind_port}", profile.bind_address);
+    match &profile.forward_type {
+        PortForwardType::Local => format!(
+            "本地 {bind} → {}:{}",
+            profile.target_host, profile.target_port
+        ),
+        PortForwardType::Remote => format!(
+            "远端 {bind} → {}:{}",
+            profile.target_host, profile.target_port
+        ),
+        PortForwardType::Dynamic => format!("SOCKS5 {bind}"),
+    }
+}
+
 #[tauri::command]
 pub fn tunnels_list_profiles(
     state: State<AppState>,
@@ -1142,13 +1204,16 @@ pub fn tunnels_save_profile(
     profile.name = profile.name.trim().into();
     profile.bind_address = profile.bind_address.trim().into();
     profile.target_host = profile.target_host.trim().into();
-    if profile.name.is_empty() || profile.bind_address.is_empty() {
-        return Err("请输入有效的端口转发名称和监听地址".into());
+    if profile.bind_address.is_empty() {
+        return Err("请输入有效的监听地址".into());
     }
     if profile.forward_type != PortForwardType::Dynamic
         && (profile.target_host.is_empty() || profile.target_port == 0)
     {
         return Err("请输入有效的目标地址和端口".into());
+    }
+    if profile.name.is_empty() {
+        profile.name = generated_port_forward_name(&profile);
     }
     let mut items = profiles(&state);
     items.retain(|item| item.id != profile.id);
