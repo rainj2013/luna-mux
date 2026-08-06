@@ -135,7 +135,7 @@ body.sidebar-item-dragging, body.sidebar-item-dragging * { cursor: grabbing !imp
 .icon-button.danger:hover:not(:disabled) { color: #fff; background: var(--danger); }
 .app-shell button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .icon-button:disabled { opacity: .35; cursor: default; }
-.search-box { margin: 0 11px 10px; height: 34px; padding: 0 9px; display: flex; align-items: center; gap: 7px; color: var(--text-muted); border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface-muted); }
+.search-box { margin: 0 11px 10px; height: 34px; padding: 0 9px; display: flex; align-items: center; gap: 7px; color: var(--text-muted); border: 1px solid var(--border-strong); border-radius: 4px; background: var(--surface-muted); }
 .search-box:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px var(--focus-ring); }
 .search-box input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; font-size: 13px; }
 .bookmark-list { min-height: 0; padding: 0 7px 10px; overflow: auto; }
@@ -173,7 +173,7 @@ body.sidebar-item-dragging, body.sidebar-item-dragging * { cursor: grabbing !imp
 .favorite-star { color: var(--warning); }
 .saved-key { color: var(--text-muted); }
 .sidebar-empty { height: 180px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--text-subtle); font-size: 12px; }
-.sidebar-context-menu { position: fixed; z-index: 80; width: 196px; padding: 5px; display: grid; gap: 1px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); box-shadow: 0 8px 24px var(--shadow); }
+.sidebar-context-menu { position: fixed; z-index: 80; width: 196px; padding: 4px; display: grid; gap: 1px; border: 1px solid var(--border-strong); border-radius: 5px; background: var(--surface); box-shadow: 0 8px 24px var(--shadow); }
 .sidebar-context-menu button { width: 100%; height: 31px; padding: 0 9px; display: grid; grid-template-columns: 19px minmax(0, 1fr); align-items: center; gap: 7px; color: var(--text); text-align: left; border: 0; border-radius: 4px; background: transparent; font-size: 12px; cursor: pointer; }
 .sidebar-context-menu button:hover:not(:disabled) { background: var(--surface-hover); }
 .sidebar-context-menu button:disabled { color: var(--text-subtle); cursor: default; }
@@ -182,13 +182,15 @@ body.sidebar-item-dragging, body.sidebar-item-dragging * { cursor: grabbing !imp
 
 .workspace { min-width: 0; min-height: 0; display: grid; grid-template-rows: 40px auto minmax(0, 1fr); background: var(--canvas); }
 .workspace.file-mode { grid-template-rows: 40px auto minmax(0, 1fr) 150px; }
-.tabbar { grid-row: 1; min-width: 0; display: flex; align-items: end; overflow-x: auto; overflow-y: hidden; background: var(--surface-muted); border-bottom: 1px solid var(--border); }
+.tabbar { grid-row: 1; min-width: 0; display: flex; align-items: end; overflow-x: auto; overflow-y: hidden; background: var(--surface-muted); border-bottom: 1px solid var(--border); scrollbar-width: thin; }
 .tab-sidebar-toggle { position: sticky; z-index: 3; left: 0; width: 40px; height: 40px; flex: none; border-right: 1px solid var(--border); border-radius: 0; background: var(--surface-muted); }
-.session-tab { flex: 0 1 210px; min-width: 130px; max-width: 230px; height: 36px; display: grid; grid-template-columns: minmax(0, 1fr) 30px; align-items: center; border-right: 1px solid var(--border); background: transparent; font-size: 12px; }
-.session-tab.active { color: var(--text-strong); background: var(--surface); border-top: 2px solid var(--accent); }
+.session-tab { position: relative; flex: 0 1 210px; min-width: 130px; max-width: 230px; height: 36px; display: grid; grid-template-columns: minmax(0, 1fr) 30px; align-items: center; border-right: 1px solid var(--border); background: transparent; font-size: 12px; transition: background-color .12s ease, color .12s ease; }
+.session-tab:not(.active):hover { background: var(--surface-hover); }
+.session-tab.active { z-index: 1; height: 37px; color: var(--text-strong); background: var(--surface-raised); border: 1px solid var(--border-strong); border-bottom-color: var(--surface-raised); box-shadow: inset 0 -3px 0 var(--accent); }
 .session-tab-select { min-width: 0; height: 100%; padding: 0 4px 0 10px; display: flex; align-items: center; gap: 7px; color: inherit; background: transparent; border: 0; cursor: pointer; }
 .session-tab-select > span:nth-child(2) { min-width: 0; flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; text-align: left; }
-.session-tab-close { width: 26px; height: 26px; padding: 0; display: grid; place-items: center; color: var(--text-muted); background: transparent; border: 0; border-radius: 4px; cursor: pointer; }
+.session-tab.active .session-tab-select > span:nth-child(2) { font-weight: 600; }
+.session-tab-close { width: 26px; height: 26px; padding: 0; display: grid; place-items: center; color: var(--text-subtle); background: transparent; border: 0; border-radius: 4px; cursor: pointer; }
 .session-tab-close:hover { color: var(--text-strong); background: var(--surface-hover); }
 .tab-add { flex: none; margin: 3px 5px; }
 .status-dot { width: 8px; height: 8px; flex: none; display: inline-block; border-radius: 50%; background: var(--text-subtle); }
@@ -206,7 +208,7 @@ body.sidebar-item-dragging, body.sidebar-item-dragging * { cursor: grabbing !imp
 .session-status { color: var(--text-muted); font-weight: 600; }
 .session-endpoint { min-width: 0; overflow: hidden; color: var(--text-muted); white-space: nowrap; text-overflow: ellipsis; font: 10px Consolas, monospace; }
 .session-toolbar .error-text { max-width: 42vw; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.view-switcher { align-self: stretch; flex: none; gap: 2px !important; padding: 2px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-hover); }
+.view-switcher { align-self: stretch; flex: none; gap: 2px !important; padding: 2px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface-hover); }
 .view-switcher button { min-width: 88px; padding: 0 10px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 0; border-radius: 4px; background: transparent; color: var(--text-muted); font-size: 11px; cursor: pointer; }
 .view-switcher button:hover { color: var(--text-strong); background: var(--surface-hover); }
 .view-switcher button.active { color: var(--text-strong); background: var(--surface); box-shadow: 0 1px 2px var(--shadow); font-weight: 600; }
@@ -331,7 +333,7 @@ body.sidebar-item-dragging, body.sidebar-item-dragging * { cursor: grabbing !imp
 .transfer-status.failed, .transfer-status.interrupted { color: var(--danger); }
 .transfer-actions { display: flex; justify-content: flex-end; }
 
-.primary-button, .secondary-button, .danger-button { min-height: 31px; padding: 0 13px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; border-radius: 5px; cursor: pointer; font-size: 12px; }
+.primary-button, .secondary-button, .danger-button { min-height: 31px; padding: 0 13px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; border-radius: 4px; cursor: pointer; font-size: 12px; }
 .primary-button { color: #fff; background: var(--primary); border: 1px solid var(--primary-border); box-shadow: inset 0 1px #ffffff18; }
 .primary-button:hover:not(:disabled) { background: var(--primary-hover); }
 .primary-button:disabled, .secondary-button:disabled, .danger-button:disabled { opacity: .55; cursor: default; }
@@ -346,7 +348,7 @@ body.sidebar-item-dragging, body.sidebar-item-dragging * { cursor: grabbing !imp
 
 .modal-backdrop { position: fixed; z-index: 100; inset: 0; display: grid; place-items: center; padding: 20px; background: var(--overlay); }
 .modal-backdrop.raised { z-index: 180; }
-.modal { width: min(500px, 100%); max-height: calc(100vh - 40px); overflow: auto; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface); box-shadow: 0 16px 48px var(--shadow); }
+.modal { width: min(500px, 100%); max-height: calc(100vh - 40px); overflow: auto; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); box-shadow: 0 16px 48px var(--shadow); }
 .modal.wide { width: min(760px, 100%); }
 .modal > header { height: 46px; padding: 0 12px 0 17px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); }
 .modal > header strong { font-size: 14px; }

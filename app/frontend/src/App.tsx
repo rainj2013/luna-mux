@@ -640,8 +640,8 @@ export function App(): React.JSX.Element {
           <button className="icon-button tab-sidebar-toggle" title={sidebarCollapsed ? '展开连接管理' : '折叠连接管理'} aria-label={sidebarCollapsed ? '展开连接管理' : '折叠连接管理'} aria-expanded={!sidebarCollapsed} onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}>
             {sidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
           </button>
-          {tabs.map((tab) => { const bookmark = bookmarkMap.get(tab.bookmarkId); return <div key={tab.key} className={`session-tab ${tab.key === activeKey ? 'active' : ''}`}>
-            <button className="session-tab-select" title={bookmark ? `${tabLabel(tab, bookmark)} · ${bookmark.username}@${bookmark.host}:${bookmark.port}` : undefined} onClick={() => setActiveKey(tab.key)} onAuxClick={(event) => { if (event.button === 1) closeTab(tab) }}><span className={`status-dot ${tab.status}`} /><span>{tabLabel(tab, bookmark)}</span></button>
+          {tabs.map((tab) => { const bookmark = bookmarkMap.get(tab.bookmarkId); const label = tabLabel(tab, bookmark); const endpoint = bookmark ? `${bookmark.username}@${bookmark.host}:${bookmark.port}` : ''; return <div key={tab.key} className={`session-tab ${tab.key === activeKey ? 'active' : ''}`}>
+            <button className="session-tab-select" title={bookmark ? `${label} · ${endpoint}` : label} onClick={() => setActiveKey(tab.key)} onAuxClick={(event) => { if (event.button === 1) closeTab(tab) }}><span className={`status-dot ${tab.status}`} /><span title={label}>{label}</span></button>
             <button className="session-tab-close" title="关闭会话" aria-label={`关闭 ${bookmark?.name ?? '会话'}`} onClick={() => closeTab(tab)}><X size={14} /></button>
           </div> })}
           <button className="icon-button tab-add" title="新增连接" onClick={() => setBookmarkDialog('new')}><CirclePlus size={17} /></button>
