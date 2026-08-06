@@ -1,11 +1,11 @@
 [package]
 name = "ssh-client"
 version = "0.1.0"
-description = "Tauri desktop shell for SSH Client"
+description = "Tauri desktop shell for Luna Remote"
 edition = "2024"
 
 [lib]
-name = "ssh_client"
+name = "ssh_client_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
@@ -35,7 +35,7 @@ tauri-plugin-clipboard-manager = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 thiserror = "2"
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["io"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 url = "2"

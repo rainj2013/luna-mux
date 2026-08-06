@@ -1,4 +1,4 @@
-# SSH Client
+# Luna Remote
 
 基于 Tauri 2、React、xterm.js 和 Rust 的跨平台 SSH/SFTP 桌面客户端，支持 macOS 和 Windows。
 
@@ -76,7 +76,7 @@ npm run build:mac
 校验 DMG：
 
 ```bash
-hdiutil verify "app/native/target/release/bundle/dmg/SSH Client_<version>_aarch64.dmg"
+hdiutil verify "app/native/target/release/bundle/dmg/Luna Remote_<version>_aarch64.dmg"
 ```
 
 Windows x64 构建普通 NSIS 安装包：

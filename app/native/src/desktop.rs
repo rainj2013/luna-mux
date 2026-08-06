@@ -33,14 +33,14 @@ pub fn menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let toggle_sidebar = MenuItemBuilder::with_id("toggle-sidebar", "展开/折叠连接管理")
         .accelerator("CmdOrCtrl+B")
         .build(app)?;
-    let help = MenuItemBuilder::with_id("help", "SSH Client 使用帮助")
+    let help = MenuItemBuilder::with_id("help", "Luna Remote 使用帮助")
         .accelerator("F1")
         .build(app)?;
 
-    let application = SubmenuBuilder::new(app, "SSH Client")
+    let application = SubmenuBuilder::new(app, "Luna Remote")
         .item(&PredefinedMenuItem::about(
             app,
-            Some("关于 SSH Client"),
+            Some("关于 Luna Remote"),
             None,
         )?)
         .separator()
@@ -48,11 +48,11 @@ pub fn menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         .separator()
         .item(&PredefinedMenuItem::services(app, Some("服务"))?)
         .separator()
-        .item(&PredefinedMenuItem::hide(app, Some("隐藏 SSH Client"))?)
+        .item(&PredefinedMenuItem::hide(app, Some("隐藏 Luna Remote"))?)
         .item(&PredefinedMenuItem::hide_others(app, Some("隐藏其他"))?)
         .item(&PredefinedMenuItem::show_all(app, Some("全部显示"))?)
         .separator()
-        .item(&PredefinedMenuItem::quit(app, Some("退出 SSH Client"))?)
+        .item(&PredefinedMenuItem::quit(app, Some("退出 Luna Remote"))?)
         .build()?;
     let connection = SubmenuBuilder::new(app, "连接")
         .item(&new_connection)

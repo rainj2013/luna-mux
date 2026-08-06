@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "SSH Client",
+  "productName": "Luna Remote",
   "version": "0.1.0",
   "identifier": "com.local.sshclient",
   "build": {
@@ -14,7 +14,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "SSH Client",
+        "title": "Luna Remote",
         "width": 1360,
         "height": 860,
         "minWidth": 980,

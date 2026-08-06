@@ -4,5 +4,5 @@
 )]
 
 fn main() {
-    ssh_client::run();
+    ssh_client_lib::run();
 }

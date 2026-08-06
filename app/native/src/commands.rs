@@ -588,7 +588,7 @@ pub async fn bookmarks_export_archive(
         .file()
         .set_title("导出连接备份")
         .set_file_name(default)
-        .add_filter("SSH Client 连接备份", &["json"])
+        .add_filter("Luna Remote 连接备份", &["json"])
         .save_file(move |path| {
             let _ = sender.send(path);
         });
@@ -643,7 +643,7 @@ pub async fn bookmarks_import_archive(
     app.dialog()
         .file()
         .set_title("导入连接备份")
-        .add_filter("SSH Client 连接备份", &["json"])
+        .add_filter("Luna Remote 连接备份", &["json"])
         .pick_file(move |path| {
             let _ = sender.send(path);
         });
@@ -1334,7 +1334,7 @@ pub async fn diagnostics_export(
         })
         .map(|task| task.bytes_transferred)
         .sum::<u64>();
-    let value = json!({"generatedAt":Utc::now().to_rfc3339(),"application":{"name":"SSH Client","version":env!("CARGO_PKG_VERSION"),"platform":platform(),"arch":std::env::consts::ARCH,"runtime":"Tauri 2"},"connections":connections,"sessions":state.sessions.list(),"transfers":{"total":transfers.len(),"byStatus":by_status,"activeBytes":active_bytes},"portForwardProfileCount":profiles(&state).len()});
+    let value = json!({"generatedAt":Utc::now().to_rfc3339(),"application":{"name":"Luna Remote","version":env!("CARGO_PKG_VERSION"),"platform":platform(),"arch":std::env::consts::ARCH,"runtime":"Tauri 2"},"connections":connections,"sessions":state.sessions.list(),"transfers":{"total":transfers.len(),"byStatus":by_status,"activeBytes":active_bytes},"portForwardProfileCount":profiles(&state).len()});
     fs::write(
         &path,
         format!(

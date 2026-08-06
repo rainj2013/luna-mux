@@ -532,28 +532,48 @@ impl SessionManager {
         mut reader: russh::ChannelReadHalf,
     ) {
         let mut decoder = Utf8Decoder::default();
+        let session_id = active.summary().id;
         while let Some(message) = reader.wait().await {
             while active.paused.load(Ordering::Acquire) && !active.closing.load(Ordering::Acquire) {
                 active.resume.notified().await;
             }
-            match message {
-                ChannelMsg::Data { data } | ChannelMsg::ExtendedData { data, .. } => {
-                    let text = decoder.push(&data);
-                    if !text.is_empty() {
-                        self.emit(AppEvent::TerminalData(TerminalData {
-                            session_id: active.summary().id,
-                            data: text,
-                        }));
+            let mut should_break = false;
+            let mut batch = String::new();
+            let deadline = tokio::time::Instant::now() + Duration::from_millis(16);
+            let mut pending = Some(message);
+            while let Some(current) = pending.take() {
+                match current {
+                    ChannelMsg::Data { data } | ChannelMsg::ExtendedData { data, .. } => {
+                        batch.push_str(&decoder.push(&data))
                     }
+                    ChannelMsg::Close | ChannelMsg::Eof => {
+                        should_break = true;
+                        break;
+                    }
+                    _ => {}
                 }
-                ChannelMsg::Close | ChannelMsg::Eof => break,
-                _ => {}
+                if batch.len() >= 32 * 1024 {
+                    break;
+                }
+                match tokio::time::timeout_at(deadline, reader.wait()).await {
+                    Ok(next) => pending = next,
+                    Err(_) => break,
+                }
+            }
+            if !batch.is_empty() {
+                self.emit(AppEvent::TerminalData(TerminalData {
+                    session_id: session_id.clone(),
+                    data: batch,
+                }));
+            }
+            if should_break {
+                break;
             }
         }
         let tail = decoder.finish();
         if !tail.is_empty() {
             self.emit(AppEvent::TerminalData(TerminalData {
-                session_id: active.summary().id,
+                session_id: session_id.clone(),
                 data: tail,
             }));
         }
@@ -563,7 +583,7 @@ impl SessionManager {
             self.sessions
                 .write()
                 .expect("sessions lock")
-                .remove(&active.summary().id);
+                .remove(&session_id);
         }
     }
 
@@ -616,15 +636,19 @@ impl SessionManager {
         let active = self.get(id)?;
         active.closing.store(true, Ordering::Release);
         active.resume.notify_waiters();
-        if let Some(shell) = active.shell.lock().await.as_ref() {
+        let shell = active.shell.lock().await.take();
+        let handle = active.handle.lock().await.take();
+        let jump_handle = active.jump_handle.lock().await.take();
+        let _sftp = active.sftp.lock().await.take();
+        if let Some(shell) = shell.as_ref() {
             let _ = shell.close().await;
         }
-        if let Some(handle) = active.handle.lock().await.as_ref() {
+        if let Some(handle) = handle.as_ref() {
             let _ = handle
                 .disconnect(Disconnect::ByApplication, "", "English")
                 .await;
         }
-        if let Some(handle) = active.jump_handle.lock().await.as_ref() {
+        if let Some(handle) = jump_handle.as_ref() {
             let _ = handle
                 .disconnect(Disconnect::ByApplication, "", "English")
                 .await;
@@ -797,7 +821,9 @@ impl SessionManager {
     ) -> Result<Vec<DirectoryEntry>, RemoteExecError> {
         let encoded_path = STANDARD.encode(path.as_bytes());
         let command = format!(
-            "python3 -c {} {}",
+            "if command -v python3 >/dev/null 2>&1; then python3 -c {} {}; elif command -v python >/dev/null 2>&1; then python -c {} {}; else exit 127; fi",
+            shell_quote(REMOTE_LIST_SCRIPT),
+            shell_quote(&encoded_path),
             shell_quote(REMOTE_LIST_SCRIPT),
             shell_quote(&encoded_path)
         );

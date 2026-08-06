@@ -597,7 +597,7 @@ export function App(): React.JSX.Element {
 
   return <div className={`app-shell platform-${window.api.platform}`} data-theme={resolvedUiTheme} data-theme-mode={activeThemeMode}>
     <header className="titlebar" data-tauri-drag-region="deep">
-      <div className="app-brand">{selectedAppIcon ? <img className="app-logo" src={selectedAppIcon.dataUrl} alt="" /> : <span className="app-logo app-logo-fallback">&gt;_</span>}<span>SSH Client</span></div>
+      <div className="app-brand">{selectedAppIcon ? <img className="app-logo" src={selectedAppIcon.dataUrl} alt="" /> : <span className="app-logo app-logo-fallback">&gt;_</span>}<span>Luna Remote</span></div>
       <span className="titlebar-spacer" />
       <button className="icon-button titlebar-help" title="帮助 (F1)" aria-label="帮助" onClick={() => setHelpDialog(true)}><CircleHelp size={18} /></button>
       <button className="icon-button titlebar-settings" title="设置" aria-label="设置" onClick={() => openSettings()}><SettingsIcon size={18} /></button>

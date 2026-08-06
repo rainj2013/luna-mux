@@ -195,7 +195,7 @@ pub fn run() {
             ai_diagnostics_clear
         ])
         .build(tauri::generate_context!())
-        .expect("failed to build SSH Client")
+        .expect("failed to build Luna Remote")
         .run(|app, event| match event {
             RunEvent::ExitRequested { api, code, .. } => {
                 let state = app.state::<AppState>();

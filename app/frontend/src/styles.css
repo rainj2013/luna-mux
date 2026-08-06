@@ -106,6 +106,7 @@ button { color: inherit; }
   color-scheme: dark;
 }
 .app-shell input, .app-shell select, .app-shell textarea { color: var(--text); background-color: var(--input-bg); }
+.app-shell select { appearance: none; -webkit-appearance: none; padding-right: 28px; background-image: linear-gradient(45deg, transparent 50%, var(--text-muted) 50%), linear-gradient(135deg, var(--text-muted) 50%, transparent 50%); background-position: calc(100% - 14px) 50%, calc(100% - 10px) 50%; background-size: 4px 4px, 4px 4px; background-repeat: no-repeat; }
 .app-shell ::selection { color: var(--text-strong); background: var(--accent-surface); }
 .titlebar { position: relative; display: flex; align-items: center; padding: 0 16px; background: var(--surface); border-bottom: 1px solid var(--border); user-select: none; }
 .titlebar .titlebar-help, .titlebar .titlebar-settings { flex: none; }
@@ -738,3 +739,18 @@ body.sidebar-item-dragging, body.sidebar-item-dragging * { cursor: grabbing !imp
 }
 
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; } }
+
+/* Keep select controls recognizable across WebView2 and WebKit.  This rule
+   intentionally lives last so later background shorthands cannot erase the
+   custom arrow. */
+.app-shell select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 30px !important;
+  background-color: var(--input-bg) !important;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-muted) 50%), linear-gradient(135deg, var(--text-muted) 50%, transparent 50%) !important;
+  background-position: calc(100% - 15px) 50%, calc(100% - 11px) 50% !important;
+  background-size: 4px 4px, 4px 4px !important;
+  background-repeat: no-repeat !important;
+}
+.app-shell select:hover:not(:disabled) { border-color: var(--accent); }

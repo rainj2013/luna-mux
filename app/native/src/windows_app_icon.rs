@@ -103,7 +103,11 @@ fn update_matching_shortcuts_initialized(
                 .is_some_and(|value| value.eq_ignore_ascii_case("lnk"))
                 && path
                     .file_stem()
-                    .is_some_and(|value| value.eq_ignore_ascii_case("SSH Client"))
+                    .is_some_and(|value| {
+                        value.eq_ignore_ascii_case("Luna Remote")
+                            || value.eq_ignore_ascii_case("RainSSH")
+                            || value.eq_ignore_ascii_case("SSH Client")
+                    })
         })
     {
         if let Err(error) = update_shortcut(&shortcut, current_exe, icon_path) {

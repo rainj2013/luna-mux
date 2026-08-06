@@ -8,5 +8,18 @@ export default defineConfig({
   plugins: [react()],
   server: { port: 1420, strictPort: true },
   envPrefix: ['VITE_', 'TAURI_'],
-  build: { outDir: resolve('app/frontend/dist'), emptyOutDir: true }
+  build: {
+    outDir: resolve('app/frontend/dist'),
+    emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          react: ['react', 'react-dom'],
+          tauri: ['@tauri-apps/api', '@tauri-apps/plugin-clipboard-manager', '@tauri-apps/plugin-dialog', '@tauri-apps/plugin-opener'],
+          terminal: ['@xterm/xterm', '@xterm/addon-fit', '@xterm/addon-search', '@xterm/addon-web-links', '@xterm/addon-webgl'],
+          icons: ['lucide-react']
+        }
+      }
+    }
+  }
 })
