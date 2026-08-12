@@ -4,5 +4,5 @@
 )]
 
 fn main() {
-    luna_remote_lib::run();
+    luna_mux_lib::run();
 }

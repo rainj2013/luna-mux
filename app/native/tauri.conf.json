@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Luna Remote",
-  "version": "1.0.1",
-  "identifier": "com.local.lunaremote",
+  "productName": "Luna Mux",
+  "version": "0.1.0",
+  "identifier": "com.luna.mux",
   "build": {
     "beforeDevCommand": "npm run web:dev",
     "devUrl": "http://127.0.0.1:1420",
@@ -14,26 +14,42 @@
     "windows": [
       {
         "label": "main",
-        "title": "Luna Remote",
+        "title": "Luna Mux",
         "width": 1360,
         "height": 860,
         "minWidth": 980,
         "minHeight": 640,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
-        "trafficLightPosition": { "x": 16, "y": 13 },
+        "trafficLightPosition": {
+          "x": 16,
+          "y": 13
+        },
         "dragDropEnabled": true
       }
     ],
-    "security": { "csp": "default-src 'self'; img-src 'self' asset: data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost ws://localhost:1420 ws://127.0.0.1:1420; script-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'none'" }
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' asset: data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost ws://localhost:1420 ws://127.0.0.1:1420; script-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'none'"
+    }
   },
   "bundle": {
     "active": true,
-    "targets": ["dmg", "nsis"],
+    "targets": [
+      "dmg",
+      "nsis"
+    ],
     "category": "DeveloperTool",
-    "shortDescription": "Cross-platform SSH and SFTP desktop client",
-    "icon": ["../../assets/icons/ssh.png", "../../assets/icons/ssh.icns", "../../assets/icons/ssh.ico"],
+    "shortDescription": "A local and remote terminal workspace for coding agents",
+    "icon": [
+      "../../assets/icons/ssh.png",
+      "../../assets/icons/ssh.icns",
+      "../../assets/icons/ssh.ico"
+    ],
     "createUpdaterArtifacts": false,
-    "windows": { "webviewInstallMode": { "type": "downloadBootstrapper" } }
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      }
+    }
   }
 }

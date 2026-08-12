@@ -1,7 +1,7 @@
 {
-  "name": "luna-remote",
-  "version": "1.0.1",
-  "description": "Cross-platform SSH and SFTP desktop client",
+  "name": "luna-mux",
+  "version": "0.1.0",
+  "description": "A local and remote terminal workspace for coding agents",
   "license": "MIT",
   "type": "module",
   "scripts": {
@@ -12,9 +12,11 @@
     "build:win:offline": "tauri build --bundles nsis --config app/native/tauri.windows-offline.conf.json",
     "web:dev": "vite --host 127.0.0.1",
     "web:build": "vite build",
+    "product:sync": "node scripts/sync-product.mjs",
+    "product:check": "node scripts/sync-product.mjs --check",
     "i18n:check": "node scripts/check-i18n.mjs",
     "typecheck": "tsc --noEmit",
-    "check": "npm run i18n:check && npm run typecheck && cargo check --manifest-path app/native/Cargo.toml",
+    "check": "npm run product:check && npm run i18n:check && npm run typecheck && cargo check --manifest-path app/native/Cargo.toml",
     "test": "cargo test --manifest-path app/native/Cargo.toml"
   },
   "dependencies": {

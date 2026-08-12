@@ -6,6 +6,7 @@ import { SftpPane } from './components/SftpPane'
 import { HelpDialog } from './components/HelpDialog'
 import { colorWithOpacity, terminalBackgroundStyle } from './terminal-style'
 import { availableLanguages, getNativeMenuLabels, useI18n, type MessageKey } from './i18n'
+import { PRODUCT_INFO } from './product-info'
 
 interface WorkspaceTab { key: string; bookmarkId: string; sessionId?: string; status: SessionStatus; error?: string }
 interface ConnectionTarget { newSession?: boolean; tabKey?: string }
@@ -605,7 +606,7 @@ export function App(): React.JSX.Element {
 
   return <div className={`app-shell platform-${window.api.platform}`} data-theme={resolvedUiTheme} data-theme-mode={activeThemeMode}>
     <header className="titlebar" data-tauri-drag-region="deep">
-      <div className="app-brand">{selectedAppIcon ? <img className="app-logo" src={selectedAppIcon.dataUrl} alt="" /> : <span className="app-logo app-logo-fallback">&gt;_</span>}<span>Luna Remote</span></div>
+      <div className="app-brand">{selectedAppIcon ? <img className="app-logo" src={selectedAppIcon.dataUrl} alt="" /> : <span className="app-logo app-logo-fallback">&gt;_</span>}<span>{PRODUCT_INFO.displayName}</span></div>
       <span className="titlebar-spacer" />
       <button className="icon-button titlebar-help" title={t('app.helpF1')} aria-label={t('app.help')} onClick={() => setHelpDialog(true)}><CircleHelp size={18} /></button>
       <button className="icon-button titlebar-settings" title={t('common.settings')} aria-label={t('common.settings')} onClick={() => openSettings()}><SettingsIcon size={18} /></button>

@@ -16,11 +16,11 @@ use tauri_plugin_opener::OpenerExt;
 use uuid::Uuid;
 
 use crate::{
-    ai, app_icon, database::Database, desktop, models::*, sessions::SessionManager, ssh_config,
-    transfers::TransferManager, tunnels::TunnelManager,
+    ai, app_icon, database::Database, desktop, models::*, product, sessions::SessionManager,
+    ssh_config, transfers::TransferManager, tunnels::TunnelManager,
 };
 
-const CONNECTION_ARCHIVE_FORMAT: &str = "luna-remote-connections";
+const LUNA_REMOTE_CONNECTION_ARCHIVE_FORMAT: &str = "luna-remote-connections";
 const LEGACY_CONNECTION_ARCHIVE_FORMAT: &str = "ssh-client-connections";
 
 pub struct AppState {
@@ -583,7 +583,8 @@ pub async fn bookmarks_export_archive(
     state: State<'_, AppState>,
 ) -> Result<Option<String>, String> {
     let default = format!(
-        "luna-remote-connections-{}.json",
+        "{}-connections-{}.json",
+        product::PRODUCT_KEY,
         Utc::now().format("%Y-%m-%d")
     );
     let (sender, receiver) = tokio::sync::oneshot::channel();
@@ -591,7 +592,7 @@ pub async fn bookmarks_export_archive(
         .file()
         .set_title("导出连接备份")
         .set_file_name(default)
-        .add_filter("Luna Remote 连接备份", &["json"])
+        .add_filter(format!("{} 连接备份", product::DISPLAY_NAME), &["json"])
         .save_file(move |path| {
             let _ = sender.send(path);
         });
@@ -620,7 +621,7 @@ pub async fn bookmarks_export_archive(
         })
         .collect();
     let archive = BookmarkArchive {
-        format: CONNECTION_ARCHIVE_FORMAT.into(),
+        format: product::CONNECTION_ARCHIVE_FORMAT.into(),
         version: 1,
         exported_at: Utc::now().to_rfc3339(),
         groups: state.db.list_bookmark_groups()?,
@@ -646,7 +647,7 @@ pub async fn bookmarks_import_archive(
     app.dialog()
         .file()
         .set_title("导入连接备份")
-        .add_filter("Luna Remote 连接备份", &["json"])
+        .add_filter(format!("{} 连接备份", product::DISPLAY_NAME), &["json"])
         .pick_file(move |path| {
             let _ = sender.send(path);
         });
@@ -660,7 +661,8 @@ pub async fn bookmarks_import_archive(
     let archive: BookmarkArchive =
         serde_json::from_str(&fs::read_to_string(&path).map_err(|e| e.to_string())?)
             .map_err(|e| format!("连接备份格式无效：{e}"))?;
-    if (archive.format != CONNECTION_ARCHIVE_FORMAT
+    if (archive.format != product::CONNECTION_ARCHIVE_FORMAT
+        && archive.format != LUNA_REMOTE_CONNECTION_ARCHIVE_FORMAT
         && archive.format != LEGACY_CONNECTION_ARCHIVE_FORMAT)
         || archive.version != 1
     {
@@ -1331,7 +1333,8 @@ pub async fn diagnostics_export(
     state: State<'_, AppState>,
 ) -> Result<Option<String>, String> {
     let default = format!(
-        "luna-remote-diagnostics-{}.json",
+        "{}-diagnostics-{}.json",
+        product::PRODUCT_KEY,
         Utc::now().format("%Y-%m-%dT%H-%M-%S")
     );
     let (sender, receiver) = tokio::sync::oneshot::channel();
@@ -1368,7 +1371,7 @@ pub async fn diagnostics_export(
         })
         .map(|task| task.bytes_transferred)
         .sum::<u64>();
-    let value = json!({"generatedAt":Utc::now().to_rfc3339(),"application":{"name":"Luna Remote","version":env!("CARGO_PKG_VERSION"),"platform":platform(),"arch":std::env::consts::ARCH,"runtime":"Tauri 2"},"connections":connections,"sessions":state.sessions.list(),"transfers":{"total":transfers.len(),"byStatus":by_status,"activeBytes":active_bytes},"portForwardProfileCount":profiles(&state).len()});
+    let value = json!({"generatedAt":Utc::now().to_rfc3339(),"application":{"name":product::DISPLAY_NAME,"version":env!("CARGO_PKG_VERSION"),"platform":platform(),"arch":std::env::consts::ARCH,"runtime":"Tauri 2"},"connections":connections,"sessions":state.sessions.list(),"transfers":{"total":transfers.len(),"byStatus":by_status,"activeBytes":active_bytes},"portForwardProfileCount":profiles(&state).len()});
     fs::write(
         &path,
         format!(

@@ -1,0 +1,73 @@
+# Luna Mux Development Progress
+
+This is the durable development checkpoint. Update it in every development session that changes implementation status. `DEVELOPMENT_TASKS.md` remains the authoritative task inventory; this file records the current focus, decisions, evidence, and handoff.
+
+## Current checkpoint
+
+- Date: 2026-08-12
+- Phase: M0 - Independent product foundation
+- Active task: none; M0.6 is the next planned implementation task
+- Overall state: repository foundation complete; product development not started
+- Baseline Luna Remote commit: `7ccc61f0bb1ea7ffb74556c1fe207e802bfbfd2f`
+- Luna Mux repository: `D:\code\luna-mux`
+- Luna Remote source repository: `D:\code\ssh_tools`
+
+## Completed
+
+- Created an independent Git repository while preserving Luna Remote history.
+- Configured Luna Remote as fetch-only `upstream`; disabled upstream push and branch tracking.
+- Confirmed the Luna Remote source working tree was clean before cloning.
+- Locked product name and identifiers to Luna Mux / `luna-mux` / `com.luna.mux`.
+- Added `product/product.json` and generated identity entry points for frontend, Rust, manifests, HTML, and release workflow metadata.
+- Isolated the database and credential namespace; startup performs no automatic Luna Remote data or credential migration.
+- Preserved Luna Remote and older connection archive formats only as explicit file-import compatibility.
+- Added the approved design, ordered development tasks, progress checkpoint, and upstream sync ledger.
+
+## In progress
+
+- No implementation task is active at this checkpoint.
+- Full Rust compilation is waiting on the Windows native build prerequisites described below.
+
+## Next actions
+
+1. Install or configure NASM and CMake, then run `cargo check` and the Rust tests on Windows.
+2. Implement M0.6 as an explicit, read-only Luna Remote import flow with a transactional Luna Mux write boundary.
+3. Begin M1.1 after the M0.6 acceptance gate is green.
+
+## Verification evidence
+
+| Check | Result | Date |
+| --- | --- | --- |
+| Source repository clean before clone | Passed | 2026-08-12 |
+| New repository retains baseline history | Passed (`7ccc61f`) | 2026-08-12 |
+| Upstream push disabled | Passed | 2026-08-12 |
+| `npm run product:check` | Passed | 2026-08-12 |
+| `npm run i18n:check` | Passed | 2026-08-12 |
+| `npm run typecheck` | Passed | 2026-08-12 |
+| `npm run web:build` | Passed | 2026-08-12 |
+| `cargo metadata --manifest-path app/native/Cargo.toml --no-deps` | Passed | 2026-08-12 |
+| `cargo fmt --manifest-path app/native/Cargo.toml -- --check` | Passed | 2026-08-12 |
+| `cargo check --manifest-path app/native/Cargo.toml` | Blocked before project compilation: `aws-lc-sys` requires NASM; its no-assembly path requires CMake, neither available in the current environment | 2026-08-12 |
+| `git diff --check` | Passed | 2026-08-12 |
+
+## Decision log
+
+| Date | Decision |
+| --- | --- |
+| 2026-08-12 | Luna Mux is an independent product and repository, not a Luna Remote feature branch. |
+| 2026-08-12 | Windows and macOS are both first-release platforms. Distribution signing is out of scope. |
+| 2026-08-12 | Local and SSH terminals share one TerminalPane and differ only through capabilities. |
+| 2026-08-12 | Agents stop when Luna Mux exits; a thin SessionBackend preserves a future daemon extension point. |
+| 2026-08-12 | Browser runs locally; remote development services use SSH local forwarding. |
+| 2026-08-12 | Luna Remote updates are selectively ported by commit into in-repository core boundaries. |
+
+## Session update protocol
+
+For every future implementation session:
+
+1. Read this file and the active milestone in `DEVELOPMENT_TASKS.md` before editing.
+2. Mark exactly one primary task `IN_PROGRESS` unless parallel work is explicitly recorded.
+3. Record material decisions immediately in the decision log.
+4. Add verification commands and outcomes before marking a task `DONE`.
+5. Update Current checkpoint, Completed, In progress, and Next actions before ending the session.
+6. Never mark work complete solely because code was written; acceptance evidence is required.

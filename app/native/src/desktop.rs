@@ -6,7 +6,10 @@ use tauri::{
     menu::{Menu, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder},
 };
 
-use crate::models::{AppEvent, MenuCommand, NativeMenuLabels};
+use crate::{
+    models::{AppEvent, MenuCommand, NativeMenuLabels},
+    product,
+};
 
 #[cfg(target_os = "macos")]
 pub fn menu<R: Runtime>(app: &AppHandle<R>, labels: &NativeMenuLabels) -> tauri::Result<Menu<R>> {
@@ -38,7 +41,7 @@ pub fn menu<R: Runtime>(app: &AppHandle<R>, labels: &NativeMenuLabels) -> tauri:
         .accelerator("F1")
         .build(app)?;
 
-    let application = SubmenuBuilder::new(app, "Luna Remote")
+    let application = SubmenuBuilder::new(app, product::DISPLAY_NAME)
         .item(&PredefinedMenuItem::about(
             app,
             Some(labels.about.as_str()),

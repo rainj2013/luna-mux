@@ -630,8 +630,13 @@ mod tests {
 
     #[test]
     fn persists_manual_bookmark_order() {
-        let path = std::env::temp_dir().join(format!("luna-remote-{}.db", Uuid::new_v4()));
-        let db = Database::open(&path, "luna-remote-order-test").expect("open test database");
+        let path = std::env::temp_dir().join(format!(
+            "{}-{}.db",
+            crate::product::PRODUCT_KEY,
+            Uuid::new_v4()
+        ));
+        let credential_service = format!("{}.order-test", crate::product::CREDENTIAL_SERVICE);
+        let db = Database::open(&path, &credential_service).expect("open test database");
         let first = db.save_bookmark(input("First", "A")).expect("save first");
         let second = db.save_bookmark(input("Second", "A")).expect("save second");
         let third = db.save_bookmark(input("Third", "B")).expect("save third");
@@ -655,8 +660,13 @@ mod tests {
 
     #[test]
     fn keeps_only_ten_most_recent_ai_commands() {
-        let path = std::env::temp_dir().join(format!("luna-remote-{}.db", Uuid::new_v4()));
-        let db = Database::open(&path, "luna-remote-ai-history-test").expect("open test database");
+        let path = std::env::temp_dir().join(format!(
+            "{}-{}.db",
+            crate::product::PRODUCT_KEY,
+            Uuid::new_v4()
+        ));
+        let credential_service = format!("{}.ai-history-test", crate::product::CREDENTIAL_SERVICE);
+        let db = Database::open(&path, &credential_service).expect("open test database");
         for index in 0..12 {
             db.add_ai_command_history(AiCommandHistoryEntry {
                 id: index.to_string(),
@@ -694,8 +704,13 @@ mod tests {
 
     #[test]
     fn persists_and_manages_bookmark_groups() {
-        let path = std::env::temp_dir().join(format!("luna-remote-groups-{}.db", Uuid::new_v4()));
-        let db = Database::open(&path, "luna-remote-groups-test").expect("open test database");
+        let path = std::env::temp_dir().join(format!(
+            "{}-groups-{}.db",
+            crate::product::PRODUCT_KEY,
+            Uuid::new_v4()
+        ));
+        let credential_service = format!("{}.groups-test", crate::product::CREDENTIAL_SERVICE);
+        let db = Database::open(&path, &credential_service).expect("open test database");
         let ungrouped = db
             .save_bookmark(input("Ungrouped", ""))
             .expect("save ungrouped");
@@ -709,7 +724,7 @@ mod tests {
         );
         drop(db);
 
-        let db = Database::open(&path, "luna-remote-groups-test").expect("reopen test database");
+        let db = Database::open(&path, &credential_service).expect("reopen test database");
         assert_eq!(
             db.list_bookmark_groups().expect("list persisted groups"),
             ["", "A", "Empty"]
@@ -759,9 +774,13 @@ mod tests {
 
     #[test]
     fn allows_renaming_and_deleting_ungrouped() {
-        let path =
-            std::env::temp_dir().join(format!("luna-remote-ungrouped-{}.db", Uuid::new_v4()));
-        let db = Database::open(&path, "luna-remote-ungrouped-test").expect("open test database");
+        let path = std::env::temp_dir().join(format!(
+            "{}-ungrouped-{}.db",
+            crate::product::PRODUCT_KEY,
+            Uuid::new_v4()
+        ));
+        let credential_service = format!("{}.ungrouped-test", crate::product::CREDENTIAL_SERVICE);
+        let db = Database::open(&path, &credential_service).expect("open test database");
         let first = db.save_bookmark(input("First", "")).expect("save first");
         assert_eq!(
             db.rename_bookmark_group("", "Default")
@@ -789,7 +808,11 @@ mod tests {
 
     #[test]
     fn migrates_bookmark_sort_order_from_version_five() {
-        let path = std::env::temp_dir().join(format!("luna-remote-v5-{}.db", Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!(
+            "{}-v5-{}.db",
+            crate::product::PRODUCT_KEY,
+            Uuid::new_v4()
+        ));
         let connection = rusqlite::Connection::open(&path).expect("create old database");
         connection
             .execute_batch(
@@ -811,7 +834,8 @@ mod tests {
             .expect("create version five schema");
         drop(connection);
 
-        let db = Database::open(&path, "luna-remote-migration-test").expect("migrate database");
+        let credential_service = format!("{}.migration-test", crate::product::CREDENTIAL_SERVICE);
+        let db = Database::open(&path, &credential_service).expect("migrate database");
         let bookmarks = db.list_bookmarks().expect("list migrated bookmarks");
         assert_eq!(
             bookmarks

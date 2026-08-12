@@ -4,6 +4,7 @@ mod commands;
 mod database;
 mod desktop;
 mod models;
+mod product;
 mod sessions;
 mod ssh_config;
 mod transfers;
@@ -13,8 +14,6 @@ mod windows_app_icon;
 
 use std::{
     collections::HashSet,
-    fs,
-    path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -28,52 +27,6 @@ use sessions::SessionManager;
 use tauri::{Manager, RunEvent, Theme};
 use transfers::TransferManager;
 use tunnels::TunnelManager;
-
-const DATABASE_FILE: &str = "luna-remote.db";
-const LEGACY_DATABASE_FILE: &str = "ssh-client.db";
-const LEGACY_IDENTIFIER: &str = "com.local.sshclient";
-const LEGACY_CREDENTIAL_SERVICE: &str = "com.local.sshclient.credentials";
-
-fn database_sidecar(path: &Path, suffix: &str) -> PathBuf {
-    let mut value = path.as_os_str().to_os_string();
-    value.push(suffix);
-    value.into()
-}
-
-fn migrate_legacy_database(data_dir: &Path) -> Result<(), String> {
-    let target = data_dir.join(DATABASE_FILE);
-    if target.exists() {
-        return Ok(());
-    }
-    let mut candidates = vec![data_dir.join(LEGACY_DATABASE_FILE)];
-    if let Some(parent) = data_dir.parent() {
-        candidates.push(parent.join(LEGACY_IDENTIFIER).join(LEGACY_DATABASE_FILE));
-    }
-    let Some(source) = candidates.into_iter().find(|path| path.is_file()) else {
-        return Ok(());
-    };
-    fs::create_dir_all(data_dir).map_err(|error| error.to_string())?;
-    fs::copy(&source, &target).map_err(|error| {
-        format!(
-            "迁移旧版数据库 {} 到 {} 失败：{error}",
-            source.display(),
-            target.display()
-        )
-    })?;
-    let source_wal = database_sidecar(&source, "-wal");
-    if source_wal.is_file() {
-        let target_wal = database_sidecar(&target, "-wal");
-        if let Err(error) = fs::copy(&source_wal, &target_wal) {
-            let _ = fs::remove_file(&target);
-            return Err(format!(
-                "迁移旧版数据库日志 {} 到 {} 失败：{error}",
-                source_wal.display(),
-                target_wal.display()
-            ));
-        }
-    }
-    Ok(())
-}
 
 #[cfg(target_os = "windows")]
 fn disable_browser_accelerator_keys(window: &tauri::WebviewWindow) -> Result<(), String> {
@@ -121,11 +74,9 @@ pub fn run() {
                 .path()
                 .app_data_dir()
                 .map_err(|error| error.to_string())?;
-            migrate_legacy_database(&data_dir)?;
-            let database = Arc::new(Database::open_with_legacy(
-                &data_dir.join(DATABASE_FILE),
-                &format!("{}.credentials", app.config().identifier),
-                Some(LEGACY_CREDENTIAL_SERVICE),
+            let database = Arc::new(Database::open(
+                &data_dir.join(product::DATABASE_FILE),
+                product::CREDENTIAL_SERVICE,
             )?);
             let selected_theme = database.get_setting("uiTheme", models::UiTheme::System);
             let window = app
@@ -248,7 +199,7 @@ pub fn run() {
             ai_diagnostics_clear
         ])
         .build(tauri::generate_context!())
-        .expect("failed to build Luna Remote")
+        .unwrap_or_else(|error| panic!("failed to build {}: {error}", product::DISPLAY_NAME))
         .run(|app, event| match event {
             RunEvent::ExitRequested { api, code, .. } => {
                 let state = app.state::<AppState>();

@@ -1,97 +1,47 @@
 <div align="center">
-  <img src="assets/icons/ssh.png" width="96" alt="Luna Remote icon">
-  <h1>Luna Remote</h1>
-  <p>An SSH and SFTP desktop client for macOS and Windows</p>
-  <p>
-    <a href="https://github.com/rainj2013/luna-remote/releases/latest"><img src="https://img.shields.io/github/v/release/rainj2013/luna-remote?style=flat-square" alt="Latest release"></a>
-    <a href="https://github.com/rainj2013/luna-remote/actions/workflows/release.yml"><img src="https://github.com/rainj2013/luna-remote/actions/workflows/release.yml/badge.svg" alt="Build status"></a>
-    <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-5b8def?style=flat-square" alt="Supported platforms">
-  </p>
-  <p>
-    <a href="https://github.com/rainj2013/luna-remote/releases/latest">Download the latest release</a>
-    ·
-    <a href="docs/DEVELOPMENT.md">Development guide</a>
-  </p>
+  <img src="assets/icons/ssh.png" width="96" alt="Luna Mux icon">
+  <h1>Luna Mux</h1>
+  <p>A local and remote terminal workspace for coding agents</p>
+  <p><strong>Status: product foundation and design; no usable release yet.</strong></p>
 </div>
 
 <div align="center">English · <a href="README.md">简体中文</a></div>
 
-Luna Remote keeps everyday remote work in one window. Connect to a server, move between Terminal and SFTP, manage port forwarding, organize saved hosts, and run multiple independent sessions.
+Luna Mux is an independent product and repository derived from Luna Remote. It reuses mature SSH, SFTP, port-forwarding, and terminal foundations while adding cross-platform local terminals, free-form split workspaces, coding-agent status, cross-agent control, and browser validation workflows.
 
-![Luna Remote terminal](docs/images/terminal.png)
+Luna Mux is not a traditional IDE and does not plan to embed a code editor, language server, or Git GUI.
 
-## SSH terminal
+## First-release goals
 
-- Password, keyboard-interactive, private-key, and SSH Agent authentication
-- Host-key verification, session keepalive, and one-level jump hosts
-- Multiple independent sessions to the same server
-- Connection groups, sorting, collapse state, favorites, and OpenSSH Config import
-- Configurable fonts, sizes, color schemes, transparency, and background images
-- Dark, light, and system appearance modes
-- English and Simplified Chinese interface
+- Windows PowerShell, WSL, and remote SSH
+- macOS login shell and remote SSH
+- One xterm.js terminal experience for local and remote sessions
+- Persisted workspaces with recursive horizontal and vertical splits
+- Codex status, notifications, and controlled cross-agent operations
+- A local Chrome browser pane with SSH forwarding for remote development services
+- Existing SFTP, transfers, tunnels, and system credential storage
 
-## SFTP and directory deployment
+Agents initially share the Luna Mux process lifetime. A thin SessionBackend boundary preserves a future daemon-backed implementation without implementing background sessions now.
 
-The two-pane file browser displays local files on the left and remote files on the right. Upload, download, preview, rename, delete, or drag files between the panes. Transfers run through a queue and failed tasks can be retried.
+## Development references
 
-Directory deployment compares a saved local directory with a remote directory before uploading only new and changed files. It can optionally remove remote-only files after every upload succeeds.
+- [Design](docs/LUNA_MUX_DESIGN.md)
+- [Development tasks](docs/DEVELOPMENT_TASKS.md)
+- [Development progress](docs/DEVELOPMENT_PROGRESS.md)
+- [Luna Remote upstream sync](docs/UPSTREAM_SYNC.md)
+- [Development environment](docs/DEVELOPMENT.md)
 
-![Luna Remote SFTP](docs/images/sftp.png)
-
-## Port forwarding
-
-Luna Remote supports local, remote, and dynamic SOCKS5 forwarding. Forwarding profiles are saved with each connection and can be started whenever its SSH session is active.
-
-## AI command assistant
-
-Describe a task in natural language and generate a command for Linux Shell, PowerShell, Windows cmd, or macOS Shell. Each result includes an explanation, assumptions, warnings, and a risk assessment.
-
-Commands can be copied, inserted into the current terminal, or executed after confirmation. Optional terminal context is limited and common credentials and personal information are redacted before sending. The feature works with OpenAI-compatible services and remains entirely optional.
-
-![Luna Remote AI command assistant](docs/images/ai-command.png)
-
-## Local data and personalization
-
-- Credentials are stored in macOS Keychain or Windows Credential Manager
-- Connections can be exported, backed up, and restored without credentials
-- Transfer history records progress and supports retries
-- App icon, interface theme, language, and terminal appearance are configurable
-
-## Downloads
-
-Installers are available from [GitHub Releases](https://github.com/rainj2013/luna-remote/releases/latest).
-
-| Platform | Package | Notes |
-| --- | --- | --- |
-| macOS Apple Silicon | `Luna-Remote_macos-arm64.dmg` | For M-series Macs |
-| macOS Intel | `Luna-Remote_macos-x64.dmg` | For Intel Macs |
-| Windows x64 | `Luna-Remote_windows-x64-online-setup.exe` | Downloads WebView2 when required |
-| Windows x64 | `Luna-Remote_windows-x64-offline-setup.exe` | Includes WebView2 for offline installation |
-
-The current installers are not signed with public developer certificates. On first launch, macOS requires confirmation in Privacy & Security, and Windows may show an unknown-publisher or SmartScreen warning.
-
-## Development
-
-Luna Remote is built with Tauri 2, React, xterm.js, and Rust. The development environment requires Node.js 24, npm, Rust stable 1.85 or newer, and the native build tools for the target platform.
+Product identity is maintained in `product/product.json`. After changing it, run:
 
 ```bash
-fnm install 24
-fnm use
-rustup default stable
-npm ci
-npm run dev
+npm run product:sync
+npm run product:check
 ```
 
-Run the full verification suite before submitting changes:
+## Repository relationship
 
-```bash
-npm run check
-npm test
-npm run web:build
-```
-
-See the [development guide](docs/DEVELOPMENT.md) for project structure, platform setup, packaging, and release details. The development guide is currently written in Simplified Chinese.
+Luna Mux and Luna Remote are separate applications. This repository retains Luna Remote history for source traceability, but uses independent application identifiers, storage, credentials, and release workflows. Upstream changes are reviewed and ported selectively by commit.
 
 ## License
 
-Luna Remote is released under the [MIT License](LICENSE). Third-party components and fonts retain their respective licenses.
+This project retains the [MIT License](LICENSE). Third-party components and fonts keep their respective licenses.

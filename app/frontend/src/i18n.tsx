@@ -3,6 +3,7 @@ import type { AppLanguage, NativeMenuLabels } from './types'
 import zhCNMessages from './locales/zh-CN.messages'
 import type { LocaleDefinition } from './locales/types'
 import type { HelpSection } from './locales/help-content'
+import { PRODUCT_INFO } from './product-info'
 
 export type MessageKey = keyof typeof zhCNMessages
 export type MessageParams = Record<string, string | number>
@@ -48,12 +49,13 @@ export function translate(language: AppLanguage, key: MessageKey, params?: Messa
 }
 
 export function getNativeMenuLabels(language: AppLanguage): NativeMenuLabels {
-  const t = (key: MessageKey): string => translate(language, key)
+  const t = (key: MessageKey, params?: MessageParams): string => translate(language, key, params)
+  const productName = { productName: PRODUCT_INFO.displayName }
   return {
     settings: t('native.settings'), newConnection: t('native.newConnection'), importOpenSshConfig: t('native.importOpenSshConfig'),
     newSession: t('native.newSession'), closeTab: t('native.closeTab'), terminal: t('native.terminal'), files: t('native.files'),
-    toggleSidebar: t('native.toggleSidebar'), helpItem: t('native.helpItem'), about: t('native.about'), services: t('native.services'),
-    hide: t('native.hide'), hideOthers: t('native.hideOthers'), showAll: t('native.showAll'), quit: t('native.quit'),
+    toggleSidebar: t('native.toggleSidebar'), helpItem: t('native.helpItem', productName), about: t('native.about', productName), services: t('native.services'),
+    hide: t('native.hide', productName), hideOthers: t('native.hideOthers'), showAll: t('native.showAll'), quit: t('native.quit', productName),
     connectionMenu: t('native.connectionMenu'), editMenu: t('native.editMenu'), undo: t('native.undo'), redo: t('native.redo'),
     cut: t('native.cut'), copy: t('native.copy'), paste: t('native.paste'), selectAll: t('native.selectAll'), viewMenu: t('native.viewMenu'),
     fullscreen: t('native.fullscreen'), windowMenu: t('native.windowMenu'), minimize: t('native.minimize'), zoom: t('native.zoom'),

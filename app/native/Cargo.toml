@@ -1,12 +1,12 @@
 [package]
-name = "luna-remote"
-version = "1.0.1"
-description = "Tauri desktop shell for Luna Remote"
+name = "luna-mux"
+version = "0.1.0"
+description = "Tauri desktop shell for Luna Mux"
 license = "MIT"
 edition = "2024"
 
 [lib]
-name = "luna_remote_lib"
+name = "luna_mux_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

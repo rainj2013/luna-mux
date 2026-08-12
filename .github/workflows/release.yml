@@ -61,7 +61,7 @@ jobs:
             exit 1
           fi
           mkdir -p release-assets
-          cp "${files[0]}" "release-assets/Luna-Remote_macos-${{ matrix.arch }}.dmg"
+          cp "${files[0]}" "release-assets/Luna-Mux_macos-${{ matrix.arch }}.dmg"
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v7
@@ -115,7 +115,7 @@ jobs:
             throw "Expected one NSIS installer, found $($files.Count)"
           }
           New-Item -ItemType Directory -Force "release-assets" | Out-Null
-          Copy-Item $files[0].FullName "release-assets/Luna-Remote_windows-x64-${{ matrix.variant }}-setup.exe"
+          Copy-Item $files[0].FullName "release-assets/Luna-Mux_windows-x64-${{ matrix.variant }}-setup.exe"
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v7
@@ -154,5 +154,5 @@ jobs:
             gh release create "$GITHUB_REF_NAME" release-assets/* \
               --verify-tag \
               --generate-notes \
-              --title "Luna Remote $GITHUB_REF_NAME"
+              --title "Luna Mux $GITHUB_REF_NAME"
           fi

@@ -1,6 +1,6 @@
-# Luna Remote 开发文档
+# Luna Mux 开发文档
 
-Luna Remote 基于 Tauri 2、React、xterm.js 和 Rust 开发，当前支持 macOS 和 Windows。安装包需要在对应目标平台原生构建。
+Luna Mux 基于 Tauri 2、React、xterm.js 和 Rust 开发，首版同步支持 macOS 和 Windows。安装包需要在对应目标平台原生构建。
 
 本文中的命令均在仓库根目录执行，也就是包含 `package.json` 的目录。
 
@@ -99,7 +99,7 @@ cargo --version
 npm run dev
 ```
 
-该命令会在 `127.0.0.1:1420` 启动 Vite，并编译、启动 Tauri 桌面应用。首次 Rust 编译耗时会明显长于后续增量编译。出现 Luna Remote 窗口即表示环境搭建完成。
+该命令会在 `127.0.0.1:1420` 启动 Vite，并编译、启动 Tauri 桌面应用。首次 Rust 编译耗时会明显长于后续增量编译。出现 Luna Mux 窗口即表示环境搭建完成。
 
 只启动或构建 Web 前端可以使用下面的命令。
 
@@ -112,7 +112,7 @@ Web 页面离开 Tauri Runtime 后无法完整使用本地数据库、SSH、SFTP
 
 开发启动不需要环境变量或 API Key。AI 命令助手为可选功能，可以在应用的“设置 → AI”中配置 OpenAI 兼容服务。
 
-> 开发版和安装版当前使用相同的应用标识 `com.local.lunaremote`，会访问同一份应用数据和系统凭据。调试已有安装环境前，请先在应用中导出连接备份。
+> Luna Mux 使用独立应用标识 `com.luna.mux`、数据库和系统凭据命名空间，不会自动读取或修改 Luna Remote 数据。
 
 ## 多语言
 
@@ -166,7 +166,7 @@ npm run build:mac
 校验 DMG。
 
 ```bash
-hdiutil verify "app/native/target/release/bundle/dmg/Luna Remote_<version>_<arch>.dmg"
+hdiutil verify "app/native/target/release/bundle/dmg/Luna Mux_<version>_<arch>.dmg"
 ```
 
 `<arch>` 在 Apple Silicon 构建中通常为 `aarch64`，在 Intel 构建中通常为 `x64`。请以 `bundle/dmg/` 中的实际文件名为准。
