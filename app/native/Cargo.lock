@@ -2724,6 +2724,49 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
+name = "luna-remote"
+version = "1.0.1"
+dependencies = [
+ "anyhow",
+ "async-recursion",
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "dirs",
+ "fast-socks5",
+ "fontdb",
+ "futures",
+ "ico",
+ "image",
+ "keyring",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "regex",
+ "reqwest 0.12.28",
+ "rusqlite",
+ "russh",
+ "russh-sftp",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-clipboard-manager",
+ "tauri-plugin-dialog",
+ "tauri-plugin-opener",
+ "thiserror 2.0.19",
+ "tokio",
+ "tokio-util",
+ "url",
+ "uuid",
+ "walkdir",
+ "webview2-com",
+ "windows 0.61.3",
+ "zeroize",
+]
+
+[[package]]
 name = "markup5ever"
 version = "0.38.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4726,49 +4769,6 @@ dependencies = [
  "poly1305",
  "ssh-encoding",
  "subtle",
-]
-
-[[package]]
-name = "ssh-client"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-recursion",
- "async-trait",
- "base64 0.22.1",
- "chrono",
- "dirs",
- "fast-socks5",
- "fontdb",
- "futures",
- "ico",
- "image",
- "keyring",
- "objc2",
- "objc2-app-kit",
- "objc2-foundation",
- "regex",
- "reqwest 0.12.28",
- "rusqlite",
- "russh",
- "russh-sftp",
- "serde",
- "serde_json",
- "sha2",
- "tauri",
- "tauri-build",
- "tauri-plugin-clipboard-manager",
- "tauri-plugin-dialog",
- "tauri-plugin-opener",
- "thiserror 2.0.19",
- "tokio",
- "tokio-util",
- "url",
- "uuid",
- "walkdir",
- "webview2-com",
- "windows 0.61.3",
- "zeroize",
 ]
 
 [[package]]

@@ -419,6 +419,78 @@ pub enum UiTheme {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct NativeMenuLabels {
+    pub settings: String,
+    pub new_connection: String,
+    pub import_open_ssh_config: String,
+    pub new_session: String,
+    pub close_tab: String,
+    pub terminal: String,
+    pub files: String,
+    pub toggle_sidebar: String,
+    pub help_item: String,
+    pub about: String,
+    pub services: String,
+    pub hide: String,
+    pub hide_others: String,
+    pub show_all: String,
+    pub quit: String,
+    pub connection_menu: String,
+    pub edit_menu: String,
+    pub undo: String,
+    pub redo: String,
+    pub cut: String,
+    pub copy: String,
+    pub paste: String,
+    pub select_all: String,
+    pub view_menu: String,
+    pub fullscreen: String,
+    pub window_menu: String,
+    pub minimize: String,
+    pub zoom: String,
+    pub bring_all_to_front: String,
+    pub help_menu: String,
+}
+
+impl Default for NativeMenuLabels {
+    fn default() -> Self {
+        Self {
+            settings: "设置...".into(),
+            new_connection: "新增连接".into(),
+            import_open_ssh_config: "导入 OpenSSH Config...".into(),
+            new_session: "为当前机器新建会话".into(),
+            close_tab: "关闭当前标签".into(),
+            terminal: "终端".into(),
+            files: "文件传输".into(),
+            toggle_sidebar: "展开/折叠连接管理".into(),
+            help_item: "Luna Remote 使用帮助".into(),
+            about: "关于 Luna Remote".into(),
+            services: "服务".into(),
+            hide: "隐藏 Luna Remote".into(),
+            hide_others: "隐藏其他".into(),
+            show_all: "全部显示".into(),
+            quit: "退出 Luna Remote".into(),
+            connection_menu: "连接".into(),
+            edit_menu: "编辑".into(),
+            undo: "撤销".into(),
+            redo: "重做".into(),
+            cut: "剪切".into(),
+            copy: "复制".into(),
+            paste: "粘贴".into(),
+            select_all: "全选".into(),
+            view_menu: "视图".into(),
+            fullscreen: "进入/退出全屏".into(),
+            window_menu: "窗口".into(),
+            minimize: "最小化".into(),
+            zoom: "缩放".into(),
+            bring_all_to_front: "前置全部窗口".into(),
+            help_menu: "帮助".into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum AppIconId {
     Ssh,
     Classic,

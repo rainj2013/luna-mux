@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowRight, Bookmark as BookmarkIcon, Bot, Check, ChevronDown, ChevronRight, CircleHelp, CirclePlus, Copy, Download, Edit3, Eye, EyeOff, FileInput, FileJson2, Folder, FolderOpen, FolderPlus, GripVertical, History as HistoryIcon, Image as ImageIcon, KeyRound, Minus, Monitor, Moon, Network, Palette, PanelLeftClose, PanelLeftOpen, Play, Plug, Power, Rocket, RotateCcw, Search, Send, Server, Settings as SettingsIcon, ShieldAlert, Square, SquareTerminal, Star, Sun, Trash2, Upload, WandSparkles, X } from 'lucide-react'
-import { BUNDLED_TERMINAL_FONT, DEFAULT_AI_SETTINGS, DEFAULT_TERMINAL_SETTINGS, type AiCommandHistoryEntry, type AiCommandSuggestion, type AiProvider, type AiRawExchange, type AiRiskAssessment, type AiSettings, type AiSettingsInput, type AiShell, type AiThinkingMode, type AppEvent, type AppIconId, type AppIconSettings, type Bookmark, type BookmarkInput, type ConflictResolution, type ConnectInput, type DeploymentDiffEntry, type DeploymentProfile, type HostKeyPrompt, type PortForwardProfile, type SessionStatus, type SshConfigPreview, type TerminalSettings, type TransferTask, type TunnelSummary, type UiTheme } from './types'
+import { ArrowRight, Bookmark as BookmarkIcon, Bot, Check, ChevronDown, ChevronRight, CircleHelp, CirclePlus, Copy, Download, Edit3, Eye, EyeOff, FileInput, FileJson2, Folder, FolderOpen, FolderPlus, GripVertical, History as HistoryIcon, Image as ImageIcon, KeyRound, Languages, Minus, Monitor, Moon, Network, Palette, PanelLeftClose, PanelLeftOpen, Play, Plug, Power, Rocket, RotateCcw, Search, Send, Server, Settings as SettingsIcon, ShieldAlert, Square, SquareTerminal, Star, Sun, Trash2, Upload, WandSparkles, X } from 'lucide-react'
+import { BUNDLED_TERMINAL_FONT, DEFAULT_AI_SETTINGS, DEFAULT_TERMINAL_SETTINGS, type AiCommandHistoryEntry, type AiCommandSuggestion, type AiProvider, type AiRawExchange, type AiRiskAssessment, type AiSettings, type AiSettingsInput, type AiShell, type AiThinkingMode, type AppEvent, type AppIconId, type AppIconSettings, type AppLanguage, type Bookmark, type BookmarkInput, type ConflictResolution, type ConnectInput, type DeploymentDiffEntry, type DeploymentProfile, type HostKeyPrompt, type PortForwardProfile, type SessionStatus, type SshConfigPreview, type TerminalSettings, type TransferTask, type TunnelSummary, type UiTheme } from './types'
 import { TerminalPane, type TerminalPaneHandle } from './components/TerminalPane'
 import { SftpPane } from './components/SftpPane'
 import { HelpDialog } from './components/HelpDialog'
 import { colorWithOpacity, terminalBackgroundStyle } from './terminal-style'
+import { availableLanguages, getNativeMenuLabels, useI18n, type MessageKey } from './i18n'
 
 interface WorkspaceTab { key: string; bookmarkId: string; sessionId?: string; status: SessionStatus; error?: string }
 interface ConnectionTarget { newSession?: boolean; tabKey?: string }
@@ -24,6 +25,7 @@ const minSidebarWidth = 200
 const maxSidebarWidth = 480
 const aiTerminalContextLines = 100
 const aiTerminalContextChars = 16_000
+const appIconMessageKeys: Record<AppIconId, MessageKey> = { ssh: 'appIcon.ssh', classic: 'appIcon.classic', neon: 'appIcon.neon', light: 'appIcon.light' }
 
 function primaryFontName(fontFamily: string): string {
   return fontFamily.split(',')[0]?.trim().replace(/^["']|["']$/g, '') || 'JetBrains Mono'
@@ -44,6 +46,7 @@ function errorMessage(error: unknown): string {
 }
 
 export function App(): React.JSX.Element {
+  const { language, setLanguage, t } = useI18n()
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([])
   const [tabs, setTabs] = useState<WorkspaceTab[]>([])
   const [activeKey, setActiveKey] = useState('')
@@ -67,6 +70,7 @@ export function App(): React.JSX.Element {
   const [terminalSettings, setTerminalSettings] = useState<TerminalSettings>(DEFAULT_TERMINAL_SETTINGS)
   const [terminalBackground, setTerminalBackground] = useState('')
   const [uiTheme, setUiTheme] = useState<UiTheme>('system')
+  const [savedLanguage, setSavedLanguage] = useState<AppLanguage>(language)
   const [uiThemePreview, setUiThemePreview] = useState<UiTheme | null>(null)
   const [systemDark, setSystemDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches)
   const [appIcons, setAppIcons] = useState<AppIconSettings>({ selected: 'ssh', options: [] })
@@ -383,8 +387,8 @@ export function App(): React.JSX.Element {
 
   const tabLabel = (tab: WorkspaceTab, bookmark?: Bookmark): string => {
     const matchingTabs = tabs.filter((item) => item.bookmarkId === tab.bookmarkId)
-    if (matchingTabs.length < 2) return bookmark?.name ?? '已删除连接'
-    return `${bookmark?.name ?? '已删除连接'} ${matchingTabs.findIndex((item) => item.key === tab.key) + 1}`
+    if (matchingTabs.length < 2) return bookmark?.name ?? t('common.deletedConnection')
+    return `${bookmark?.name ?? t('common.deletedConnection')} ${matchingTabs.findIndex((item) => item.key === tab.key) + 1}`
   }
 
   const closeTab = (tab: WorkspaceTab): void => {
@@ -398,7 +402,7 @@ export function App(): React.JSX.Element {
   }
 
   const removeBookmark = async (bookmark: Bookmark): Promise<void> => {
-    if (!await confirmAction({ title: '删除连接', message: `确定删除连接“${bookmark.name}”吗？`, detail: '关联的已打开会话也会关闭，此操作无法撤销。', kind: 'danger', confirmLabel: '删除连接' })) return
+    if (!await confirmAction({ title: t('common.deleteConnection'), message: t('app.deleteValue', { value0: bookmark.name }), detail: t('app.relatedOpenSessionsWillAlsoCloseThisCannot'), kind: 'danger', confirmLabel: t('common.deleteConnection') })) return
     try {
       await window.api.bookmarks.remove(bookmark.id)
       for (const tab of tabs.filter((item) => item.bookmarkId === bookmark.id)) closeTab(tab)
@@ -408,9 +412,9 @@ export function App(): React.JSX.Element {
   }
 
   const deleteBookmarkGroup = async (group: string): Promise<void> => {
-    const label = group || '未分组'
+    const label = group || t('common.ungrouped')
     const count = bookmarks.filter((bookmark) => bookmark.groupName === group).length
-    if (!await confirmAction({ title: '删除分组', message: `确定删除分组“${label}”吗？`, detail: `分组中的 ${count} 个连接将一并删除，此操作无法撤销。`, kind: 'danger', confirmLabel: '删除分组及连接' })) return
+    if (!await confirmAction({ title: t('app.deleteGroup'), message: t('app.deleteGroupValue', { value0: label }), detail: t('app.valueConnectionsInThisGroupWillAlsoBe', { value0: count }), kind: 'danger', confirmLabel: t('common.deleteGroupAndConnections') })) return
     try {
       const result = await window.api.bookmarkGroups.delete(group)
       const deleted = new Set(result.deletedBookmarkIds)
@@ -429,14 +433,14 @@ export function App(): React.JSX.Element {
   }
 
   const retryTransfer = async (task: TransferTask): Promise<void> => {
-    if (!task.bookmarkId) { showError('此旧传输记录缺少连接信息，无法自动重试'); return }
+    if (!task.bookmarkId) { showError(t('app.thisLegacyTransferHasNoConnectionInformationAnd')); return }
     const tab = tabs.find((item) => item.bookmarkId === task.bookmarkId && item.status === 'connected' && item.sessionId)
     if (!tab?.sessionId) {
       const bookmark = bookmarkMap.get(task.bookmarkId)
       const existing = tabs.find((item) => item.bookmarkId === task.bookmarkId)
       if (existing) setActiveKey(existing.key)
       else if (bookmark) openBookmark(bookmark)
-      showError('请先连接此传输任务对应的连接，再点击重试')
+      showError(t('app.connectToTheHostForThisTransferThen'))
       return
     }
     try { await window.api.transfers.retry(task.id, tab.sessionId) }
@@ -489,17 +493,19 @@ export function App(): React.JSX.Element {
     return () => window.removeEventListener('keydown', onKeyDown, true)
   }, [activeBookmark, activeTab, activeKey, tabs])
 
-  const statusText: Record<SessionStatus, string> = { connecting: '连接中', connected: '已连接', disconnected: '未连接', error: '连接失败' }
+  const statusText: Record<SessionStatus, string> = { connecting: t('app.connecting'), connected: t('app.connected'), disconnected: t('app.disconnected'), error: t('app.connectionFailed') }
 
-  const saveSettings = async (settings: TerminalSettings, previewImage: string, appIcon: AppIconId, theme: UiTheme, ai: AiSettingsInput): Promise<void> => {
+  const saveSettings = async (settings: TerminalSettings, previewImage: string, appIcon: AppIconId, theme: UiTheme, appLanguage: AppLanguage, ai: AiSettingsInput): Promise<void> => {
     try {
       const terminalChanged = JSON.stringify(settings) !== JSON.stringify(terminalSettings)
       const themeChanged = theme !== uiTheme
+      const languageChanged = appLanguage !== savedLanguage
       const iconChanged = appIcon !== appIcons.selected
       const aiChanged = ai.baseUrl !== aiSettings.baseUrl || ai.model !== aiSettings.model || ai.defaultShell !== aiSettings.defaultShell || ai.provider !== aiSettings.provider || ai.thinkingMode !== aiSettings.thinkingMode || Boolean(ai.apiKey)
-      const [saved, savedTheme, selected, savedAi] = await Promise.all([
+      const [saved, savedTheme, savedAppLanguage, selected, savedAi] = await Promise.all([
         terminalChanged ? window.api.settings.saveTerminal(settings) : Promise.resolve(terminalSettings),
         themeChanged ? window.api.settings.saveUiTheme(theme) : Promise.resolve(uiTheme),
+        languageChanged ? window.api.settings.saveLanguage(appLanguage, getNativeMenuLabels(appLanguage)) : Promise.resolve(savedLanguage),
         iconChanged ? window.api.settings.setAppIcon(appIcon) : Promise.resolve(appIcons.selected),
         aiChanged ? window.api.ai.saveSettings(ai) : Promise.resolve(aiSettings),
       ])
@@ -507,12 +513,14 @@ export function App(): React.JSX.Element {
       if (saved.backgroundImagePath && !image) image = await window.api.settings.loadTerminalBackground(saved.backgroundImagePath)
       setTerminalSettings(saved)
       setUiTheme(savedTheme)
+      setSavedLanguage(savedAppLanguage)
+      setLanguage(savedAppLanguage)
       setUiThemePreview(null)
       setTerminalBackground(image)
       setAppIcons((current) => ({ ...current, selected }))
       setAiSettings(savedAi)
       setSettingsDialog(false)
-    } catch (error) { showError(errorMessage(error)) }
+    } catch (error) { setLanguage(savedLanguage); showError(errorMessage(error)) }
   }
 
   const selectedAppIcon = appIcons.options.find((item) => item.id === appIcons.selected)
@@ -581,7 +589,7 @@ export function App(): React.JSX.Element {
   const exportConnectionArchive = async (): Promise<void> => {
     try {
       const path = await window.api.bookmarks.exportArchive()
-      if (path) showToast(`连接备份已导出：${path}`, 'success')
+      if (path) showToast(t('app.connectionBackupExportedValue', { value0: path }), 'success')
     } catch (error) { showError(errorMessage(error)) }
   }
   const importConnectionArchive = async (): Promise<void> => {
@@ -589,7 +597,7 @@ export function App(): React.JSX.Element {
       const result = await window.api.bookmarks.importArchive()
       if (!result) return
       await reloadSidebarData()
-      showToast(`已导入 ${result.importedConnections} 个连接、${result.importedGroups} 个新分组；凭据未导入`, 'success')
+      showToast(t('app.importedValueConnectionsAndValueNewGroupsCredentials', { value0: result.importedConnections, value1: result.importedGroups }), 'success')
     } catch (error) { showError(errorMessage(error)) }
   }
 
@@ -599,63 +607,63 @@ export function App(): React.JSX.Element {
     <header className="titlebar" data-tauri-drag-region="deep">
       <div className="app-brand">{selectedAppIcon ? <img className="app-logo" src={selectedAppIcon.dataUrl} alt="" /> : <span className="app-logo app-logo-fallback">&gt;_</span>}<span>Luna Remote</span></div>
       <span className="titlebar-spacer" />
-      <button className="icon-button titlebar-help" title="帮助 (F1)" aria-label="帮助" onClick={() => setHelpDialog(true)}><CircleHelp size={18} /></button>
-      <button className="icon-button titlebar-settings" title="设置" aria-label="设置" onClick={() => openSettings()}><SettingsIcon size={18} /></button>
+      <button className="icon-button titlebar-help" title={t('app.helpF1')} aria-label={t('app.help')} onClick={() => setHelpDialog(true)}><CircleHelp size={18} /></button>
+      <button className="icon-button titlebar-settings" title={t('common.settings')} aria-label={t('common.settings')} onClick={() => openSettings()}><SettingsIcon size={18} /></button>
       <div className="window-controls">
-        <button className="window-control" title="最小化" aria-label="最小化" onClick={() => void window.api.system.minimizeWindow().catch((error) => showError(errorMessage(error)))}><Minus size={16} /></button>
-        <button className="window-control" title="最大化或还原" aria-label="最大化或还原" onClick={() => void window.api.system.toggleMaximizeWindow().catch((error) => showError(errorMessage(error)))}><Square size={13} /></button>
-        <button className="window-control close" title="关闭" aria-label="关闭" onClick={() => void window.api.system.closeWindow().catch((error) => showError(errorMessage(error)))}><X size={17} /></button>
+        <button className="window-control" title={t('common.minimize')} aria-label={t('common.minimize')} onClick={() => void window.api.system.minimizeWindow().catch((error) => showError(errorMessage(error)))}><Minus size={16} /></button>
+        <button className="window-control" title={t('common.maximizeOrRestore')} aria-label={t('common.maximizeOrRestore')} onClick={() => void window.api.system.toggleMaximizeWindow().catch((error) => showError(errorMessage(error)))}><Square size={13} /></button>
+        <button className="window-control close" title={t('common.close')} aria-label={t('common.close')} onClick={() => void window.api.system.closeWindow().catch((error) => showError(errorMessage(error)))}><X size={17} /></button>
       </div>
     </header>
     <div className={`main-layout ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`} style={{ '--sidebar-width': `${sidebarWidth}px` } as React.CSSProperties}>
       <aside className="sidebar" onContextMenu={(event) => openSidebarContextMenu(event)}>
-        <div className="sidebar-heading"><strong>连接管理</strong><div className="sidebar-actions">
-          <button className="icon-button" title="新增连接" onClick={() => setBookmarkDialog('new')}><CirclePlus size={18} /></button>
-          <button className="icon-button" title="删除选中连接" disabled={!selectedBookmark} onClick={() => selectedBookmark && void removeBookmark(selectedBookmark)}><Trash2 size={17} /></button>
+        <div className="sidebar-heading"><strong>{t('app.connections')}</strong><div className="sidebar-actions">
+          <button className="icon-button" title={t('common.newConnection')} onClick={() => setBookmarkDialog('new')}><CirclePlus size={18} /></button>
+          <button className="icon-button" title={t('app.deleteSelectedConnection')} disabled={!selectedBookmark} onClick={() => selectedBookmark && void removeBookmark(selectedBookmark)}><Trash2 size={17} /></button>
         </div></div>
-        <label className="search-box"><Search size={16} /><input placeholder="搜索连接" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
+        <label className="search-box"><Search size={16} /><input placeholder={t('app.searchConnections')} value={query} onChange={(event) => setQuery(event.target.value)} /></label>
         <div className="bookmark-list">
-          {query && filteredBookmarks.length === 0 && <div className="sidebar-empty"><BookmarkIcon size={24} /><span>没有匹配的连接</span></div>}
+          {query && filteredBookmarks.length === 0 && <div className="sidebar-empty"><BookmarkIcon size={24} /><span>{t('app.noMatchingConnections')}</span></div>}
           {bookmarkGroups.flatMap(([group, items]) => {
             const collapsed = !query && collapsedBookmarkGroups.has(group)
             const groupDropClass = groupDrop?.group === group ? `drop-${groupDrop.position}` : ''
             return [<button type="button" data-group-name={group} className={`bookmark-group ${draggedGroupName === group ? 'dragging' : ''} ${groupDropClass}`} key={`group:${group}`} aria-expanded={!collapsed} onPointerDown={(event) => startSidebarPointerDrag(event, 'group', group)} onClick={(event) => { if (suppressSidebarClickRef.current) { event.preventDefault(); return } toggleBookmarkGroup(group) }} onContextMenu={(event) => openSidebarContextMenu(event, { group })}>
-              <span className="group-drag-handle" title={query ? '清除搜索后可拖动排序' : '拖动分组排序'}><GripVertical size={13} /></span>{collapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}{collapsed ? <Folder size={14} /> : <FolderOpen size={14} />}<span>{group || '未分组'}</span><small>{items.length}</small>
+              <span className="group-drag-handle" title={query ? t('common.clearTheSearchToReorder') : t('app.dragToReorderGroup')}><GripVertical size={13} /></span>{collapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}{collapsed ? <Folder size={14} /> : <FolderOpen size={14} />}<span>{group || t('common.ungrouped')}</span><small>{items.length}</small>
             </button>, ...(collapsed ? [] : items.map((bookmark) => {
             const tab = tabs.find((item) => item.bookmarkId === bookmark.id)
             const jumpBookmark = bookmark.jumpBookmarkId ? bookmarkMap.get(bookmark.jumpBookmarkId) : undefined
             const dropClass = bookmarkDrop?.id === bookmark.id ? `drop-${bookmarkDrop.position}` : ''
             return <button key={bookmark.id} data-bookmark-id={bookmark.id} className={`bookmark-item ${selectedBookmark?.id === bookmark.id ? 'active' : ''} ${draggedBookmarkId === bookmark.id ? 'dragging' : ''} ${dropClass}`} onPointerDown={(event) => startSidebarPointerDrag(event, 'bookmark', bookmark.id)} onClick={(event) => { if (suppressSidebarClickRef.current) { event.preventDefault(); return } setSelectedBookmarkId(bookmark.id) }} onDoubleClick={(event) => { if (suppressSidebarClickRef.current) { event.preventDefault(); return } openBookmarkFromSidebar(bookmark) }} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); setSelectedBookmarkId(bookmark.id); openBookmarkFromSidebar(bookmark) } }} onContextMenu={(event) => openSidebarContextMenu(event, { bookmark })}>
-              <span className="bookmark-drag-handle" title={query ? '清除搜索后可拖动排序' : '拖动排序'}><GripVertical size={14} /></span>
+              <span className="bookmark-drag-handle" title={query ? t('common.clearTheSearchToReorder') : t('app.dragToReorder')}><GripVertical size={14} /></span>
               <span className={`server-icon ${tab?.status ?? 'disconnected'}`}><Server size={17} /></span>
-              <span className="bookmark-copy"><strong>{bookmark.name}</strong><small title={jumpBookmark ? `通过 ${jumpBookmark.name}` : undefined}>{bookmark.username}@{bookmark.host}:{bookmark.port}{jumpBookmark ? ` · 经 ${jumpBookmark.name}` : ''}</small></span>
+              <span className="bookmark-copy"><strong>{bookmark.name}</strong><small title={jumpBookmark ? t('app.viaValue', { value0: jumpBookmark.name }) : undefined}>{bookmark.username}@{bookmark.host}:{bookmark.port}{jumpBookmark ? t('common.viaValue', { value0: jumpBookmark.name }) : ''}</small></span>
               <span className="bookmark-flags">{bookmark.favorite && <Star size={12} className="favorite-star" fill="currentColor" />}{bookmark.hasSavedCredential && <KeyRound size={12} className="saved-key" />}</span>
             </button>
           }))]})}
         </div>
       </aside>
-      <div className="sidebar-resizer" role="separator" aria-label="调整侧边栏宽度" aria-orientation="vertical" aria-valuemin={minSidebarWidth} aria-valuemax={maxSidebarWidth} aria-valuenow={sidebarWidth} tabIndex={0} title="拖动调整侧边栏宽度，双击恢复默认" onPointerDown={startSidebarResize} onDoubleClick={() => saveSidebarWidth(defaultSidebarWidth)} onKeyDown={resizeSidebarWithKeyboard} />
+      <div className="sidebar-resizer" role="separator" aria-label={t('app.resizeSidebar')} aria-orientation="vertical" aria-valuemin={minSidebarWidth} aria-valuemax={maxSidebarWidth} aria-valuenow={sidebarWidth} tabIndex={0} title={t('app.dragToResizeDoubleClickToReset')} onPointerDown={startSidebarResize} onDoubleClick={() => saveSidebarWidth(defaultSidebarWidth)} onKeyDown={resizeSidebarWithKeyboard} />
       <main className={`workspace ${tabs.length && workspaceView === 'files' ? 'file-mode' : ''}`}>
         <div className="tabbar">
-          <button className="icon-button tab-sidebar-toggle" title={sidebarCollapsed ? '展开连接管理' : '折叠连接管理'} aria-label={sidebarCollapsed ? '展开连接管理' : '折叠连接管理'} aria-expanded={!sidebarCollapsed} onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}>
+          <button className="icon-button tab-sidebar-toggle" title={sidebarCollapsed ? t('common.showConnections') : t('common.hideConnections')} aria-label={sidebarCollapsed ? t('common.showConnections') : t('common.hideConnections')} aria-expanded={!sidebarCollapsed} onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}>
             {sidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
           </button>
           {tabs.map((tab) => { const bookmark = bookmarkMap.get(tab.bookmarkId); const label = tabLabel(tab, bookmark); const endpoint = bookmark ? `${bookmark.username}@${bookmark.host}:${bookmark.port}` : ''; return <div key={tab.key} className={`session-tab ${tab.key === activeKey ? 'active' : ''}`}>
             <button className="session-tab-select" title={bookmark ? `${label} · ${endpoint}` : label} onClick={() => setActiveKey(tab.key)} onAuxClick={(event) => { if (event.button === 1) closeTab(tab) }}><span className={`status-dot ${tab.status}`} /><span title={label}>{label}</span></button>
-            <button className="session-tab-close" title="关闭会话" aria-label={`关闭 ${bookmark?.name ?? '会话'}`} onClick={() => closeTab(tab)}><X size={14} /></button>
+            <button className="session-tab-close" title={t('app.closeSession')} aria-label={t('app.closeNamedSession', { name: bookmark?.name ?? t('common.session') })} onClick={() => closeTab(tab)}><X size={14} /></button>
           </div> })}
-          <button className="icon-button tab-add" title="新增连接" onClick={() => setBookmarkDialog('new')}><CirclePlus size={17} /></button>
+          <button className="icon-button tab-add" title={t('common.newConnection')} onClick={() => setBookmarkDialog('new')}><CirclePlus size={17} /></button>
         </div>
-        {tabs.length === 0 ? <div className="welcome-state"><div className="welcome-icon"><Plug size={30} /></div><h2>选择一个 SSH 连接</h2><p>连接后可在同一窗口使用终端和 SFTP 文件传输。</p><button className="primary-button" onClick={() => setBookmarkDialog('new')}><CirclePlus size={16} />新增连接</button></div> : <>
+        {tabs.length === 0 ? <div className="welcome-state"><div className="welcome-icon"><Plug size={30} /></div><h2>{t('app.chooseAnSshConnection')}</h2><p>{t('app.useTheTerminalAndSftpFileTransfersIn')}</p><button className="primary-button" onClick={() => setBookmarkDialog('new')}><CirclePlus size={16} />{t('common.newConnection')}</button></div> : <>
           <div className="session-toolbar"><div className="session-info"><span className={`status-dot ${activeTab?.status}`} /><span className="session-status">{activeTab ? statusText[activeTab.status] : ''}</span>{activeBookmark && <span className="session-endpoint" title={`${activeBookmark.username}@${activeBookmark.host}:${activeBookmark.port}`}>{activeBookmark.username}@{activeBookmark.host}:{activeBookmark.port}</span>}{activeTab?.error && <span className="error-text" title={activeTab.error}>{activeTab.error}</span>}</div>
-            <div className="view-switcher" role="tablist" aria-label="会话视图">
-              <button role="tab" aria-selected={workspaceView === 'terminal'} className={workspaceView === 'terminal' ? 'active' : ''} onClick={() => setWorkspaceView('terminal')}><SquareTerminal size={15} />终端</button>
-              <button role="tab" aria-selected={workspaceView === 'files'} className={workspaceView === 'files' ? 'active' : ''} onClick={() => setWorkspaceView('files')}><FolderOpen size={15} />文件传输</button>
+            <div className="view-switcher" role="tablist" aria-label={t('app.sessionView')}>
+              <button role="tab" aria-selected={workspaceView === 'terminal'} className={workspaceView === 'terminal' ? 'active' : ''} onClick={() => setWorkspaceView('terminal')}><SquareTerminal size={15} />{t('common.terminal')}</button>
+              <button role="tab" aria-selected={workspaceView === 'files'} className={workspaceView === 'files' ? 'active' : ''} onClick={() => setWorkspaceView('files')}><FolderOpen size={15} />{t('app.files')}</button>
             </div><div className="session-actions">
-            {workspaceView === 'files' && activeBookmark && activeTab?.sessionId && <button className="secondary-button" onClick={() => setDeploymentDialog(true)}><Rocket size={15} />部署</button>}
-            {workspaceView === 'terminal' && activeBookmark && <button className="secondary-button" onClick={() => setAiDialog(true)}><WandSparkles size={15} />AI 命令</button>}
-            {activeTab?.status === 'connected' && activeTab.sessionId && <button className="secondary-button" onClick={() => setTunnelDialog(true)}><Network size={15} />端口转发</button>}
-            {activeTab?.status === 'connected' && <button className="secondary-button" onClick={() => activeTab.sessionId && void window.api.sessions.disconnect(activeTab.sessionId).catch((error) => showError(errorMessage(error)))}><Power size={15} />断开</button>}
+            {workspaceView === 'files' && activeBookmark && activeTab?.sessionId && <button className="secondary-button" onClick={() => setDeploymentDialog(true)}><Rocket size={15} />{t('app.deploy')}</button>}
+            {workspaceView === 'terminal' && activeBookmark && <button className="secondary-button" onClick={() => setAiDialog(true)}><WandSparkles size={15} />{t('app.aiCommand')}</button>}
+            {activeTab?.status === 'connected' && activeTab.sessionId && <button className="secondary-button" onClick={() => setTunnelDialog(true)}><Network size={15} />{t('app.portForwarding')}</button>}
+            {activeTab?.status === 'connected' && <button className="secondary-button" onClick={() => activeTab.sessionId && void window.api.sessions.disconnect(activeTab.sessionId).catch((error) => showError(errorMessage(error)))}><Power size={15} />{t('app.disconnect')}</button>}
           </div></div>
           <div className="session-stack">
             {tabs.map((tab) => { const bookmark = bookmarkMap.get(tab.bookmarkId); const reconnect = bookmark ? () => openBookmark(bookmark, { tabKey: tab.key }) : undefined; return <div key={tab.key} className={`session-view ${tab.key === activeKey ? 'active' : ''} ${workspaceView}`}>
@@ -669,20 +677,20 @@ export function App(): React.JSX.Element {
     </div>
     {sidebarContextMenu && <div className="sidebar-context-menu" role="menu" style={{ left: sidebarContextMenu.x, top: sidebarContextMenu.y }} onPointerDown={(event) => event.stopPropagation()}>
       {sidebarContextMenu.group !== undefined ? <>
-        <button role="menuitem" onClick={() => { setSidebarContextMenu(null); setGroupDialog({ mode: 'create' }) }}><FolderPlus size={15} />新建分组</button>
-        <button role="menuitem" onClick={() => { const group = sidebarContextMenu.group ?? ''; setSidebarContextMenu(null); setGroupDialog({ mode: 'rename', group }) }}><Edit3 size={15} />重命名分组</button>
-        <button role="menuitem" className="danger" onClick={() => { const group = sidebarContextMenu.group ?? ''; setSidebarContextMenu(null); void deleteBookmarkGroup(group) }}><Trash2 size={15} />删除分组及连接</button>
+        <button role="menuitem" onClick={() => { setSidebarContextMenu(null); setGroupDialog({ mode: 'create' }) }}><FolderPlus size={15} />{t('common.newGroup')}</button>
+        <button role="menuitem" onClick={() => { const group = sidebarContextMenu.group ?? ''; setSidebarContextMenu(null); setGroupDialog({ mode: 'rename', group }) }}><Edit3 size={15} />{t('common.renameGroup')}</button>
+        <button role="menuitem" className="danger" onClick={() => { const group = sidebarContextMenu.group ?? ''; setSidebarContextMenu(null); void deleteBookmarkGroup(group) }}><Trash2 size={15} />{t('common.deleteGroupAndConnections')}</button>
       </> : <>
-        <button role="menuitem" onClick={() => { setSidebarContextMenu(null); void chooseSshConfig() }}><FileInput size={15} />导入 OpenSSH Config</button>
-        <button role="menuitem" onClick={() => { setSidebarContextMenu(null); void importConnectionArchive() }}><Upload size={15} />导入连接备份</button>
-        <button role="menuitem" onClick={() => { setSidebarContextMenu(null); void exportConnectionArchive() }}><Download size={15} />导出连接备份</button>
+        <button role="menuitem" onClick={() => { setSidebarContextMenu(null); void chooseSshConfig() }}><FileInput size={15} />{t('common.importOpensshConfig')}</button>
+        <button role="menuitem" onClick={() => { setSidebarContextMenu(null); void importConnectionArchive() }}><Upload size={15} />{t('app.importConnectionBackup')}</button>
+        <button role="menuitem" onClick={() => { setSidebarContextMenu(null); void exportConnectionArchive() }}><Download size={15} />{t('app.exportConnectionBackup')}</button>
         <div className="context-menu-separator" />
-        <button role="menuitem" onClick={() => { setSidebarContextMenu(null); setBookmarkDialog('new') }}><CirclePlus size={15} />新增连接</button>
-        <button role="menuitem" disabled={!contextBookmark} onClick={() => { setSidebarContextMenu(null); if (contextBookmark) setBookmarkDialog(contextBookmark) }}><Edit3 size={15} />编辑连接</button>
-        <button role="menuitem" disabled={!contextBookmark} onClick={() => { setSidebarContextMenu(null); if (contextBookmark) void duplicateBookmark(contextBookmark) }}><Copy size={15} />复制配置</button>
-        <button role="menuitem" disabled={!contextBookmark} className="danger" onClick={() => { setSidebarContextMenu(null); if (contextBookmark) void removeBookmark(contextBookmark) }}><Trash2 size={15} />删除连接</button>
+        <button role="menuitem" onClick={() => { setSidebarContextMenu(null); setBookmarkDialog('new') }}><CirclePlus size={15} />{t('common.newConnection')}</button>
+        <button role="menuitem" disabled={!contextBookmark} onClick={() => { setSidebarContextMenu(null); if (contextBookmark) setBookmarkDialog(contextBookmark) }}><Edit3 size={15} />{t('common.editConnection')}</button>
+        <button role="menuitem" disabled={!contextBookmark} onClick={() => { setSidebarContextMenu(null); if (contextBookmark) void duplicateBookmark(contextBookmark) }}><Copy size={15} />{t('app.duplicate')}</button>
+        <button role="menuitem" disabled={!contextBookmark} className="danger" onClick={() => { setSidebarContextMenu(null); if (contextBookmark) void removeBookmark(contextBookmark) }}><Trash2 size={15} />{t('common.deleteConnection')}</button>
         <div className="context-menu-separator" />
-        <button role="menuitem" onClick={() => { setSidebarContextMenu(null); setGroupDialog({ mode: 'create' }) }}><FolderPlus size={15} />新建分组</button>
+        <button role="menuitem" onClick={() => { setSidebarContextMenu(null); setGroupDialog({ mode: 'create' }) }}><FolderPlus size={15} />{t('common.newGroup')}</button>
       </>}
     </div>}
     {groupDialog && <GroupNameDialog mode={groupDialog.mode} initialName={groupDialog.group ?? ''} onClose={() => setGroupDialog(null)} onSave={(name) => void saveGroup(name)} />}
@@ -690,7 +698,7 @@ export function App(): React.JSX.Element {
     {authRequest && <AuthDialog bookmark={authRequest.bookmark} jumpBookmark={authRequest.bookmark.jumpBookmarkId ? bookmarkMap.get(authRequest.bookmark.jumpBookmarkId) : undefined} onClose={() => setAuthRequest(null)} onConnect={(credentials) => void connect(authRequest.bookmark, credentials, authRequest.target)} />}
     {hostPrompts[0] && <HostKeyDialog prompt={hostPrompts[0]} onDecision={(accept) => { const prompt = hostPrompts[0]; if (!prompt) return; window.api.sessions.hostKeyDecision(prompt.sessionId, accept); setHostPrompts((current) => current.filter((item) => item !== prompt)) }} />}
     {conflict && <ConflictDialog conflict={conflict} onDecision={(resolution, apply) => { window.api.transfers.resolveConflict(conflict.taskId, resolution, apply); setConflict(null) }} />}
-    {settingsDialog && <SettingsDialog initialSection={settingsInitialSection} settings={terminalSettings} backgroundImage={terminalBackground} appIcons={appIcons} uiTheme={uiTheme} aiSettings={aiSettings} onAiSettingsChange={setAiSettings} onThemePreview={setUiThemePreview} onClose={() => { setUiThemePreview(null); setSettingsDialog(false) }} onSave={(settings, image, icon, theme, ai) => void saveSettings(settings, image, icon, theme, ai)} onConfirm={confirmAction} onError={showError} />}
+    {settingsDialog && <SettingsDialog initialSection={settingsInitialSection} settings={terminalSettings} backgroundImage={terminalBackground} appIcons={appIcons} uiTheme={uiTheme} appLanguage={savedLanguage} aiSettings={aiSettings} onAiSettingsChange={setAiSettings} onThemePreview={setUiThemePreview} onLanguagePreview={setLanguage} onClose={() => { setUiThemePreview(null); setLanguage(savedLanguage); setSettingsDialog(false) }} onSave={(settings, image, icon, theme, appLanguage, ai) => void saveSettings(settings, image, icon, theme, appLanguage, ai)} onConfirm={confirmAction} onError={showError} />}
     {aiDialog && activeBookmark && activeTab && <AiCommandDialog bookmark={activeBookmark} sessionId={activeTab.sessionId} connected={activeTab.status === 'connected'} settings={aiSettings} getTerminalContext={() => terminalPaneRefs.current.get(activeTab.key)?.getRecentLines(aiTerminalContextLines, aiTerminalContextChars) ?? ''} onSettingsChange={setAiSettings} onSettings={() => { setAiDialog(false); openSettings('ai') }} onClose={() => setAiDialog(false)} onError={showError} />}
     {helpDialog && <HelpDialog onClose={() => setHelpDialog(false)} />}
     {deploymentDialog && activeBookmark && activeTab?.sessionId && <DeploymentDialog bookmark={activeBookmark} sessionId={activeTab.sessionId} onClose={() => setDeploymentDialog(false)} onConfirm={confirmAction} onError={showError} />}
@@ -702,6 +710,7 @@ export function App(): React.JSX.Element {
 }
 
 function AiCommandDialog({ bookmark, sessionId, connected, settings, getTerminalContext, onSettingsChange, onSettings, onClose, onError }: { bookmark: Bookmark; sessionId?: string; connected: boolean; settings: AiSettings; getTerminalContext(): string; onSettingsChange(settings: AiSettings): void; onSettings(): void; onClose(): void; onError(message: string): void }): React.JSX.Element {
+  const { t } = useI18n()
   const [requirement, setRequirement] = useState('')
   const [shell, setShell] = useState<AiShell>(settings.defaultShell)
   const [suggestion, setSuggestion] = useState<AiCommandSuggestion | null>(null)
@@ -734,7 +743,7 @@ function AiCommandDialog({ bookmark, sessionId, connected, settings, getTerminal
   const generate = async (): Promise<void> => {
     if (!requirement.trim()) return
     const terminalContext = includeTerminalContext ? getTerminalContext() : undefined
-    if (includeTerminalContext && !terminalContext?.trim()) { setError('当前终端没有可附带的文本内容'); return }
+    if (includeTerminalContext && !terminalContext?.trim()) { setError(t('app.theCurrentTerminalHasNoTextToInclude')); return }
     setLoading(true); setError(''); setSuggestion(null); setCommand(''); setEdited(false)
     try {
       const result = await window.api.ai.generate(requirement.trim(), shell, terminalContext, includeTerminalContext && redactTerminalContext)
@@ -743,7 +752,7 @@ function AiCommandDialog({ bookmark, sessionId, connected, settings, getTerminal
     finally { setLoading(false) }
   }
   const requireConnectedSession = (): string | null => {
-    if (!connected || !sessionId) { setError('当前 SSH 会话已断开，无法发送命令'); return null }
+    if (!connected || !sessionId) { setError(t('app.theSshSessionIsDisconnectedAndCannotReceive')); return null }
     return sessionId
   }
   const fillCommand = async (): Promise<void> => {
@@ -776,12 +785,12 @@ function AiCommandDialog({ bookmark, sessionId, connected, settings, getTerminal
       setConfirming(assessment)
     } catch (executeError) { setError(errorMessage(executeError)) }
   }
-  const riskText = suggestion ? ({ low: '低风险', medium: '需注意', high: '高风险' } as const)[suggestion.riskLevel] : ''
+  const riskText = suggestion ? ({ low: t('common.lowRisk'), medium: t('common.caution'), high: t('common.highRisk') } as const)[suggestion.riskLevel] : ''
 
   const openRawExchange = async (): Promise<void> => {
     try {
       const exchange = await window.api.ai.getLastExchange()
-      if (!exchange) { setError('暂无 AI 请求诊断数据'); return }
+      if (!exchange) { setError(t('app.noAiRequestDiagnosticsAreAvailable')); return }
       setRawExchange(exchange)
     } catch (diagnosticError) { setError(errorMessage(diagnosticError)) }
   }
@@ -806,9 +815,9 @@ function AiCommandDialog({ bookmark, sessionId, connected, settings, getTerminal
 
   const executionConfirmation = confirming ? (() => {
     const confirmationCopy = {
-      low: { title: '确认执行命令', heading: '请确认将在当前会话中执行此命令' },
-      medium: { title: '确认执行需注意的命令', heading: '该命令可能修改系统或文件内容' },
-      high: { title: '确认执行高风险命令', heading: '该命令可能造成不可逆修改' },
+      low: { title: t('app.confirmCommandExecution'), heading: t('app.confirmRunningThisCommandInTheCurrentSession') },
+      medium: { title: t('app.confirmCommandExecution2'), heading: t('app.thisCommandMayChangeTheSystemOrFiles') },
+      high: { title: t('app.confirmHighRiskCommand'), heading: t('app.thisCommandMayCauseIrreversibleChanges') },
     } as const
     const copy = confirmationCopy[confirming.riskLevel]
     const requiresTextConfirmation = confirming.riskLevel === 'high'
@@ -816,28 +825,28 @@ function AiCommandDialog({ bookmark, sessionId, connected, settings, getTerminal
       <div className="ai-confirm-heading">{confirming.riskLevel === 'low' ? <SquareTerminal size={22} /> : <ShieldAlert size={22} />}<div><strong>{copy.heading}</strong><span>{bookmark.username}@{bookmark.host}:{bookmark.port}</span></div></div>
       <pre>{command.trim()}</pre>
       {confirming.warnings.length > 0 && <ul>{confirming.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>}
-      {requiresTextConfirmation && <label>输入“执行”以继续<input autoFocus value={confirmationText} onChange={(event) => setConfirmationText(event.target.value)} /></label>}
-      <div className="dialog-actions"><button className="secondary-button" disabled={executing} onClick={() => setConfirming(null)}>取消</button><button className={requiresTextConfirmation ? 'danger-button' : 'primary-button'} disabled={(requiresTextConfirmation && confirmationText !== '执行') || executing} onClick={() => void executeConfirmed()}><Play size={15} />{executing ? '正在执行…' : '执行命令'}</button></div>
+      {requiresTextConfirmation && <label>{t('app.typeExecuteToContinue')}<input autoFocus value={confirmationText} onChange={(event) => setConfirmationText(event.target.value)} /></label>}
+      <div className="dialog-actions"><button className="secondary-button" disabled={executing} onClick={() => setConfirming(null)}>{t('common.cancel')}</button><button className={requiresTextConfirmation ? 'danger-button' : 'primary-button'} disabled={(requiresTextConfirmation && confirmationText !== t('app.execute')) || executing} onClick={() => void executeConfirmed()}><Play size={15} />{executing ? t('app.executing') : t('app.executeCommand')}</button></div>
     </div></Modal>
   })() : null
 
-  return <><Modal title="AI 命令助手" onClose={confirming ? () => undefined : onClose} wide className="workflow-dialog"><div className="ai-command-dialog">
-    <div className="ai-command-content"><div className="ai-target"><Server size={16} /><strong>{bookmark.name}</strong><span>{bookmark.username}@{bookmark.host}:{bookmark.port}</span><button type="button" className="icon-button" title="最近生成的命令" onClick={() => void openHistory()}><HistoryIcon size={15} /></button><button type="button" className="icon-button" title="查看 AI 原始请求与响应" onClick={() => void openRawExchange()}><FileJson2 size={15} /></button><span className={`status-dot ${connected ? 'connected' : 'disconnected'}`} /></div>
-    {!settings.model.trim() ? <div className="ai-unconfigured"><Bot size={28} /><strong>尚未配置 AI 模型</strong><button className="primary-button" onClick={onSettings}><SettingsIcon size={15} />打开 AI 设置</button></div> : <>
+  return <><Modal title={t('app.aiCommandAssistant')} onClose={confirming ? () => undefined : onClose} wide className="workflow-dialog"><div className="ai-command-dialog">
+    <div className="ai-command-content"><div className="ai-target"><Server size={16} /><strong>{bookmark.name}</strong><span>{bookmark.username}@{bookmark.host}:{bookmark.port}</span><button type="button" className="icon-button" title={t('app.recentCommands')} onClick={() => void openHistory()}><HistoryIcon size={15} /></button><button type="button" className="icon-button" title={t('app.viewRawAiRequestAndResponse')} onClick={() => void openRawExchange()}><FileJson2 size={15} /></button><span className={`status-dot ${connected ? 'connected' : 'disconnected'}`} /></div>
+    {!settings.model.trim() ? <div className="ai-unconfigured"><Bot size={28} /><strong>{t('app.noAiModelConfigured')}</strong><button className="primary-button" onClick={onSettings}><SettingsIcon size={15} />{t('app.openAiSettings')}</button></div> : <>
       <section className="ai-compose">
-        <div className="ai-prompt-row"><label>目标 Shell<select value={shell} onChange={(event) => void selectShell(event.target.value as AiShell)}><option value="linux">Linux Shell</option><option value="powerShell">PowerShell</option><option value="cmd">Windows cmd</option><option value="macos">macOS Shell</option></select></label><label className="ai-requirement">需要完成什么<textarea autoFocus rows={4} maxLength={8000} value={requirement} onChange={(event) => setRequirement(event.target.value)} placeholder="例如：从 app.log 中找出更新条数大于 0 的日志" onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); void generate() } }} /></label></div>
-        <div className="ai-compose-actions"><div className="ai-context-options"><label className="check-label ai-context-option" title={`最多附带 ${aiTerminalContextChars} 个字符，并随请求发送给 AI`}><input type="checkbox" checked={includeTerminalContext} onChange={(event) => setIncludeTerminalContext(event.target.checked)} />附带终端最近 {aiTerminalContextLines} 行</label><label className="check-label ai-context-option" title="发送前掩码手机号、邮箱、证件号等敏感信息"><input type="checkbox" disabled={!includeTerminalContext} checked={redactTerminalContext} onChange={(event) => setRedactTerminalContext(event.target.checked)} />自动脱敏敏感信息</label></div><button className="primary-button" disabled={loading || !requirement.trim()} onClick={() => void generate()}><WandSparkles size={15} />{loading ? '正在生成…' : suggestion ? '重新生成' : '生成命令'}</button></div>
+        <div className="ai-prompt-row"><label>{t('app.targetShell')}<select value={shell} onChange={(event) => void selectShell(event.target.value as AiShell)}><option value="linux">Linux Shell</option><option value="powerShell">PowerShell</option><option value="cmd">Windows cmd</option><option value="macos">macOS Shell</option></select></label><label className="ai-requirement">{t('app.whatDoYouNeedToDo')}<textarea autoFocus rows={4} maxLength={8000} value={requirement} onChange={(event) => setRequirement(event.target.value)} placeholder={t('app.forExampleFindAppLogEntriesWhereThe')} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); void generate() } }} /></label></div>
+        <div className="ai-compose-actions"><div className="ai-context-options"><label className="check-label ai-context-option" title={t('app.includeUpToValueCharactersInTheAi', { value0: aiTerminalContextChars })}><input type="checkbox" checked={includeTerminalContext} onChange={(event) => setIncludeTerminalContext(event.target.checked)} />{t('app.includeTheLastValueTerminalLines', { value0: aiTerminalContextLines })}</label><label className="check-label ai-context-option" title={t('app.maskCommonPhoneNumbersEmailAddressesAndIdentity')}><input type="checkbox" disabled={!includeTerminalContext} checked={redactTerminalContext} onChange={(event) => setRedactTerminalContext(event.target.checked)} />{t('app.redactSensitiveInformation')}</label></div><button className="primary-button" disabled={loading || !requirement.trim()} onClick={() => void generate()}><WandSparkles size={15} />{loading ? t('app.generating') : suggestion ? t('app.regenerate') : t('app.generateCommand')}</button></div>
       </section>
       {error && <div className="ai-error">{error}</div>}
       {suggestion && <div className="ai-result">
-        <div className="ai-result-heading"><div><strong>生成结果</strong><span className={`ai-risk ${suggestion.riskLevel}`}>{riskText}</span></div>{edited && <span className="ai-edited">命令已修改，原说明可能不再适用</span>}</div>
+        <div className="ai-result-heading"><div><strong>{t('app.generatedResult')}</strong><span className={`ai-risk ${suggestion.riskLevel}`}>{riskText}</span></div>{edited && <span className="ai-edited">{t('app.theCommandWasEditedTheOriginalExplanationMay')}</span>}</div>
         <textarea className="ai-command-editor" rows={4} spellCheck={false} value={command} onChange={(event) => { setCommand(event.target.value); setEdited(event.target.value !== suggestion.command) }} />
         {suggestion.explanation && <p>{suggestion.explanation}</p>}
-        {suggestion.assumptions.length > 0 && <details className="ai-notes"><summary>假设 <span>{suggestion.assumptions.length}</span></summary><ul>{suggestion.assumptions.map((item) => <li key={item}>{item}</li>)}</ul></details>}
-        {suggestion.warnings.length > 0 && <details className="ai-notes warning"><summary>注意 <span>{suggestion.warnings.length}</span></summary><ul>{suggestion.warnings.map((item) => <li key={item}>{item}</li>)}</ul></details>}
+        {suggestion.assumptions.length > 0 && <details className="ai-notes"><summary>{t('app.assumptions')} <span>{suggestion.assumptions.length}</span></summary><ul>{suggestion.assumptions.map((item) => <li key={item}>{item}</li>)}</ul></details>}
+        {suggestion.warnings.length > 0 && <details className="ai-notes warning"><summary>{t('app.warnings')} <span>{suggestion.warnings.length}</span></summary><ul>{suggestion.warnings.map((item) => <li key={item}>{item}</li>)}</ul></details>}
       </div>}
     </>}
-    </div><div className="ai-command-footer"><button className="secondary-button" disabled={!command.trim()} onClick={() => void window.api.system.writeClipboard(command).catch((copyError) => setError(errorMessage(copyError)))}><Copy size={15} />复制</button><div><button className="secondary-button" disabled={!connected || !command.trim() || executing} onClick={() => void fillCommand()}><Send size={15} />填入终端</button><button className="primary-button" disabled={!connected || !command.trim() || executing} onClick={() => void requestExecution()}><Play size={15} />执行</button></div></div>
+    </div><div className="ai-command-footer"><button className="secondary-button" disabled={!command.trim()} onClick={() => void window.api.system.writeClipboard(command).catch((copyError) => setError(errorMessage(copyError)))}><Copy size={15} />{t('common.copy')}</button><div><button className="secondary-button" disabled={!connected || !command.trim() || executing} onClick={() => void fillCommand()}><Send size={15} />{t('app.insertIntoTerminal')}</button><button className="primary-button" disabled={!connected || !command.trim() || executing} onClick={() => void requestExecution()}><Play size={15} />{t('app.execute2')}</button></div></div>
   </div></Modal>{executionConfirmation}</>
 }
 
@@ -847,38 +856,41 @@ function prettyRawJson(value: string): string {
 }
 
 function AiCommandHistoryDialog({ entries, onUse, onClose, onClear }: { entries: AiCommandHistoryEntry[]; onUse(entry: AiCommandHistoryEntry): void; onClose(): void; onClear(): Promise<void> }): React.JSX.Element {
+  const { t } = useI18n()
   const [confirmingClear, setConfirmingClear] = useState(false)
   const shellNames: Record<AiShell, string> = { linux: 'Linux Shell', powerShell: 'PowerShell', cmd: 'Windows cmd', macos: 'macOS Shell' }
-  const riskNames = { low: '低风险', medium: '需注意', high: '高风险' } as const
-  return <><Modal title="AI 命令历史" onClose={confirmingClear ? () => undefined : onClose} wide className="workflow-dialog"><div className="ai-history">
-    <div className="ai-history-list">{entries.length === 0 ? <div className="ai-history-empty"><HistoryIcon size={26} /><strong>暂无历史命令</strong><span>成功生成的最近 10 条命令会显示在这里</span></div> : entries.map((entry) => <article key={entry.id} className="ai-history-entry">
+  const riskNames = { low: t('common.lowRisk'), medium: t('common.caution'), high: t('common.highRisk') } as const
+  return <><Modal title={t('app.aiCommandHistory')} onClose={confirmingClear ? () => undefined : onClose} wide className="workflow-dialog"><div className="ai-history">
+    <div className="ai-history-list">{entries.length === 0 ? <div className="ai-history-empty"><HistoryIcon size={26} /><strong>{t('app.noCommandHistory')}</strong><span>{t('app.the10MostRecentSuccessfulCommandsAppearHere')}</span></div> : entries.map((entry) => <article key={entry.id} className="ai-history-entry">
       <header><div><span>{shellNames[entry.shell]}</span><time>{new Date(entry.createdAt).toLocaleString()}</time></div><span className={`ai-risk ${entry.riskLevel}`}>{riskNames[entry.riskLevel]}</span></header>
       <p title={entry.requirement}>{entry.requirement}</p>
       <pre>{entry.command}</pre>
-      <div><button className="secondary-button" onClick={() => void window.api.system.writeClipboard(entry.command)}><Copy size={15} />复制</button><button className="primary-button" onClick={() => onUse(entry)}><Check size={15} />使用</button></div>
+      <div><button className="secondary-button" onClick={() => void window.api.system.writeClipboard(entry.command)}><Copy size={15} />{t('common.copy')}</button><button className="primary-button" onClick={() => onUse(entry)}><Check size={15} />{t('app.use')}</button></div>
     </article>)}</div>
-    <div className="dialog-actions spread"><button className="danger-button" disabled={entries.length === 0} onClick={() => setConfirmingClear(true)}><Trash2 size={15} />清空历史</button><button className="primary-button" onClick={onClose}>返回</button></div>
-  </div></Modal>{confirmingClear && <Modal title="清空 AI 命令历史" onClose={() => setConfirmingClear(false)} raised className="secondary-confirm-dialog"><div className="confirmation-dialog danger">
-    <div className="confirmation-heading"><Trash2 size={22} /><div><strong>确定清空全部 AI 命令历史？</strong><span>最近保存的 10 条命令将被删除，此操作无法撤销。</span></div></div>
-    <div className="dialog-actions"><button className="secondary-button" onClick={() => setConfirmingClear(false)}>取消</button><button className="danger-button" onClick={async () => { await onClear(); setConfirmingClear(false) }}><Trash2 size={15} />清空历史</button></div>
+    <div className="dialog-actions spread"><button className="danger-button" disabled={entries.length === 0} onClick={() => setConfirmingClear(true)}><Trash2 size={15} />{t('common.clearHistory')}</button><button className="primary-button" onClick={onClose}>{t('common.back')}</button></div>
+  </div></Modal>{confirmingClear && <Modal title={t('app.clearAiCommandHistory')} onClose={() => setConfirmingClear(false)} raised className="secondary-confirm-dialog"><div className="confirmation-dialog danger">
+    <div className="confirmation-heading"><Trash2 size={22} /><div><strong>{t('app.clearAllAiCommandHistory')}</strong><span>{t('app.the10MostRecentlySavedCommandsWillBe')}</span></div></div>
+    <div className="dialog-actions"><button className="secondary-button" onClick={() => setConfirmingClear(false)}>{t('common.cancel')}</button><button className="danger-button" onClick={async () => { await onClear(); setConfirmingClear(false) }}><Trash2 size={15} />{t('common.clearHistory')}</button></div>
   </div></Modal>}</>
 }
 
 function AiDiagnosticsDialog({ exchange, onClose, onClear }: { exchange: AiRawExchange; onClose(): void; onClear(): void }): React.JSX.Element {
+  const { t } = useI18n()
   const [view, setView] = useState<'request' | 'response'>('response')
   const headers = view === 'request' ? exchange.requestHeaders : exchange.responseHeaders
   const body = prettyRawJson(view === 'request' ? exchange.requestBody : exchange.responseBody)
-  const copy = [view === 'request' ? `POST ${exchange.endpoint}` : `HTTP ${exchange.responseStatus ?? '无响应'}`, headers, body, exchange.error && `Error: ${exchange.error}`].filter(Boolean).join('\n\n')
-  return <Modal title="AI 原始请求与响应" onClose={onClose} wide className="workflow-dialog"><div className="ai-diagnostics">
-    <div className="ai-diagnostics-meta"><span title={exchange.endpoint}>POST {exchange.endpoint}</span><time>{new Date(exchange.occurredAt).toLocaleString()}</time>{exchange.responseStatus ? <strong className={exchange.responseStatus >= 400 ? 'error' : ''}>HTTP {exchange.responseStatus}</strong> : <strong className="error">无响应</strong>}</div>
+  const copy = [view === 'request' ? `POST ${exchange.endpoint}` : `HTTP ${exchange.responseStatus ?? t('common.noResponse')}`, headers, body, exchange.error && `Error: ${exchange.error}`].filter(Boolean).join('\n\n')
+  return <Modal title={t('app.rawAiRequestAndResponse')} onClose={onClose} wide className="workflow-dialog"><div className="ai-diagnostics">
+    <div className="ai-diagnostics-meta"><span title={exchange.endpoint}>POST {exchange.endpoint}</span><time>{new Date(exchange.occurredAt).toLocaleString()}</time>{exchange.responseStatus ? <strong className={exchange.responseStatus >= 400 ? 'error' : ''}>HTTP {exchange.responseStatus}</strong> : <strong className="error">{t('common.noResponse')}</strong>}</div>
     {exchange.error && <div className="ai-error">{exchange.error}</div>}
-    <div className="ai-diagnostics-tabs" role="tablist" aria-label="原始数据类别"><button role="tab" aria-selected={view === 'request'} className={view === 'request' ? 'active' : ''} onClick={() => setView('request')}>请求</button><button role="tab" aria-selected={view === 'response'} className={view === 'response' ? 'active' : ''} onClick={() => setView('response')}>响应</button></div>
-    <div className="ai-diagnostics-content">{headers && <section><strong>Headers</strong><pre>{headers}</pre></section>}<section><strong>Body</strong><pre>{body || '（空）'}</pre></section></div>
-    <div className="dialog-actions spread"><button className="danger-button" onClick={onClear}><Trash2 size={15} />清除</button><div><button className="secondary-button" onClick={() => void window.api.system.writeClipboard(copy)}><Copy size={15} />复制</button><button className="primary-button" onClick={onClose}>返回</button></div></div>
+    <div className="ai-diagnostics-tabs" role="tablist" aria-label={t('app.rawDataType')}><button role="tab" aria-selected={view === 'request'} className={view === 'request' ? 'active' : ''} onClick={() => setView('request')}>{t('app.request')}</button><button role="tab" aria-selected={view === 'response'} className={view === 'response' ? 'active' : ''} onClick={() => setView('response')}>{t('app.response')}</button></div>
+    <div className="ai-diagnostics-content">{headers && <section><strong>Headers</strong><pre>{headers}</pre></section>}<section><strong>Body</strong><pre>{body || t('app.empty')}</pre></section></div>
+    <div className="dialog-actions spread"><button className="danger-button" onClick={onClear}><Trash2 size={15} />{t('app.clear')}</button><div><button className="secondary-button" onClick={() => void window.api.system.writeClipboard(copy)}><Copy size={15} />{t('common.copy')}</button><button className="primary-button" onClick={onClose}>{t('common.back')}</button></div></div>
   </div></Modal>
 }
 
 function SshConfigImportDialog({ preview, onClose, onImported, onError }: { preview: SshConfigPreview; onClose(): void; onImported(): void; onError(message: string): void }): React.JSX.Element {
+  const { t } = useI18n()
   const [selected, setSelected] = useState(() => new Set(preview.entries.map((item) => item.alias)))
   const [loading, setLoading] = useState(false)
   const toggle = (alias: string): void => setSelected((current) => {
@@ -892,18 +904,19 @@ function SshConfigImportDialog({ preview, onClose, onImported, onError }: { prev
     catch (error) { onError(errorMessage(error)) }
     finally { setLoading(false) }
   }
-  return <Modal title="导入 OpenSSH Config" onClose={onClose} wide><div className="ssh-import-dialog">
+  return <Modal title={t('common.importOpensshConfig')} onClose={onClose} wide><div className="ssh-import-dialog">
     <div className="import-source" title={preview.path}>{preview.path}</div>
-    <div className="import-list">{preview.entries.length === 0 ? <div className="import-empty">没有找到可导入的具体 Host 配置</div> : preview.entries.map((entry) => <label key={entry.alias}>
+    <div className="import-list">{preview.entries.length === 0 ? <div className="import-empty">{t('app.noConcreteHostEntriesWereFound')}</div> : preview.entries.map((entry) => <label key={entry.alias}>
       <input type="checkbox" checked={selected.has(entry.alias)} onChange={() => toggle(entry.alias)} />
-      <span><strong>{entry.name}</strong><small>{entry.username}@{entry.host}:{entry.port}{entry.proxyJumpAlias ? ` · 经 ${entry.proxyJumpAlias}` : ''}</small></span>
-      <em>{entry.privateKeyPath ? '私钥' : 'Agent'}</em>
+      <span><strong>{entry.name}</strong><small>{entry.username}@{entry.host}:{entry.port}{entry.proxyJumpAlias ? t('common.viaValue', { value0: entry.proxyJumpAlias }) : ''}</small></span>
+      <em>{entry.privateKeyPath ? t('common.privateKey') : 'Agent'}</em>
     </label>)}</div>
-    <div className="dialog-actions"><button className="secondary-button" onClick={onClose}>取消</button><button className="primary-button" disabled={!selected.size || loading} onClick={() => void importSelected()}>{loading ? '正在导入…' : `导入 ${selected.size} 个连接`}</button></div>
+    <div className="dialog-actions"><button className="secondary-button" onClick={onClose}>{t('common.cancel')}</button><button className="primary-button" disabled={!selected.size || loading} onClick={() => void importSelected()}>{loading ? t('app.importing') : t('app.importValueConnections', { value0: selected.size })}</button></div>
   </div></Modal>
 }
 
 function TunnelDialog({ bookmark, sessionId, onClose, onError }: { bookmark: Bookmark; sessionId: string; onClose(): void; onError(message: string): void }): React.JSX.Element {
+  const { t } = useI18n()
   const empty = (): PortForwardProfile => ({ id: crypto.randomUUID(), bookmarkId: bookmark.id, name: '', type: 'local', bindAddress: '127.0.0.1', bindPort: 0, targetHost: '127.0.0.1', targetPort: 80 })
   const [profiles, setProfiles] = useState<PortForwardProfile[]>([])
   const [profile, setProfile] = useState<PortForwardProfile>(empty)
@@ -922,13 +935,13 @@ function TunnelDialog({ bookmark, sessionId, onClose, onError }: { bookmark: Boo
   const active = tunnels.find((item) => item.profileId === profile.id)
   const currentTarget = ['127.0.0.1', 'localhost', '::1'].includes(profile.targetHost.trim().toLowerCase())
   const bindPort = active?.bindPort ?? profile.bindPort
-  const bindEndpoint = `${profile.bindAddress || '未填写'}:${bindPort || '自动分配'}`
-  const targetEndpoint = profile.type === 'dynamic' ? '由客户端请求决定' : `${profile.targetHost || '未填写'}:${profile.targetPort || '未填写'}`
+  const bindEndpoint = `${profile.bindAddress || t('common.notSet')}:${bindPort || t('app.auto')}`
+  const targetEndpoint = profile.type === 'dynamic' ? t('app.selectedByClient') : `${profile.targetHost || t('common.notSet')}:${profile.targetPort || t('common.notSet')}`
   const route = profile.type === 'local'
-    ? [{ label: '本机应用连接', value: bindEndpoint, icon: Monitor }, { label: 'SSH 加密通道', value: `${bookmark.host}:${bookmark.port}`, icon: Server }, { label: currentTarget ? '当前 SSH 服务器' : '服务器可达主机', value: targetEndpoint, icon: Network }]
+    ? [{ label: t('app.localApp'), value: bindEndpoint, icon: Monitor }, { label: t('common.sshTunnel'), value: `${bookmark.host}:${bookmark.port}`, icon: Server }, { label: currentTarget ? t('common.sshServer') : t('app.hostReachableByServer'), value: targetEndpoint, icon: Network }]
     : profile.type === 'remote'
-      ? [{ label: 'SSH 服务器监听', value: bindEndpoint, icon: Server }, { label: 'SSH 加密通道', value: bookmark.name, icon: Network }, { label: currentTarget ? '当前电脑' : '本机可达主机', value: targetEndpoint, icon: Monitor }]
-      : [{ label: '本机 SOCKS5', value: bindEndpoint, icon: Monitor }, { label: 'SSH 加密通道', value: `${bookmark.host}:${bookmark.port}`, icon: Server }, { label: '请求目标', value: targetEndpoint, icon: Network }]
+      ? [{ label: t('app.sshServerListener'), value: bindEndpoint, icon: Server }, { label: t('common.sshTunnel'), value: bookmark.name, icon: Network }, { label: currentTarget ? t('common.thisComputer') : t('app.hostReachableLocally'), value: targetEndpoint, icon: Monitor }]
+      : [{ label: t('app.localSocks5'), value: bindEndpoint, icon: Monitor }, { label: t('common.sshTunnel'), value: `${bookmark.host}:${bookmark.port}`, icon: Server }, { label: t('app.requestedTarget'), value: targetEndpoint, icon: Network }]
   const selectTarget = (useCurrent: boolean): void => set('targetHost', useCurrent ? '127.0.0.1' : currentTarget ? '' : profile.targetHost)
   const save = async (): Promise<PortForwardProfile | undefined> => {
     try {
@@ -953,25 +966,26 @@ function TunnelDialog({ bookmark, sessionId, onClose, onError }: { bookmark: Boo
     catch (error) { onError(errorMessage(error)) }
     finally { setLoading(false) }
   }
-  return <Modal title={`端口转发 · ${bookmark.name}`} onClose={onClose} wide><div className="tunnel-dialog">
-    <div className="deployment-profile-bar"><select value={profile.id} onChange={(event) => { const selected = profiles.find((item) => item.id === event.target.value); if (selected) setProfile(selected) }}><option value={profile.id}>{profiles.some((item) => item.id === profile.id) ? profile.name || '未命名配置' : '新转发配置'}</option>{profiles.filter((item) => item.id !== profile.id).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><button className="secondary-button" onClick={() => setProfile(empty())}><CirclePlus size={15} />新建</button>{profiles.some((item) => item.id === profile.id) && <button className="icon-button danger" title="删除转发配置" onClick={async () => { if (active) await stop(); await window.api.tunnels.removeProfile(profile.id); const next = profiles.filter((item) => item.id !== profile.id); setProfiles(next); setProfile(next[0] ?? empty()) }}><Trash2 size={15} /></button>}</div>
+  return <Modal title={t('app.portForwardingValue', { value0: bookmark.name })} onClose={onClose} wide><div className="tunnel-dialog">
+    <div className="deployment-profile-bar"><select value={profile.id} onChange={(event) => { const selected = profiles.find((item) => item.id === event.target.value); if (selected) setProfile(selected) }}><option value={profile.id}>{profiles.some((item) => item.id === profile.id) ? profile.name || t('common.unnamedProfile') : t('app.newForwardingProfile')}</option>{profiles.filter((item) => item.id !== profile.id).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><button className="secondary-button" onClick={() => setProfile(empty())}><CirclePlus size={15} />{t('common.new')}</button>{profiles.some((item) => item.id === profile.id) && <button className="icon-button danger" title={t('app.deleteForwardingProfile')} onClick={async () => { if (active) await stop(); await window.api.tunnels.removeProfile(profile.id); const next = profiles.filter((item) => item.id !== profile.id); setProfiles(next); setProfile(next[0] ?? empty()) }}><Trash2 size={15} /></button>}</div>
     <div className="form-grid">
-      <label>配置名称（可选）<input value={profile.name} onChange={(event) => set('name', event.target.value)} placeholder="留空时根据转发路径自动生成" /></label>
-      <label>转发类型<select value={profile.type} disabled={Boolean(active)} onChange={(event) => set('type', event.target.value as PortForwardProfile['type'])}><option value="local">本地转发</option><option value="remote">远端转发</option><option value="dynamic">SOCKS5 动态转发</option></select></label>
-      <section className="tunnel-route-preview"><span>流量路径</span><div className="tunnel-route-flow">{route.map((step, index) => { const Icon = step.icon; return <div className="tunnel-route-part" key={step.label}>{index > 0 && <ArrowRight size={15} />}<div><Icon size={16} /><span><small>{step.label}</small><strong title={step.value}>{step.value}</strong></span></div></div> })}</div></section>
-      <div className="form-row"><label>{profile.type === 'remote' ? 'SSH 服务器监听地址' : '本机监听地址'}<input value={profile.bindAddress} disabled={Boolean(active)} onChange={(event) => set('bindAddress', event.target.value)} /></label><label>监听端口<input type="number" min="0" max="65535" disabled={Boolean(active)} value={profile.bindPort} onChange={(event) => set('bindPort', Number(event.target.value))} /></label></div>
-      {profile.bindPort === 0 && <div className="tunnel-hint">端口 0 会在启动时自动分配，实际端口显示在运行状态中。</div>}
-      {window.api.platform === 'darwin' && profile.type !== 'remote' && profile.bindPort > 0 && profile.bindPort < 1024 && <div className="tunnel-hint warning">macOS 普通应用不能监听 1–1023 的特权端口。可改用 1024 以上的本机端口，目标端口保持不变。</div>}
-      {profile.type === 'local' && profile.bindPort === 6000 && <div className="tunnel-hint warning">Chrome 会阻止访问本机端口 6000。可将监听端口改为 16000，目标端口仍保留 6000。</div>}
-      {profile.type !== 'dynamic' && <div className="tunnel-target-setting"><span>目标位置</span><div className="tunnel-target-options"><button type="button" className={currentTarget ? 'active' : ''} disabled={Boolean(active)} onClick={() => selectTarget(true)}>{profile.type === 'local' ? '当前 SSH 服务器' : '当前电脑'}</button><button type="button" className={!currentTarget ? 'active' : ''} disabled={Boolean(active)} onClick={() => selectTarget(false)}>其他主机</button></div></div>}
-      {profile.type !== 'dynamic' && <div className="form-row"><label>{currentTarget ? profile.type === 'local' ? '目标地址（SSH 服务器自身）' : '目标地址（当前电脑自身）' : profile.type === 'local' ? '目标地址（从 SSH 服务器访问）' : '目标地址（从当前电脑访问）'}<input value={profile.targetHost} readOnly={currentTarget} disabled={Boolean(active)} placeholder={currentTarget ? undefined : '主机名或内网 IP'} onChange={(event) => set('targetHost', event.target.value)} /></label><label>目标端口<input type="number" min="1" max="65535" disabled={Boolean(active)} value={profile.targetPort} onChange={(event) => set('targetPort', Number(event.target.value))} /></label></div>}
-      {active && <div className={`tunnel-status ${active.status}`}><span className={`status-dot ${active.status === 'running' ? 'connected' : active.status === 'error' ? 'error' : 'connecting'}`} /><strong>{active.status === 'running' ? `运行中 · ${active.bindAddress}:${active.bindPort}` : active.status === 'starting' ? '正在启动' : '转发异常'}</strong>{active.error && <small>{active.error}</small>}</div>}
+      <label>{t('app.profileNameOptional')}<input value={profile.name} onChange={(event) => set('name', event.target.value)} placeholder={t('app.leaveBlankToGenerateFromTheRoute')} /></label>
+      <label>{t('app.forwardingType')}<select value={profile.type} disabled={Boolean(active)} onChange={(event) => set('type', event.target.value as PortForwardProfile['type'])}><option value="local">{t('app.localForwarding')}</option><option value="remote">{t('app.remoteForwarding')}</option><option value="dynamic">{t('app.dynamicSocks5')}</option></select></label>
+      <section className="tunnel-route-preview"><span>{t('app.trafficRoute')}</span><div className="tunnel-route-flow">{route.map((step, index) => { const Icon = step.icon; return <div className="tunnel-route-part" key={step.label}>{index > 0 && <ArrowRight size={15} />}<div><Icon size={16} /><span><small>{step.label}</small><strong title={step.value}>{step.value}</strong></span></div></div> })}</div></section>
+      <div className="form-row"><label>{profile.type === 'remote' ? t('app.sshServerBindAddress') : t('app.localBindAddress')}<input value={profile.bindAddress} disabled={Boolean(active)} onChange={(event) => set('bindAddress', event.target.value)} /></label><label>{t('app.bindPort')}<input type="number" min="0" max="65535" disabled={Boolean(active)} value={profile.bindPort} onChange={(event) => set('bindPort', Number(event.target.value))} /></label></div>
+      {profile.bindPort === 0 && <div className="tunnel-hint">{t('app.port0IsAssignedAutomaticallyWhenStartingThe')}</div>}
+      {window.api.platform === 'darwin' && profile.type !== 'remote' && profile.bindPort > 0 && profile.bindPort < 1024 && <div className="tunnel-hint warning">{t('app.regularMacosAppsCannotListenOnPrivilegedPorts')}</div>}
+      {profile.type === 'local' && profile.bindPort === 6000 && <div className="tunnel-hint warning">{t('app.chromeBlocksLocalPort6000UseBindPort')}</div>}
+      {profile.type !== 'dynamic' && <div className="tunnel-target-setting"><span>{t('app.targetLocation')}</span><div className="tunnel-target-options"><button type="button" className={currentTarget ? 'active' : ''} disabled={Boolean(active)} onClick={() => selectTarget(true)}>{profile.type === 'local' ? t('common.sshServer') : t('common.thisComputer')}</button><button type="button" className={!currentTarget ? 'active' : ''} disabled={Boolean(active)} onClick={() => selectTarget(false)}>{t('app.anotherHost')}</button></div></div>}
+      {profile.type !== 'dynamic' && <div className="form-row"><label>{currentTarget ? profile.type === 'local' ? t('app.targetAddressSshServerItself') : t('app.targetAddressThisComputer') : profile.type === 'local' ? t('app.targetAddressFromSshServer') : t('app.targetAddressFromThisComputer')}<input value={profile.targetHost} readOnly={currentTarget} disabled={Boolean(active)} placeholder={currentTarget ? undefined : t('app.hostnameOrPrivateIp')} onChange={(event) => set('targetHost', event.target.value)} /></label><label>{t('app.targetPort')}<input type="number" min="1" max="65535" disabled={Boolean(active)} value={profile.targetPort} onChange={(event) => set('targetPort', Number(event.target.value))} /></label></div>}
+      {active && <div className={`tunnel-status ${active.status}`}><span className={`status-dot ${active.status === 'running' ? 'connected' : active.status === 'error' ? 'error' : 'connecting'}`} /><strong>{active.status === 'running' ? t('app.runningValueValue', { value0: active.bindAddress, value1: active.bindPort }) : active.status === 'starting' ? t('app.starting') : t('app.forwardingError')}</strong>{active.error && <small>{active.error}</small>}</div>}
     </div>
-    <div className="dialog-actions"><button className="secondary-button" onClick={onClose}>关闭</button><button className="secondary-button" disabled={Boolean(active) || loading} onClick={() => void save()}>保存</button>{active ? <button className="danger-button" disabled={loading} onClick={() => void stop()}>停止</button> : <button className="primary-button" disabled={loading} onClick={() => void start()}><Power size={15} />启动</button>}</div>
+    <div className="dialog-actions"><button className="secondary-button" onClick={onClose}>{t('common.close')}</button><button className="secondary-button" disabled={Boolean(active) || loading} onClick={() => void save()}>{t('common.save')}</button>{active ? <button className="danger-button" disabled={loading} onClick={() => void stop()}>{t('app.stop')}</button> : <button className="primary-button" disabled={loading} onClick={() => void start()}><Power size={15} />{t('app.start')}</button>}</div>
   </div></Modal>
 }
 
 function DeploymentDialog({ bookmark, sessionId, onClose, onConfirm, onError }: { bookmark: Bookmark; sessionId: string; onClose(): void; onConfirm: ConfirmAction; onError(message: string): void }): React.JSX.Element {
+  const { t } = useI18n()
   const empty = (): DeploymentProfile => ({ id: crypto.randomUUID(), bookmarkId: bookmark.id, name: '', localDirectory: '', remoteDirectory: '/', deleteExtraneous: false })
   const [profiles, setProfiles] = useState<DeploymentProfile[]>([])
   const [profile, setProfile] = useState<DeploymentProfile>(empty)
@@ -997,24 +1011,26 @@ function DeploymentDialog({ bookmark, sessionId, onClose, onConfirm, onError }: 
     if (!diff) return
     const changed = diff.filter((item) => ['new', 'changed'].includes(item.status)).length
     const removals = profile.deleteExtraneous ? diff.filter((item) => item.status === 'remote-only').length : 0
-    if (!await onConfirm({ title: '确认部署', message: `将上传 ${changed} 个文件${removals ? `，并删除 ${removals} 个远端文件` : ''}。`, detail: removals ? '仅当全部文件上传成功后才会删除远端文件。' : '请确认部署目标和差异列表无误。', kind: 'warning', confirmLabel: '开始部署' })) return
+    if (!await onConfirm({ title: t('app.confirmDeployment'), message: removals ? t('app.deployUploadAndDelete', { changed, removals }) : t('app.deployUploadOnly', { changed }), detail: removals ? t('app.remoteFilesAreDeletedOnlyAfterEveryUpload') : t('app.verifyTheDeploymentTargetAndDifferences'), kind: 'warning', confirmLabel: t('common.startDeployment') })) return
     try { await window.api.deployments.execute(profile.id, sessionId); onClose() }
     catch (error) { onError(errorMessage(error)) }
   }
   const counts = diff ? Object.fromEntries(['new', 'changed', 'same', 'remote-only'].map((status) => [status, diff.filter((item) => item.status === status).length])) : {}
-  return <Modal title={`部署到 ${bookmark.name}`} onClose={onClose} wide><div className="deployment-dialog">
-    <div className="deployment-profile-bar"><select value={profile.id} onChange={(event) => { const selected = profiles.find((item) => item.id === event.target.value); if (selected) { setProfile(selected); setDiff(null) } }}><option value={profile.id}>{profiles.some((item) => item.id === profile.id) ? profile.name || '未命名配置' : '新部署配置'}</option>{profiles.filter((item) => item.id !== profile.id).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><button className="secondary-button" onClick={() => { setProfile(empty()); setDiff(null) }}><CirclePlus size={15} />新建</button>{profiles.some((item) => item.id === profile.id) && <button className="icon-button danger" title="删除部署配置" onClick={async () => { await window.api.deployments.remove(profile.id); const next = profiles.filter((item) => item.id !== profile.id); setProfiles(next); setProfile(next[0] ?? empty()); setDiff(null) }}><Trash2 size={15} /></button>}</div>
-    <div className="form-grid"><label>配置名称<input value={profile.name} onChange={(event) => set('name', event.target.value)} /></label><label>本地目录<div className="input-button"><input readOnly value={profile.localDirectory} /><button className="secondary-button" onClick={async () => { const path = await window.api.files.chooseLocalDirectory(); if (path) set('localDirectory', path) }}>选择</button></div></label><label>远端目录<input value={profile.remoteDirectory} onChange={(event) => set('remoteDirectory', event.target.value)} /></label><label className="check-label"><input type="checkbox" checked={profile.deleteExtraneous} onChange={(event) => set('deleteExtraneous', event.target.checked)} />上传全部成功后删除远端多余文件</label></div>
-    {diff && <><div className="deployment-summary"><span>新增 {counts['new'] ?? 0}</span><span>变化 {counts['changed'] ?? 0}</span><span>相同 {counts['same'] ?? 0}</span><span>仅远端 {counts['remote-only'] ?? 0}</span></div><div className="deployment-diff">{diff.filter((item) => item.status !== 'same').slice(0, 300).map((item) => <div key={`${item.status}:${item.relativePath}`}><span className={item.status}>{({ new: '新增', changed: '更新', 'remote-only': '远端', same: '相同' } as const)[item.status]}</span><code>{item.relativePath}</code></div>)}</div></>}
-    <div className="dialog-actions"><button className="secondary-button" onClick={onClose}>取消</button><button className="secondary-button" disabled={loading} onClick={() => void preview()}>{loading ? '正在比较…' : '保存并预览'}</button><button className="primary-button" disabled={!diff || loading} onClick={() => void execute()}><Rocket size={15} />开始部署</button></div>
+  return <Modal title={t('app.deployToValue', { value0: bookmark.name })} onClose={onClose} wide><div className="deployment-dialog">
+    <div className="deployment-profile-bar"><select value={profile.id} onChange={(event) => { const selected = profiles.find((item) => item.id === event.target.value); if (selected) { setProfile(selected); setDiff(null) } }}><option value={profile.id}>{profiles.some((item) => item.id === profile.id) ? profile.name || t('common.unnamedProfile') : t('app.newDeploymentProfile')}</option>{profiles.filter((item) => item.id !== profile.id).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><button className="secondary-button" onClick={() => { setProfile(empty()); setDiff(null) }}><CirclePlus size={15} />{t('common.new')}</button>{profiles.some((item) => item.id === profile.id) && <button className="icon-button danger" title={t('app.deleteDeploymentProfile')} onClick={async () => { await window.api.deployments.remove(profile.id); const next = profiles.filter((item) => item.id !== profile.id); setProfiles(next); setProfile(next[0] ?? empty()); setDiff(null) }}><Trash2 size={15} /></button>}</div>
+    <div className="form-grid"><label>{t('app.profileName')}<input value={profile.name} onChange={(event) => set('name', event.target.value)} /></label><label>{t('app.localDirectory')}<div className="input-button"><input readOnly value={profile.localDirectory} /><button className="secondary-button" onClick={async () => { const path = await window.api.files.chooseLocalDirectory(); if (path) set('localDirectory', path) }}>{t('common.choose')}</button></div></label><label>{t('app.remoteDirectory')}<input value={profile.remoteDirectory} onChange={(event) => set('remoteDirectory', event.target.value)} /></label><label className="check-label"><input type="checkbox" checked={profile.deleteExtraneous} onChange={(event) => set('deleteExtraneous', event.target.checked)} />{t('app.deleteExtraRemoteFilesAfterAllUploadsSucceed')}</label></div>
+    {diff && <><div className="deployment-summary"><span>{t('common.new2')} {counts['new'] ?? 0}</span><span>{t('app.changed')} {counts['changed'] ?? 0}</span><span>{t('common.same')} {counts['same'] ?? 0}</span><span>{t('app.remoteOnly')} {counts['remote-only'] ?? 0}</span></div><div className="deployment-diff">{diff.filter((item) => item.status !== 'same').slice(0, 300).map((item) => <div key={`${item.status}:${item.relativePath}`}><span className={item.status}>{({ new: t('common.new2'), changed: t('app.update'), 'remote-only': t('common.remote'), same: t('common.same') } as const)[item.status]}</span><code>{item.relativePath}</code></div>)}</div></>}
+    <div className="dialog-actions"><button className="secondary-button" onClick={onClose}>{t('common.cancel')}</button><button className="secondary-button" disabled={loading} onClick={() => void preview()}>{loading ? t('app.comparing') : t('app.saveAndPreview')}</button><button className="primary-button" disabled={!diff || loading} onClick={() => void execute()}><Rocket size={15} />{t('common.startDeployment')}</button></div>
   </div></Modal>
 }
 
-function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, uiTheme, aiSettings, onAiSettingsChange, onThemePreview, onClose, onSave, onConfirm, onError }: { initialSection: SettingsSection; settings: TerminalSettings; backgroundImage: string; appIcons: AppIconSettings; uiTheme: UiTheme; aiSettings: AiSettings; onAiSettingsChange(settings: AiSettings): void; onThemePreview(theme: UiTheme): void; onClose(): void; onSave(settings: TerminalSettings, backgroundImage: string, appIcon: AppIconId, uiTheme: UiTheme, ai: AiSettingsInput): void; onConfirm: ConfirmAction; onError(message: string): void }): React.JSX.Element {
+function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, uiTheme, appLanguage, aiSettings, onAiSettingsChange, onThemePreview, onLanguagePreview, onClose, onSave, onConfirm, onError }: { initialSection: SettingsSection; settings: TerminalSettings; backgroundImage: string; appIcons: AppIconSettings; uiTheme: UiTheme; appLanguage: AppLanguage; aiSettings: AiSettings; onAiSettingsChange(settings: AiSettings): void; onThemePreview(theme: UiTheme): void; onLanguagePreview(language: AppLanguage): void; onClose(): void; onSave(settings: TerminalSettings, backgroundImage: string, appIcon: AppIconId, uiTheme: UiTheme, appLanguage: AppLanguage, ai: AiSettingsInput): void; onConfirm: ConfirmAction; onError(message: string): void }): React.JSX.Element {
+  const { t } = useI18n()
   const [form, setForm] = useState<TerminalSettings>({ ...settings })
   const [previewImage, setPreviewImage] = useState(backgroundImage)
   const [appIcon, setAppIcon] = useState(appIcons.selected)
   const [theme, setTheme] = useState(uiTheme)
+  const [language, setDialogLanguage] = useState(appLanguage)
   const [aiForm, setAiForm] = useState<AiSettings>({ ...aiSettings })
   const [apiKey, setApiKey] = useState('')
   const [testingAi, setTestingAi] = useState(false)
@@ -1047,7 +1063,7 @@ function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, u
   }
   const reset = (): void => {
     if (section === 'ai') { setAiForm({ ...DEFAULT_AI_SETTINGS, apiKeyConfigured: aiForm.apiKeyConfigured }); setApiKey(''); setAiTested(false); return }
-    setForm({ ...DEFAULT_TERMINAL_SETTINGS }); setManualFontMode(false); setManualFontName('JetBrains Mono'); setPreviewImage(''); setAppIcon('ssh'); selectTheme('system')
+    setForm({ ...DEFAULT_TERMINAL_SETTINGS }); setManualFontMode(false); setManualFontName('JetBrains Mono'); setPreviewImage(''); setAppIcon('ssh'); selectTheme('system'); setDialogLanguage('zh-CN'); onLanguagePreview('zh-CN')
   }
   const testAi = async (): Promise<void> => {
     setTestingAi(true); setAiTested(false)
@@ -1056,119 +1072,129 @@ function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, u
     finally { setTestingAi(false) }
   }
   const deleteAiKey = async (): Promise<void> => {
-    if (!await onConfirm({ title: '删除 API Key', message: '确定删除已保存的 AI API Key 吗？', detail: '删除后需要重新填写密钥才能调用当前 AI 服务。', kind: 'danger', confirmLabel: '删除 API Key' })) return
+    if (!await onConfirm({ title: t('common.deleteApiKey'), message: t('app.deleteTheSavedAiApiKey'), detail: t('app.youWillNeedToEnterTheKeyAgain'), kind: 'danger', confirmLabel: t('common.deleteApiKey') })) return
     try { const saved = await window.api.ai.deleteApiKey(); setApiKey(''); setAiForm((current) => ({ ...current, apiKeyConfigured: saved.apiKeyConfigured })); onAiSettingsChange(saved) }
     catch (error) { onError(errorMessage(error)) }
   }
-  const themeOptions: { value: UiTheme; label: string; icon: typeof Monitor }[] = [{ value: 'system', label: '跟随系统', icon: Monitor }, { value: 'light', label: '浅色', icon: Sun }, { value: 'dark', label: '深色', icon: Moon }]
-  const providerOptions: { value: AiProvider; label: string }[] = [{ value: 'auto', label: '自动识别' }, { value: 'openAi', label: 'OpenAI' }, { value: 'anthropic', label: 'Anthropic' }, { value: 'qwen', label: 'Qwen' }, { value: 'deepSeek', label: 'DeepSeek' }, { value: 'kimi', label: 'Kimi' }, { value: 'glm', label: 'GLM' }, { value: 'miniMax', label: 'MiniMax' }, { value: 'grok', label: 'Grok' }, { value: 'gemini', label: 'Gemini' }]
+  const themeOptions: { value: UiTheme; label: string; icon: typeof Monitor }[] = [{ value: 'system', label: t('app.system'), icon: Monitor }, { value: 'light', label: t('app.light'), icon: Sun }, { value: 'dark', label: t('app.dark'), icon: Moon }]
+  const providerOptions: { value: AiProvider; label: string }[] = [{ value: 'auto', label: t('app.autoDetect') }, { value: 'openAi', label: 'OpenAI' }, { value: 'anthropic', label: 'Anthropic' }, { value: 'qwen', label: 'Qwen' }, { value: 'deepSeek', label: 'DeepSeek' }, { value: 'kimi', label: 'Kimi' }, { value: 'glm', label: 'GLM' }, { value: 'miniMax', label: 'MiniMax' }, { value: 'grok', label: 'Grok' }, { value: 'gemini', label: 'Gemini' }]
   const providerClue = `${aiForm.provider} ${aiForm.baseUrl} ${aiForm.model}`.toLowerCase()
   const thinkingCannotDisable = providerClue.includes('grok') || providerClue.includes('api.x.ai') || providerClue.includes('kimi-k3') || providerClue.includes('k2.7') || providerClue.includes('gemini-3') || (providerClue.includes('gemini-2.5') && providerClue.includes('pro'))
-  const thinkingHint = aiForm.thinkingMode === 'default' ? '不附加思考控制参数，由服务端决定。' : thinkingCannotDisable && aiForm.thinkingMode === 'disabled' ? '该模型无法完全关闭思考，将改用最低可用推理强度。' : '参数会随测试连接和命令生成请求一同发送。'
+  const thinkingHint = aiForm.thinkingMode === 'default' ? t('app.noThinkingControlsAreSentTheServiceDecides') : thinkingCannotDisable && aiForm.thinkingMode === 'disabled' ? t('app.thisModelCannotFullyDisableThinkingTheLowest') : t('app.theSelectedControlIsSentWithConnectionTests')
   const currentFontName = primaryFontName(form.fontFamily)
   const installedFonts = (systemFonts ?? []).filter((font) => font.toLocaleLowerCase() !== 'jetbrains mono')
   const installedFont = installedFonts.find((font) => font.toLocaleLowerCase() === currentFontName.toLocaleLowerCase())
   const fontChoice = manualFontMode ? '__manual__' : currentFontName === 'JetBrains Mono' ? '__bundled__' : currentFontName === 'monospace' ? '__system__' : systemFonts === null ? '__current__' : installedFont ?? '__manual__'
-  return <Modal title="设置" onClose={onClose} wide className="settings-dialog"><form className="form-grid terminal-settings-form" onSubmit={(event) => { event.preventDefault(); onSave(form, previewImage, appIcon, theme, aiInput()) }}>
-    <div className="settings-tabs" role="tablist" aria-label="设置类别"><button type="button" role="tab" aria-selected={section === 'appearance'} className={section === 'appearance' ? 'active' : ''} onClick={() => setSection('appearance')}><Palette size={15} />界面</button><button type="button" role="tab" aria-selected={section === 'terminal'} className={section === 'terminal' ? 'active' : ''} onClick={() => setSection('terminal')}><SquareTerminal size={15} />终端</button><button type="button" role="tab" aria-selected={section === 'ai'} className={section === 'ai' ? 'active' : ''} onClick={() => setSection('ai')}><Bot size={15} />AI</button></div>
+  return <Modal title={t('common.settings')} onClose={onClose} wide className="settings-dialog"><form className="form-grid terminal-settings-form" onSubmit={(event) => { event.preventDefault(); onSave(form, previewImage, appIcon, theme, language, aiInput()) }}>
+    <div className="settings-tabs" role="tablist" aria-label={t('app.settingsCategories')}><button type="button" role="tab" aria-selected={section === 'appearance'} className={section === 'appearance' ? 'active' : ''} onClick={() => setSection('appearance')}><Palette size={15} />{t('app.appearance')}</button><button type="button" role="tab" aria-selected={section === 'terminal'} className={section === 'terminal' ? 'active' : ''} onClick={() => setSection('terminal')}><SquareTerminal size={15} />{t('common.terminal')}</button><button type="button" role="tab" aria-selected={section === 'ai'} className={section === 'ai' ? 'active' : ''} onClick={() => setSection('ai')}><Bot size={15} />AI</button></div>
     <div className={`settings-content ${section}`}>
-    {section === 'appearance' ? <><fieldset className="ui-theme-settings"><legend>界面主题</legend><div className="theme-options" role="radiogroup" aria-label="界面主题">{themeOptions.map((option) => { const Icon = option.icon; return <button key={option.value} type="button" role="radio" aria-checked={theme === option.value} className={theme === option.value ? 'active' : ''} onClick={() => selectTheme(option.value)}><Icon size={17} /><span>{option.label}</span></button> })}</div></fieldset><fieldset className="app-icon-settings"><legend>应用图标</legend><div className="app-icon-options">{appIcons.options.map((icon) => <label key={icon.id} className={appIcon === icon.id ? 'selected' : ''}><input type="radio" name="app-icon" checked={appIcon === icon.id} onChange={() => setAppIcon(icon.id)} /><img src={icon.dataUrl} alt="" /><span>{icon.name}</span></label>)}</div></fieldset><section className="diagnostic-section"><strong>诊断</strong><div className="diagnostic-export"><button type="button" className="secondary-button" onClick={async () => { try { const path = await window.api.diagnostics.export(); if (path) setDiagnosticPath(path) } catch (error) { onError(errorMessage(error)) } }}><FileInput size={15} />导出诊断信息</button>{diagnosticPath && <small title={diagnosticPath}>{diagnosticPath}</small>}</div></section></> : section === 'ai' ? <div className="ai-settings">
+    {section === 'appearance' ? <><fieldset className="ui-theme-settings"><legend>{t('common.theme')}</legend><div className="theme-options" role="radiogroup" aria-label={t('common.theme')}>{themeOptions.map((option) => { const Icon = option.icon; return <button key={option.value} type="button" role="radio" aria-checked={theme === option.value} className={theme === option.value ? 'active' : ''} onClick={() => selectTheme(option.value)}><Icon size={17} /><span>{option.label}</span></button> })}</div></fieldset><fieldset className="ui-theme-settings"><legend>{t('common.language')}</legend><div className="theme-options" role="radiogroup" aria-label={t('common.language')}>{availableLanguages.map((option) => <button key={option.code} type="button" role="radio" aria-checked={language === option.code} className={language === option.code ? 'active' : ''} onClick={() => { setDialogLanguage(option.code); onLanguagePreview(option.code) }}><Languages size={17} /><span>{option.label}</span></button>)}</div></fieldset><fieldset className="app-icon-settings"><legend>{t('app.appIcon')}</legend><div className="app-icon-options">{appIcons.options.map((icon) => <label key={icon.id} className={appIcon === icon.id ? 'selected' : ''}><input type="radio" name="app-icon" checked={appIcon === icon.id} onChange={() => setAppIcon(icon.id)} /><img src={icon.dataUrl} alt="" /><span>{t(appIconMessageKeys[icon.id])}</span></label>)}</div></fieldset><section className="diagnostic-section"><strong>{t('app.diagnostics')}</strong><div className="diagnostic-export"><button type="button" className="secondary-button" onClick={async () => { try { const path = await window.api.diagnostics.export(); if (path) setDiagnosticPath(path) } catch (error) { onError(errorMessage(error)) } }}><FileInput size={15} />{t('app.exportDiagnostics')}</button>{diagnosticPath && <small title={diagnosticPath}>{diagnosticPath}</small>}</div></section></> : section === 'ai' ? <div className="ai-settings">
       <label>API Base URL<input required type="url" value={aiForm.baseUrl} onChange={(event) => setAi('baseUrl', event.target.value)} placeholder="https://api.openai.com/v1" /></label>
-      <label>模型名称<input value={aiForm.model} onChange={(event) => setAi('model', event.target.value)} placeholder="gpt-5" /></label>
-      <label>API Key<div className="input-button"><input type="password" autoComplete="off" value={apiKey} onChange={(event) => { setApiKey(event.target.value); setAiTested(false) }} placeholder={aiForm.apiKeyConfigured ? '已安全保存，留空则保持不变' : '可选'} /><button type="button" className="icon-button danger" title="删除已保存的 API Key" disabled={!aiForm.apiKeyConfigured} onClick={() => void deleteAiKey()}><Trash2 size={15} /></button></div></label>
-      <label>默认目标 Shell<select value={aiForm.defaultShell} onChange={(event) => setAi('defaultShell', event.target.value as AiShell)}><option value="linux">Linux Shell</option><option value="powerShell">PowerShell</option><option value="cmd">Windows cmd</option><option value="macos">macOS Shell</option></select></label>
-      <div className="ai-provider-row"><label>模型厂商<select value={aiForm.provider} onChange={(event) => setAi('provider', event.target.value as AiProvider)}>{providerOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label><label>思考模式<select value={aiForm.thinkingMode} onChange={(event) => setAi('thinkingMode', event.target.value as AiThinkingMode)}><option value="default">跟随模型默认</option><option value="disabled">尽量关闭</option><option value="enabled">开启</option></select></label></div>
+      <label>{t('app.model')}<input value={aiForm.model} onChange={(event) => setAi('model', event.target.value)} placeholder="gpt-5" /></label>
+      <label>API Key<div className="input-button"><input type="password" autoComplete="off" value={apiKey} onChange={(event) => { setApiKey(event.target.value); setAiTested(false) }} placeholder={aiForm.apiKeyConfigured ? t('app.savedSecurelyLeaveBlankToKeepIt') : t('common.optional')} /><button type="button" className="icon-button danger" title={t('app.deleteSavedApiKey')} disabled={!aiForm.apiKeyConfigured} onClick={() => void deleteAiKey()}><Trash2 size={15} /></button></div></label>
+      <label>{t('app.defaultTargetShell')}<select value={aiForm.defaultShell} onChange={(event) => setAi('defaultShell', event.target.value as AiShell)}><option value="linux">Linux Shell</option><option value="powerShell">PowerShell</option><option value="cmd">Windows cmd</option><option value="macos">macOS Shell</option></select></label>
+      <div className="ai-provider-row"><label>{t('app.provider')}<select value={aiForm.provider} onChange={(event) => setAi('provider', event.target.value as AiProvider)}>{providerOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label><label>{t('app.thinkingMode')}<select value={aiForm.thinkingMode} onChange={(event) => setAi('thinkingMode', event.target.value as AiThinkingMode)}><option value="default">{t('app.modelDefault')}</option><option value="disabled">{t('app.minimize')}</option><option value="enabled">{t('app.enabled')}</option></select></label></div>
       <small className="ai-thinking-hint">{thinkingHint}</small>
-      <div className="ai-settings-test"><button type="button" className="secondary-button" disabled={testingAi || !aiForm.model.trim()} onClick={() => void testAi()}>{testingAi ? '正在测试…' : '测试连接'}</button>{aiTested && <span><Check size={14} />连接成功</span>}</div>
+      <div className="ai-settings-test"><button type="button" className="secondary-button" disabled={testingAi || !aiForm.model.trim()} onClick={() => void testAi()}>{testingAi ? t('app.testing') : t('app.testConnection')}</button>{aiTested && <span><Check size={14} />{t('app.connected2')}</span>}</div>
     </div> : <>
       <div className="terminal-preview" style={terminalBackgroundStyle(form, previewImage)}><div style={{ color: form.foregroundColor, background: colorWithOpacity(form.backgroundColor, form.backgroundOpacity), fontFamily: form.fontFamily, fontSize: form.fontSize }}><span>user@host:~$</span> ls -la<br />drwxr-xr-x&nbsp;&nbsp;projects</div></div>
-      <label>字体<div className={`terminal-font-picker ${fontChoice === '__manual__' ? 'manual' : ''}`}><select value={fontChoice} onChange={(event) => { const value = event.target.value; if (value === '__manual__') { setManualFontMode(true); setManualFontName(currentFontName); return } setManualFontMode(false); if (value === '__bundled__') { set('fontFamily', BUNDLED_TERMINAL_FONT); setManualFontName('JetBrains Mono'); return } if (value === '__system__') { set('fontFamily', 'monospace'); setManualFontName('monospace'); return } set('fontFamily', terminalFontStack(value)); setManualFontName(value) }}><option value="__bundled__">JetBrains Mono（内置）</option><option value="__system__">系统默认等宽字体</option>{systemFonts === null && !['JetBrains Mono', 'monospace'].includes(currentFontName) && <option value="__current__">{currentFontName}（当前设置）</option>}{installedFonts.map((font) => <option key={font} value={font}>{font}</option>)}<option value="__manual__">输入其他字体名称…</option></select>{fontChoice === '__manual__' && <input autoFocus value={manualFontName} placeholder="字体名称" onChange={(event) => { const value = event.target.value; setManualFontName(value); if (value.trim()) set('fontFamily', terminalFontStack(value)) }} />}</div></label>
-      <label>字号<div className="range-control"><input type="range" min="10" max="30" step="1" value={form.fontSize} style={{ '--range-progress': `${((form.fontSize - 10) / 20) * 100}%` } as React.CSSProperties} onChange={(event) => set('fontSize', Number(event.target.value))} /><output>{form.fontSize} px</output></div></label>
-      <div className="color-settings"><label>文字颜色<div className="color-control"><input type="color" value={form.foregroundColor} onChange={(event) => set('foregroundColor', event.target.value)} /><span>{form.foregroundColor}</span></div></label><label>背景颜色<div className="color-control"><input type="color" value={form.backgroundColor} onChange={(event) => set('backgroundColor', event.target.value)} /><span>{form.backgroundColor}</span></div></label></div>
-      <label>背景颜色不透明度<div className="range-control"><input type="range" min="0" max="1" step="0.05" value={form.backgroundOpacity} style={{ '--range-progress': `${form.backgroundOpacity * 100}%` } as React.CSSProperties} onChange={(event) => set('backgroundOpacity', Number(event.target.value))} /><output>{Math.round(form.backgroundOpacity * 100)}%</output></div></label>
-      <label>背景图片<div className="input-button background-image-input"><input readOnly value={form.backgroundImagePath} placeholder="未选择" /><button type="button" className="secondary-button" onClick={() => void chooseBackground()}><ImageIcon size={15} />选择</button><button type="button" className="icon-button background-clear" title="清除背景图片" disabled={!form.backgroundImagePath} onClick={() => { set('backgroundImagePath', ''); setPreviewImage('') }}><Trash2 size={15} /></button></div></label>
-      <label>图片显示方式<select value={form.backgroundImageFit} onChange={(event) => set('backgroundImageFit', event.target.value as TerminalSettings['backgroundImageFit'])}><option value="cover">覆盖窗口</option><option value="contain">完整显示</option><option value="stretch">拉伸</option><option value="tile">平铺</option></select></label>
+      <label>{t('app.font')}<div className={`terminal-font-picker ${fontChoice === '__manual__' ? 'manual' : ''}`}><select value={fontChoice} onChange={(event) => { const value = event.target.value; if (value === '__manual__') { setManualFontMode(true); setManualFontName(currentFontName); return } setManualFontMode(false); if (value === '__bundled__') { set('fontFamily', BUNDLED_TERMINAL_FONT); setManualFontName('JetBrains Mono'); return } if (value === '__system__') { set('fontFamily', 'monospace'); setManualFontName('monospace'); return } set('fontFamily', terminalFontStack(value)); setManualFontName(value) }}><option value="__bundled__">JetBrains Mono {t('app.bundled')}</option><option value="__system__">{t('app.systemMonospace')}</option>{systemFonts === null && !['JetBrains Mono', 'monospace'].includes(currentFontName) && <option value="__current__">{currentFontName} {t('app.current')}</option>}{installedFonts.map((font) => <option key={font} value={font}>{font}</option>)}<option value="__manual__">{t('app.enterAnotherFont')}</option></select>{fontChoice === '__manual__' && <input autoFocus value={manualFontName} placeholder={t('app.fontName')} onChange={(event) => { const value = event.target.value; setManualFontName(value); if (value.trim()) set('fontFamily', terminalFontStack(value)) }} />}</div></label>
+      <label>{t('app.fontSize')}<div className="range-control"><input type="range" min="10" max="30" step="1" value={form.fontSize} style={{ '--range-progress': `${((form.fontSize - 10) / 20) * 100}%` } as React.CSSProperties} onChange={(event) => set('fontSize', Number(event.target.value))} /><output>{form.fontSize} px</output></div></label>
+      <div className="color-settings"><label>{t('app.textColor')}<div className="color-control"><input type="color" value={form.foregroundColor} onChange={(event) => set('foregroundColor', event.target.value)} /><span>{form.foregroundColor}</span></div></label><label>{t('app.backgroundColor')}<div className="color-control"><input type="color" value={form.backgroundColor} onChange={(event) => set('backgroundColor', event.target.value)} /><span>{form.backgroundColor}</span></div></label></div>
+      <label>{t('app.backgroundOpacity')}<div className="range-control"><input type="range" min="0" max="1" step="0.05" value={form.backgroundOpacity} style={{ '--range-progress': `${form.backgroundOpacity * 100}%` } as React.CSSProperties} onChange={(event) => set('backgroundOpacity', Number(event.target.value))} /><output>{Math.round(form.backgroundOpacity * 100)}%</output></div></label>
+      <label>{t('app.backgroundImage')}<div className="input-button background-image-input"><input readOnly value={form.backgroundImagePath} placeholder={t('app.noneSelected')} /><button type="button" className="secondary-button" onClick={() => void chooseBackground()}><ImageIcon size={15} />{t('common.choose')}</button><button type="button" className="icon-button background-clear" title={t('app.clearBackgroundImage')} disabled={!form.backgroundImagePath} onClick={() => { set('backgroundImagePath', ''); setPreviewImage('') }}><Trash2 size={15} /></button></div></label>
+      <label>{t('app.imageFit')}<select value={form.backgroundImageFit} onChange={(event) => set('backgroundImageFit', event.target.value as TerminalSettings['backgroundImageFit'])}><option value="cover">{t('app.cover')}</option><option value="contain">{t('app.contain')}</option><option value="stretch">{t('app.stretch')}</option><option value="tile">{t('app.tile')}</option></select></label>
     </>}
     </div>
-    <div className="dialog-actions spread"><button type="button" className="secondary-button" onClick={reset}><RotateCcw size={15} />恢复默认</button><div><button type="button" className="secondary-button" onClick={onClose}>取消</button><button className="primary-button" type="submit">保存</button></div></div>
+    <div className="dialog-actions spread"><button type="button" className="secondary-button" onClick={reset}><RotateCcw size={15} />{t('app.restoreDefaults')}</button><div><button type="button" className="secondary-button" onClick={onClose}>{t('common.cancel')}</button><button className="primary-button" type="submit">{t('common.save')}</button></div></div>
   </form></Modal>
 }
 
 function GroupNameDialog({ mode, initialName, onClose, onSave }: { mode: 'create' | 'rename'; initialName: string; onClose(): void; onSave(name: string): void }): React.JSX.Element {
+  const { t } = useI18n()
   const [name, setName] = useState(initialName)
-  return <Modal title={mode === 'create' ? '新建分组' : '重命名分组'} onClose={onClose}><form className="form-grid compact-form" onSubmit={(event) => { event.preventDefault(); onSave(name.trim()) }}>
-    <label>分组名称<input autoFocus required value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：生产环境" /></label>
-    <div className="dialog-actions"><button type="button" className="secondary-button" onClick={onClose}>取消</button><button type="submit" className="primary-button">保存</button></div>
+  return <Modal title={mode === 'create' ? t('common.newGroup') : t('common.renameGroup')} onClose={onClose}><form className="form-grid compact-form" onSubmit={(event) => { event.preventDefault(); onSave(name.trim()) }}>
+    <label>{t('app.groupName')}<input autoFocus required value={name} onChange={(event) => setName(event.target.value)} placeholder={t('app.forExampleProduction')} /></label>
+    <div className="dialog-actions"><button type="button" className="secondary-button" onClick={onClose}>{t('common.cancel')}</button><button type="submit" className="primary-button">{t('common.save')}</button></div>
   </form></Modal>
 }
 
 function BookmarkDialog({ bookmark, connections, groups, onClose, onSaved, onError }: { bookmark?: Bookmark; connections: Bookmark[]; groups: string[]; onClose(): void; onSaved(): void; onError(message: string): void }): React.JSX.Element {
+  const { t } = useI18n()
   const [form, setForm] = useState<BookmarkInput>(bookmark ? { name: bookmark.name, host: bookmark.host, port: bookmark.port, username: bookmark.username, authType: bookmark.authType, privateKeyPath: bookmark.privateKeyPath, jumpBookmarkId: bookmark.jumpBookmarkId, groupName: bookmark.groupName, favorite: bookmark.favorite, keepaliveEnabled: bookmark.keepaliveEnabled, keepaliveIntervalSeconds: bookmark.keepaliveIntervalSeconds, keepaliveCountMax: bookmark.keepaliveCountMax, note: bookmark.note } : emptyBookmark)
   const set = <K extends keyof BookmarkInput>(key: K, value: BookmarkInput[K]): void => setForm((current) => ({ ...current, [key]: value }))
   const jumpCandidates = connections.filter((item) => item.id !== bookmark?.id && !item.jumpBookmarkId)
-  return <Modal title={bookmark ? '编辑连接' : '新增连接'} onClose={onClose}><form className="form-grid" onSubmit={async (event) => { event.preventDefault(); try { await window.api.bookmarks.save({ ...form, id: bookmark?.id }); onSaved() } catch (error) { onError(errorMessage(error)) } }}>
-    <div className="form-row"><label>连接名称<input required value={form.name} onChange={(event) => set('name', event.target.value)} placeholder="Production 服务器" /></label><label>分组<select value={form.groupName} onChange={(event) => set('groupName', event.target.value)}><option value="">未分组</option>{groups.filter(Boolean).map((group) => <option key={group} value={group}>{group}</option>)}</select></label></div>
-    <label className="check-label"><input type="checkbox" checked={form.favorite} onChange={(event) => set('favorite', event.target.checked)} />收藏此连接</label>
-    <div className="form-row"><label>Host（IP 或域名）<input required value={form.host} onChange={(event) => set('host', event.target.value)} placeholder="192.168.1.10" /></label><label className="port-field">端口<input type="number" min="1" max="65535" value={form.port} onChange={(event) => set('port', Number(event.target.value))} /></label></div>
-    <label>用户名<input required value={form.username} onChange={(event) => set('username', event.target.value)} placeholder="root" /></label>
-    <label>认证方式<select value={form.authType} onChange={(event) => set('authType', event.target.value as BookmarkInput['authType'])}><option value="password">密码</option><option value="privateKey">私钥</option><option value="agent">SSH Agent</option></select></label>
-    {form.authType === 'privateKey' && <label>私钥文件<div className="input-button"><input readOnly value={form.privateKeyPath} placeholder="选择 OpenSSH 私钥" /><button type="button" className="secondary-button" onClick={async () => { const path = await window.api.files.choosePrivateKey(); if (path) set('privateKeyPath', path) }}>选择</button></div></label>}
-    <label>连接方式<select value={form.jumpBookmarkId} onChange={(event) => set('jumpBookmarkId', event.target.value)}><option value="">直接连接</option>{jumpCandidates.map((item) => <option key={item.id} value={item.id}>通过 {item.name}（{item.username}@{item.host}）</option>)}</select></label>
-    <label className="check-label"><input type="checkbox" checked={form.keepaliveEnabled} onChange={(event) => set('keepaliveEnabled', event.target.checked)} />保持 SSH session 活跃</label>
-    {form.keepaliveEnabled && <div className="form-row"><label>保活间隔（秒）<input type="number" min="5" max="300" value={form.keepaliveIntervalSeconds} onChange={(event) => set('keepaliveIntervalSeconds', Number(event.target.value))} /></label><label>最大无响应次数<input type="number" min="1" max="10" value={form.keepaliveCountMax} onChange={(event) => set('keepaliveCountMax', Number(event.target.value))} /></label></div>}
-    <label>备注<textarea rows={3} value={form.note} onChange={(event) => set('note', event.target.value)} placeholder="可选" /></label>
-    {bookmark?.hasSavedCredential && <button type="button" className="text-button danger" onClick={async () => { await window.api.bookmarks.forgetCredential(bookmark.id); onSaved() }}>清除已保存的凭据</button>}
-    <div className="dialog-actions"><button type="button" className="secondary-button" onClick={onClose}>取消</button><button className="primary-button" type="submit">保存</button></div>
+  return <Modal title={bookmark ? t('common.editConnection') : t('common.newConnection')} onClose={onClose}><form className="form-grid" onSubmit={async (event) => { event.preventDefault(); try { await window.api.bookmarks.save({ ...form, id: bookmark?.id }); onSaved() } catch (error) { onError(errorMessage(error)) } }}>
+    <div className="form-row"><label>{t('app.name')}<input required value={form.name} onChange={(event) => set('name', event.target.value)} placeholder={t('app.productionServer')} /></label><label>{t('app.group')}<select value={form.groupName} onChange={(event) => set('groupName', event.target.value)}><option value="">{t('common.ungrouped')}</option>{groups.filter(Boolean).map((group) => <option key={group} value={group}>{group}</option>)}</select></label></div>
+    <label className="check-label"><input type="checkbox" checked={form.favorite} onChange={(event) => set('favorite', event.target.checked)} />{t('app.favoriteThisConnection')}</label>
+    <div className="form-row"><label>{t('app.hostIpOrDomain')}<input required value={form.host} onChange={(event) => set('host', event.target.value)} placeholder="192.168.1.10" /></label><label className="port-field">{t('app.port')}<input type="number" min="1" max="65535" value={form.port} onChange={(event) => set('port', Number(event.target.value))} /></label></div>
+    <label>{t('app.username')}<input required value={form.username} onChange={(event) => set('username', event.target.value)} placeholder="root" /></label>
+    <label>{t('app.authentication')}<select value={form.authType} onChange={(event) => set('authType', event.target.value as BookmarkInput['authType'])}><option value="password">{t('app.password')}</option><option value="privateKey">{t('common.privateKey')}</option><option value="agent">SSH Agent</option></select></label>
+    {form.authType === 'privateKey' && <label>{t('app.privateKeyFile')}<div className="input-button"><input readOnly value={form.privateKeyPath} placeholder={t('app.chooseAnOpensshPrivateKey')} /><button type="button" className="secondary-button" onClick={async () => { const path = await window.api.files.choosePrivateKey(); if (path) set('privateKeyPath', path) }}>{t('common.choose')}</button></div></label>}
+    <label>{t('app.route')}<select value={form.jumpBookmarkId} onChange={(event) => set('jumpBookmarkId', event.target.value)}><option value="">{t('app.direct')}</option>{jumpCandidates.map((item) => <option key={item.id} value={item.id}>{t('app.viaValueValueValue', { value0: item.name, value1: item.username, value2: item.host })}</option>)}</select></label>
+    <label className="check-label"><input type="checkbox" checked={form.keepaliveEnabled} onChange={(event) => set('keepaliveEnabled', event.target.checked)} />{t('app.keepTheSshSessionAlive')}</label>
+    {form.keepaliveEnabled && <div className="form-row"><label>{t('app.keepaliveIntervalSeconds')}<input type="number" min="5" max="300" value={form.keepaliveIntervalSeconds} onChange={(event) => set('keepaliveIntervalSeconds', Number(event.target.value))} /></label><label>{t('app.maximumMissedResponses')}<input type="number" min="1" max="10" value={form.keepaliveCountMax} onChange={(event) => set('keepaliveCountMax', Number(event.target.value))} /></label></div>}
+    <label>{t('app.notes')}<textarea rows={3} value={form.note} onChange={(event) => set('note', event.target.value)} placeholder={t('common.optional')} /></label>
+    {bookmark?.hasSavedCredential && <button type="button" className="text-button danger" onClick={async () => { await window.api.bookmarks.forgetCredential(bookmark.id); onSaved() }}>{t('app.clearSavedCredentials')}</button>}
+    <div className="dialog-actions"><button type="button" className="secondary-button" onClick={onClose}>{t('common.cancel')}</button><button className="primary-button" type="submit">{t('common.save')}</button></div>
   </form></Modal>
 }
 
 function AuthDialog({ bookmark, jumpBookmark, onClose, onConnect }: { bookmark: Bookmark; jumpBookmark?: Bookmark; onClose(): void; onConnect(credentials: ConnectionCredentials): void }): React.JSX.Element {
+  const { t } = useI18n()
   const [secret, setSecret] = useState(''); const [remember, setRemember] = useState(false); const [visible, setVisible] = useState(false)
   const [jumpSecret, setJumpSecret] = useState(''); const [rememberJump, setRememberJump] = useState(false); const [jumpVisible, setJumpVisible] = useState(false)
   const required = bookmark.authType === 'password' && !bookmark.hasSavedCredential
   const jumpRequired = Boolean(jumpBookmark?.authType === 'password' && !jumpBookmark.hasSavedCredential)
-  return <Modal title={`连接到 ${bookmark.name}`} onClose={onClose}><form className="form-grid" onSubmit={(event) => { event.preventDefault(); if ((required && !secret) || (jumpRequired && !jumpSecret)) return; onConnect({ credential: secret || undefined, rememberCredential: remember, jumpCredential: jumpSecret || undefined, rememberJumpCredential: rememberJump }) }}>
-    {jumpBookmark ? <div className="connection-route"><span><small>跳板机</small><strong>{jumpBookmark.name}</strong></span><ArrowRight size={16} /><span><small>目标机器</small><strong>{bookmark.name}</strong></span></div> : <div className="connection-target"><Server size={18} /><strong>{bookmark.username}@{bookmark.host}:{bookmark.port}</strong></div>}
-    {jumpBookmark && jumpBookmark.authType !== 'agent' && <CredentialField bookmark={jumpBookmark} role="跳板机" secret={jumpSecret} setSecret={setJumpSecret} remember={rememberJump} setRemember={setRememberJump} visible={jumpVisible} setVisible={setJumpVisible} autoFocus />}
-    {bookmark.authType !== 'agent' && <CredentialField bookmark={bookmark} role={jumpBookmark ? '目标机器' : ''} secret={secret} setSecret={setSecret} remember={remember} setRemember={setRemember} visible={visible} setVisible={setVisible} autoFocus={!jumpBookmark || jumpBookmark.authType === 'agent'} />}
-    <div className="dialog-actions"><button type="button" className="secondary-button" onClick={onClose}>取消</button><button type="submit" className="primary-button">连接</button></div>
+  return <Modal title={t('app.connectToValue', { value0: bookmark.name })} onClose={onClose}><form className="form-grid" onSubmit={(event) => { event.preventDefault(); if ((required && !secret) || (jumpRequired && !jumpSecret)) return; onConnect({ credential: secret || undefined, rememberCredential: remember, jumpCredential: jumpSecret || undefined, rememberJumpCredential: rememberJump }) }}>
+    {jumpBookmark ? <div className="connection-route"><span><small>{t('common.jumpHost')}</small><strong>{jumpBookmark.name}</strong></span><ArrowRight size={16} /><span><small>{t('common.target')}</small><strong>{bookmark.name}</strong></span></div> : <div className="connection-target"><Server size={18} /><strong>{bookmark.username}@{bookmark.host}:{bookmark.port}</strong></div>}
+    {jumpBookmark && jumpBookmark.authType !== 'agent' && <CredentialField bookmark={jumpBookmark} role={t('common.jumpHost')} secret={jumpSecret} setSecret={setJumpSecret} remember={rememberJump} setRemember={setRememberJump} visible={jumpVisible} setVisible={setJumpVisible} autoFocus />}
+    {bookmark.authType !== 'agent' && <CredentialField bookmark={bookmark} role={jumpBookmark ? t('common.target') : ''} secret={secret} setSecret={setSecret} remember={remember} setRemember={setRemember} visible={visible} setVisible={setVisible} autoFocus={!jumpBookmark || jumpBookmark.authType === 'agent'} />}
+    <div className="dialog-actions"><button type="button" className="secondary-button" onClick={onClose}>{t('common.cancel')}</button><button type="submit" className="primary-button">{t('common.connect')}</button></div>
   </form></Modal>
 }
 
 function CredentialField({ bookmark, role, secret, setSecret, remember, setRemember, visible, setVisible, autoFocus }: { bookmark: Bookmark; role: string; secret: string; setSecret(value: string): void; remember: boolean; setRemember(value: boolean): void; visible: boolean; setVisible(value: boolean): void; autoFocus: boolean }): React.JSX.Element {
-  const credentialName = bookmark.authType === 'password' ? '密码' : '私钥口令（可选）'
-  return <div className="credential-block"><div className="credential-heading"><strong>{role || '连接'}凭据</strong><span>{bookmark.username}@{bookmark.host}:{bookmark.port}</span></div>
-    <label>{role}{credentialName}<div className="password-input"><input autoFocus={autoFocus} type={visible ? 'text' : 'password'} required={bookmark.authType === 'password' && !bookmark.hasSavedCredential} value={secret} placeholder={bookmark.hasSavedCredential ? '已保存，不填写则继续使用' : undefined} onChange={(event) => setSecret(event.target.value)} /><button className="icon-button" type="button" title={visible ? '隐藏密码' : '显示密码'} onClick={() => setVisible(!visible)}>{visible ? <EyeOff size={16} /> : <Eye size={16} />}</button></div></label>
-    <label className="check-label"><input type="checkbox" checked={remember} disabled={!secret} onChange={(event) => setRemember(event.target.checked)} />记住{role || '连接'}凭据（使用系统安全存储）</label>
+  const { t } = useI18n()
+  const credentialName = bookmark.authType === 'password' ? t('app.password2') : t('app.privateKeyPassphraseOptional')
+  const roleName = role || t('app.connection')
+  return <div className="credential-block"><div className="credential-heading"><strong>{t('app.valueCredentials', { value0: roleName })}</strong><span>{bookmark.username}@{bookmark.host}:{bookmark.port}</span></div>
+    <label>{role}{credentialName}<div className="password-input"><input autoFocus={autoFocus} type={visible ? 'text' : 'password'} required={bookmark.authType === 'password' && !bookmark.hasSavedCredential} value={secret} placeholder={bookmark.hasSavedCredential ? t('app.savedLeaveBlankToKeepUsingIt') : undefined} onChange={(event) => setSecret(event.target.value)} /><button className="icon-button" type="button" title={visible ? t('app.hidePassword') : t('app.showPassword')} onClick={() => setVisible(!visible)}>{visible ? <EyeOff size={16} /> : <Eye size={16} />}</button></div></label>
+    <label className="check-label"><input type="checkbox" checked={remember} disabled={!secret} onChange={(event) => setRemember(event.target.checked)} />{t('app.rememberCredentials', { role: role || t('common.connection') })}</label>
   </div>
 }
 
 function HostKeyDialog({ prompt, onDecision }: { prompt: HostKeyPrompt; onDecision(accept: boolean): void }): React.JSX.Element {
+  const { t } = useI18n()
   const changed = prompt.status === 'changed'
-  return <Modal title={changed ? '主机指纹已变化' : '确认主机指纹'} onClose={() => onDecision(false)}><div className="dialog-copy">
-    <p>{changed ? '服务器返回的主机指纹与此前记录不一致。除非你确认服务器密钥已更换，否则不要继续。' : '这是首次连接该服务器。确认指纹与服务器管理员提供的信息一致后再继续。'}</p>
-    <dl><dt>服务器</dt><dd>{prompt.host}:{prompt.port}</dd>{prompt.previousFingerprint && <><dt>原指纹</dt><dd>{prompt.previousFingerprint}</dd></>}<dt>当前指纹</dt><dd>{prompt.fingerprint}</dd></dl>
-    <div className="dialog-actions"><button className="secondary-button" onClick={() => onDecision(false)}>取消连接</button><button className={changed ? 'danger-button' : 'primary-button'} onClick={() => onDecision(true)}>信任并继续</button></div>
+  return <Modal title={changed ? t('app.hostKeyChanged') : t('app.verifyHostKey')} onClose={() => onDecision(false)}><div className="dialog-copy">
+    <p>{changed ? t('app.theHostKeyDoesNotMatchThePreviously') : t('app.thisIsTheFirstConnectionToThisServer')}</p>
+    <dl><dt>{t('app.server')}</dt><dd>{prompt.host}:{prompt.port}</dd>{prompt.previousFingerprint && <><dt>{t('app.previousFingerprint')}</dt><dd>{prompt.previousFingerprint}</dd></>}<dt>{t('app.currentFingerprint')}</dt><dd>{prompt.fingerprint}</dd></dl>
+    <div className="dialog-actions"><button className="secondary-button" onClick={() => onDecision(false)}>{t('app.cancel')}</button><button className={changed ? 'danger-button' : 'primary-button'} onClick={() => onDecision(true)}>{t('app.trustAndContinue')}</button></div>
   </div></Modal>
 }
 
 function ConflictDialog({ conflict, onDecision }: { conflict: { sourcePath: string; destinationPath: string }; onDecision(value: ConflictResolution, apply: boolean): void }): React.JSX.Element {
+  const { t } = useI18n()
   const [apply, setApply] = useState(false)
-  return <Modal title="目标位置已有同名文件" onClose={() => onDecision('skip', false)}><div className="dialog-copy"><p className="path-line">{conflict.destinationPath}</p><label className="check-label"><input type="checkbox" checked={apply} onChange={(event) => setApply(event.target.checked)} />应用到当前批次中的所有冲突</label><div className="dialog-actions spread"><button className="secondary-button" onClick={() => onDecision('skip', apply)}>跳过</button><button className="secondary-button" onClick={() => onDecision('rename', apply)}>自动重命名</button><button className="danger-button" onClick={() => onDecision('overwrite', apply)}>覆盖</button></div></div></Modal>
+  return <Modal title={t('app.aFileWithThisNameAlreadyExists')} onClose={() => onDecision('skip', false)}><div className="dialog-copy"><p className="path-line">{conflict.destinationPath}</p><label className="check-label"><input type="checkbox" checked={apply} onChange={(event) => setApply(event.target.checked)} />{t('app.applyToAllConflictsInThisBatch')}</label><div className="dialog-actions spread"><button className="secondary-button" onClick={() => onDecision('skip', apply)}>{t('app.skip')}</button><button className="secondary-button" onClick={() => onDecision('rename', apply)}>{t('app.rename')}</button><button className="danger-button" onClick={() => onDecision('overwrite', apply)}>{t('app.overwrite')}</button></div></div></Modal>
 }
 
 function Modal({ title, onClose, children, wide = false, raised = false, className = '' }: { title: string; onClose(): void; children: React.ReactNode; wide?: boolean; raised?: boolean; className?: string }): React.JSX.Element {
-  return <div className={`modal-backdrop ${raised ? 'raised' : ''}`} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}><section className={`modal ${wide ? 'wide' : ''} ${className}`} role="dialog" aria-modal="true"><header><strong>{title}</strong><button className="icon-button" onClick={onClose}><X size={18} /></button></header>{children}</section></div>
+  const { t } = useI18n()
+  return <div className={`modal-backdrop ${raised ? 'raised' : ''}`} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}><section className={`modal ${wide ? 'wide' : ''} ${className}`} role="dialog" aria-modal="true"><header><strong>{title}</strong><button className="icon-button" title={t('common.close')} aria-label={t('common.close')} onClick={onClose}><X size={18} /></button></header>{children}</section></div>
 }
 
 function ConfirmationDialog({ confirmation, onDecision }: { confirmation: ConfirmationOptions; onDecision(accepted: boolean): void }): React.JSX.Element {
+  const { t } = useI18n()
   return <Modal title={confirmation.title} onClose={() => onDecision(false)} raised className="secondary-confirm-dialog"><div className={`confirmation-dialog ${confirmation.kind}`}>
     <div className="confirmation-heading">{confirmation.kind === 'danger' ? <Trash2 size={22} /> : <ShieldAlert size={22} />}<div><strong>{confirmation.message}</strong>{confirmation.detail && <span>{confirmation.detail}</span>}</div></div>
-    <div className="dialog-actions"><button type="button" autoFocus className="secondary-button" onClick={() => onDecision(false)}>取消</button><button type="button" className={confirmation.kind === 'danger' ? 'danger-button' : 'primary-button'} onClick={() => onDecision(true)}>{confirmation.kind === 'danger' ? <Trash2 size={15} /> : <Rocket size={15} />}{confirmation.confirmLabel}</button></div>
+    <div className="dialog-actions"><button type="button" autoFocus className="secondary-button" onClick={() => onDecision(false)}>{t('common.cancel')}</button><button type="button" className={confirmation.kind === 'danger' ? 'danger-button' : 'primary-button'} onClick={() => onDecision(true)}>{confirmation.kind === 'danger' ? <Trash2 size={15} /> : <Rocket size={15} />}{confirmation.confirmLabel}</button></div>
   </div></Modal>
 }
 
 function TransferPanel({ transfers, view, setView, onRetry, onCancel, onClear }: { transfers: TransferTask[]; view: 'queue' | 'history'; setView(value: 'queue' | 'history'): void; onRetry(task: TransferTask): void; onCancel(task: TransferTask): void; onClear(): void }): React.JSX.Element {
+  const { t } = useI18n()
   const activeStatuses = ['queued', 'scanning', 'running', 'conflict']
   const shown = transfers.filter((item) => view === 'queue' ? activeStatuses.includes(item.status) || item.status === 'failed' : !activeStatuses.includes(item.status))
   const active = transfers.filter((item) => activeStatuses.includes(item.status))
@@ -1177,10 +1203,10 @@ function TransferPanel({ transfers, view, setView, onRetry, onCancel, onClear }:
   const speed = active.reduce((sum, item) => sum + item.speed, 0)
   const eta = speed > 0 && totalBytes > transferredBytes ? Math.ceil((totalBytes - transferredBytes) / speed) : 0
   const speedText = speed >= 1024 * 1024 ? `${(speed / 1024 / 1024).toFixed(1)} MB/s` : `${Math.round(speed / 1024)} KB/s`
-  return <section className="transfer-panel"><header><div className="transfer-tabs"><button className={view === 'queue' ? 'active' : ''} onClick={() => setView('queue')}>传输队列 <span>{active.length}</span></button><button className={view === 'history' ? 'active' : ''} onClick={() => setView('history')}>传输记录</button></div>{active.length > 0 && <div className="transfer-summary"><strong>{totalBytes ? Math.round(transferredBytes / totalBytes * 100) : 0}%</strong><span>{speedText}</span>{eta > 0 && <span>约 {eta >= 60 ? `${Math.ceil(eta / 60)} 分钟` : `${eta} 秒`}</span>}</div>}<button className="text-button" onClick={onClear}>清除已完成</button></header>
-    <div className="transfer-list">{shown.length === 0 ? <div className="transfer-empty">{view === 'queue' ? '当前没有传输任务' : '暂无传输记录'}</div> : shown.slice(0, 40).map((task) => {
+  return <section className="transfer-panel"><header><div className="transfer-tabs"><button className={view === 'queue' ? 'active' : ''} onClick={() => setView('queue')}>{t('app.queue')} <span>{active.length}</span></button><button className={view === 'history' ? 'active' : ''} onClick={() => setView('history')}>{t('app.history')}</button></div>{active.length > 0 && <div className="transfer-summary"><strong>{totalBytes ? Math.round(transferredBytes / totalBytes * 100) : 0}%</strong><span>{speedText}</span>{eta > 0 && <span>{eta >= 60 ? t('app.transferEtaMinutes', { value: Math.ceil(eta / 60) }) : t('app.transferEtaSeconds', { value: eta })}</span>}</div>}<button className="text-button" onClick={onClear}>{t('app.clearCompleted')}</button></header>
+    <div className="transfer-list">{shown.length === 0 ? <div className="transfer-empty">{view === 'queue' ? t('app.noActiveTransfers') : t('app.noTransferHistory')}</div> : shown.slice(0, 40).map((task) => {
       const percent = task.bytesTotal ? Math.min(100, Math.round(task.bytesTransferred / task.bytesTotal * 100)) : 0
-      return <div className="transfer-row" key={task.id}><span className={`transfer-direction ${task.direction}`}>{task.direction === 'upload' ? '↑' : '↓'}</span><div className="transfer-info"><strong>{task.displayName}</strong><small>{task.error ?? `${task.sourcePath} → ${task.destinationPath}`}</small>{['running', 'scanning'].includes(task.status) && <div className="progress"><span style={{ width: `${percent}%` }} /></div>}</div><span className={`transfer-status ${task.status}`}>{task.status === 'running' ? `${percent}%` : ({ queued: '等待中', scanning: '扫描中', conflict: '等待确认', completed: '已完成', failed: '失败', cancelled: '已取消', interrupted: '已中断' } as Record<string, string>)[task.status]}</span><div className="transfer-actions">{activeStatuses.includes(task.status) && <button className="icon-button" title="取消" onClick={() => onCancel(task)}><X size={15} /></button>}{['failed', 'cancelled', 'interrupted'].includes(task.status) && <button className="text-button" onClick={() => onRetry(task)}>重试</button>}</div></div>
+      return <div className="transfer-row" key={task.id}><span className={`transfer-direction ${task.direction}`}>{task.direction === 'upload' ? '↑' : '↓'}</span><div className="transfer-info"><strong>{task.displayName}</strong><small>{task.error ?? `${task.sourcePath} → ${task.destinationPath}`}</small>{['running', 'scanning'].includes(task.status) && <div className="progress"><span style={{ width: `${percent}%` }} /></div>}</div><span className={`transfer-status ${task.status}`}>{task.status === 'running' ? `${percent}%` : ({ queued: t('app.queued'), scanning: t('app.scanning'), conflict: t('app.waiting'), completed: t('app.completed'), failed: t('app.failed'), cancelled: t('app.cancelled'), interrupted: t('app.interrupted') } as Record<string, string>)[task.status]}</span><div className="transfer-actions">{activeStatuses.includes(task.status) && <button className="icon-button" title={t('common.cancel')} onClick={() => onCancel(task)}><X size={15} /></button>}{['failed', 'cancelled', 'interrupted'].includes(task.status) && <button className="text-button" onClick={() => onRetry(task)}>{t('app.retry')}</button>}</div></div>
     })}</div>
   </section>
 }

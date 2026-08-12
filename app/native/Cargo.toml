@@ -1,11 +1,12 @@
 [package]
-name = "ssh-client"
-version = "0.1.0"
+name = "luna-remote"
+version = "1.0.1"
 description = "Tauri desktop shell for Luna Remote"
+license = "MIT"
 edition = "2024"
 
 [lib]
-name = "ssh_client_lib"
+name = "luna_remote_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

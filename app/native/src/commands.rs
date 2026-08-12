@@ -16,9 +16,12 @@ use tauri_plugin_opener::OpenerExt;
 use uuid::Uuid;
 
 use crate::{
-    ai, app_icon, database::Database, models::*, sessions::SessionManager, ssh_config,
+    ai, app_icon, database::Database, desktop, models::*, sessions::SessionManager, ssh_config,
     transfers::TransferManager, tunnels::TunnelManager,
 };
+
+const CONNECTION_ARCHIVE_FORMAT: &str = "luna-remote-connections";
+const LEGACY_CONNECTION_ARCHIVE_FORMAT: &str = "ssh-client-connections";
 
 pub struct AppState {
     pub db: Arc<Database>,
@@ -580,7 +583,7 @@ pub async fn bookmarks_export_archive(
     state: State<'_, AppState>,
 ) -> Result<Option<String>, String> {
     let default = format!(
-        "ssh-client-connections-{}.json",
+        "luna-remote-connections-{}.json",
         Utc::now().format("%Y-%m-%d")
     );
     let (sender, receiver) = tokio::sync::oneshot::channel();
@@ -617,7 +620,7 @@ pub async fn bookmarks_export_archive(
         })
         .collect();
     let archive = BookmarkArchive {
-        format: "ssh-client-connections".into(),
+        format: CONNECTION_ARCHIVE_FORMAT.into(),
         version: 1,
         exported_at: Utc::now().to_rfc3339(),
         groups: state.db.list_bookmark_groups()?,
@@ -657,7 +660,10 @@ pub async fn bookmarks_import_archive(
     let archive: BookmarkArchive =
         serde_json::from_str(&fs::read_to_string(&path).map_err(|e| e.to_string())?)
             .map_err(|e| format!("连接备份格式无效：{e}"))?;
-    if archive.format != "ssh-client-connections" || archive.version != 1 {
+    if (archive.format != CONNECTION_ARCHIVE_FORMAT
+        && archive.format != LEGACY_CONNECTION_ARCHIVE_FORMAT)
+        || archive.version != 1
+    {
         return Err("不支持此连接备份格式或版本".into());
     }
     if archive.connections.len() > 10_000 || archive.groups.len() > 1_000 {
@@ -746,6 +752,34 @@ pub fn state_set_sidebar_width(state: State<AppState>, width: u32) -> Result<(),
 pub fn settings_get_ui_theme(state: State<AppState>) -> UiTheme {
     state.db.get_setting("uiTheme", UiTheme::System)
 }
+
+#[tauri::command]
+pub fn settings_get_language(state: State<AppState>) -> String {
+    state.db.get_setting("language", "zh-CN".to_string())
+}
+
+#[tauri::command]
+pub fn settings_apply_language(app: AppHandle, menu: NativeMenuLabels) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    app.set_menu(desktop::menu(&app, &menu).map_err(|error| error.to_string())?)
+        .map_err(|error| error.to_string())?;
+    #[cfg(not(target_os = "macos"))]
+    let _ = (app, menu);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn settings_save_language(
+    app: AppHandle,
+    state: State<AppState>,
+    language: String,
+    menu: NativeMenuLabels,
+) -> Result<String, String> {
+    state.db.set_setting("language", &language)?;
+    settings_apply_language(app, menu)?;
+    Ok(language)
+}
+
 #[tauri::command]
 pub fn settings_save_ui_theme(
     window: WebviewWindow,
@@ -1297,7 +1331,7 @@ pub async fn diagnostics_export(
     state: State<'_, AppState>,
 ) -> Result<Option<String>, String> {
     let default = format!(
-        "ssh-client-diagnostics-{}.json",
+        "luna-remote-diagnostics-{}.json",
         Utc::now().format("%Y-%m-%dT%H-%M-%S")
     );
     let (sender, receiver) = tokio::sync::oneshot::channel();

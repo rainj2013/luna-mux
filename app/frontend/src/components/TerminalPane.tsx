@@ -6,6 +6,7 @@ import { WebglAddon } from '@xterm/addon-webgl'
 import { ChevronDown, ChevronUp, ClipboardPaste, Copy, Palette, Plug, Search, X } from 'lucide-react'
 import type { TerminalSettings } from '../types'
 import { colorWithOpacity, terminalBackgroundStyle } from '../terminal-style'
+import { useI18n } from '../i18n'
 
 const terminalHighWaterMark = 1024 * 1024
 const terminalLowWaterMark = 256 * 1024
@@ -78,6 +79,7 @@ interface TerminalPaneProps {
 }
 
 export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function TerminalPane({ sessionId, connected, visible, settings, backgroundImage, onConnect, onOpenSettings }, ref): React.JSX.Element {
+  const { t } = useI18n()
   const container = useRef<HTMLDivElement>(null)
   const terminal = useRef<Terminal | null>(null)
   const fitAddon = useRef<FitAddon | null>(null)
@@ -106,7 +108,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     if (sessionId) setStarted(true)
     const term = terminal.current
     if (!term || !sessionId || boundSessionId.current === sessionId) return
-    if (boundSessionId.current) term.writeln('\r\n\x1b[90m--- 已建立新的 SSH session ---\x1b[0m\r\n')
+    if (boundSessionId.current) term.writeln(`\r\n\x1b[90m--- ${t('terminal.newSshSessionEstablished')} ---\x1b[0m\r\n`)
     boundSessionId.current = sessionId
     requestAnimationFrame(() => {
       fitAddon.current?.fit()
@@ -308,22 +310,22 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     setSearchResult({ index: activeSearchIndex.current, count })
   }
 
-  if (!shouldRenderTerminal) return <div className="terminal-empty"><div className="terminal-mark">&gt;_</div><strong>尚未连接</strong><span>连接后即可开始 SSH 会话</span>{onConnect && <button className="terminal-connect-button" onClick={onConnect}><Plug size={15} />连接</button>}</div>
+  if (!shouldRenderTerminal) return <div className="terminal-empty"><div className="terminal-mark">&gt;_</div><strong>{t('terminal.notConnected')}</strong><span>{t('terminal.connectToStartAnSshSession')}</span>{onConnect && <button className="terminal-connect-button" onClick={onConnect}><Plug size={15} />{t('common.connect')}</button>}</div>
   return <div className="terminal-shell" style={terminalBackgroundStyle(settings, backgroundImage)} onContextMenu={(event) => { event.preventDefault(); setContextMenu({ x: Math.max(4, Math.min(event.clientX, window.innerWidth - 210)), y: Math.max(4, Math.min(event.clientY, window.innerHeight - 210)), hasSelection: Boolean(terminal.current?.hasSelection()) }) }}>
     {searchOpen && <form className="terminal-search" onSubmit={(event) => { event.preventDefault(); search() }}>
-      <Search size={14} /><input ref={searchInput} value={query} aria-label="搜索终端内容" onChange={(event) => { setQuery(event.target.value); search(event.target.value, false, true) }} onKeyDown={(event) => { if (event.key === 'Escape') setSearchOpen(false) }} />
-      <output className={query && !searchResult.count ? 'no-results' : ''}>{query ? searchResult.count ? `${Math.max(0, searchResult.index) + 1}/${searchResult.count}` : '无结果' : ''}</output>
-      <button type="button" className="icon-button" title="上一个结果" onClick={() => search(query, true)}><ChevronUp size={15} /></button>
-      <button type="button" className="icon-button" title="下一个结果" onClick={() => search()}><ChevronDown size={15} /></button>
-      <button type="button" className="icon-button" title="关闭搜索" onClick={() => setSearchOpen(false)}><X size={15} /></button>
+      <Search size={14} /><input ref={searchInput} value={query} aria-label={t('terminal.searchTerminal')} onChange={(event) => { setQuery(event.target.value); search(event.target.value, false, true) }} onKeyDown={(event) => { if (event.key === 'Escape') setSearchOpen(false) }} />
+      <output className={query && !searchResult.count ? 'no-results' : ''}>{query ? searchResult.count ? `${Math.max(0, searchResult.index) + 1}/${searchResult.count}` : t('terminal.noResults') : ''}</output>
+      <button type="button" className="icon-button" title={t('terminal.previousResult')} onClick={() => search(query, true)}><ChevronUp size={15} /></button>
+      <button type="button" className="icon-button" title={t('terminal.nextResult')} onClick={() => search()}><ChevronDown size={15} /></button>
+      <button type="button" className="icon-button" title={t('terminal.closeSearch')} onClick={() => setSearchOpen(false)}><X size={15} /></button>
     </form>}
     <div className="terminal" ref={container} />
     {contextMenu && <div className="sidebar-context-menu terminal-context-menu" role="menu" style={{ left: contextMenu.x, top: contextMenu.y }} onPointerDown={(event) => event.stopPropagation()}>
-      <button role="menuitem" disabled={!contextMenu.hasSelection} onClick={() => { const text = terminal.current?.getSelection(); setContextMenu(null); if (text) void window.api.system.writeClipboard(text).catch((error) => console.warn('Failed to copy terminal selection', error)) }}><Copy size={15} />复制</button>
-      <button role="menuitem" onClick={() => { setContextMenu(null); void window.api.system.readClipboard().then((text) => { terminal.current?.paste(text); terminal.current?.focus() }).catch((error) => console.warn('Failed to paste into terminal', error)) }}><ClipboardPaste size={15} />粘贴</button>
-      <button role="menuitem" onClick={() => { setContextMenu(null); setSearchOpen(true) }}><Search size={15} />搜索</button>
+      <button role="menuitem" disabled={!contextMenu.hasSelection} onClick={() => { const text = terminal.current?.getSelection(); setContextMenu(null); if (text) void window.api.system.writeClipboard(text).catch((error) => console.warn('Failed to copy terminal selection', error)) }}><Copy size={15} />{t('common.copy')}</button>
+      <button role="menuitem" onClick={() => { setContextMenu(null); void window.api.system.readClipboard().then((text) => { terminal.current?.paste(text); terminal.current?.focus() }).catch((error) => console.warn('Failed to paste into terminal', error)) }}><ClipboardPaste size={15} />{t('terminal.paste')}</button>
+      <button role="menuitem" onClick={() => { setContextMenu(null); setSearchOpen(true) }}><Search size={15} />{t('terminal.search')}</button>
       <div className="context-menu-separator" />
-      <button role="menuitem" onClick={() => { setContextMenu(null); onOpenSettings?.() }}><Palette size={15} />外观设置</button>
+      <button role="menuitem" onClick={() => { setContextMenu(null); onOpenSettings?.() }}><Palette size={15} />{t('terminal.appearanceSettings')}</button>
     </div>}
   </div>
 })

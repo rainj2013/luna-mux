@@ -15,10 +15,19 @@ const AI_COMMAND_HISTORY_LIMIT: usize = 10;
 pub struct Database {
     connection: Mutex<Connection>,
     credential_service: String,
+    legacy_credential_service: Option<String>,
 }
 
 impl Database {
     pub fn open(path: &Path, credential_service: &str) -> Result<Self, String> {
+        Self::open_with_legacy(path, credential_service, None)
+    }
+
+    pub fn open_with_legacy(
+        path: &Path,
+        credential_service: &str,
+        legacy_credential_service: Option<&str>,
+    ) -> Result<Self, String> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
@@ -26,6 +35,7 @@ impl Database {
         let database = Self {
             connection: Mutex::new(connection),
             credential_service: credential_service.into(),
+            legacy_credential_service: legacy_credential_service.map(str::to_string),
         };
         database.initialize()?;
         Ok(database)
@@ -437,15 +447,14 @@ impl Database {
         if !exists {
             return None;
         }
-        Entry::new(&self.credential_service, bookmark_id)
-            .ok()?
-            .get_password()
-            .ok()
+        self.get_password(bookmark_id)
     }
 
     pub fn forget_credential(&self, bookmark_id: &str) -> Result<(), String> {
-        if let Ok(entry) = Entry::new(&self.credential_service, bookmark_id) {
-            let _ = entry.delete_credential();
+        for service in self.credential_services() {
+            if let Ok(entry) = Entry::new(service, bookmark_id) {
+                let _ = entry.delete_credential();
+            }
         }
         self.with_conn(|db| {
             db.execute(
@@ -464,17 +473,40 @@ impl Database {
     }
 
     pub fn get_ai_api_key(&self) -> Option<String> {
-        Entry::new(&self.credential_service, AI_API_KEY_ACCOUNT)
-            .ok()?
-            .get_password()
-            .ok()
-            .filter(|value| !value.is_empty())
+        self.get_password(AI_API_KEY_ACCOUNT)
     }
 
     pub fn delete_ai_api_key(&self) {
-        if let Ok(entry) = Entry::new(&self.credential_service, AI_API_KEY_ACCOUNT) {
-            let _ = entry.delete_credential();
+        for service in self.credential_services() {
+            if let Ok(entry) = Entry::new(service, AI_API_KEY_ACCOUNT) {
+                let _ = entry.delete_credential();
+            }
         }
+    }
+
+    fn credential_services(&self) -> impl Iterator<Item = &str> {
+        std::iter::once(self.credential_service.as_str())
+            .chain(self.legacy_credential_service.as_deref())
+    }
+
+    fn get_password(&self, account: &str) -> Option<String> {
+        if let Some(value) = Entry::new(&self.credential_service, account)
+            .ok()
+            .and_then(|entry| entry.get_password().ok())
+            .filter(|value| !value.is_empty())
+        {
+            return Some(value);
+        }
+        let legacy_service = self.legacy_credential_service.as_deref()?;
+        let value = Entry::new(legacy_service, account)
+            .ok()?
+            .get_password()
+            .ok()
+            .filter(|value| !value.is_empty())?;
+        if let Ok(entry) = Entry::new(&self.credential_service, account) {
+            let _ = entry.set_password(&value);
+        }
+        Some(value)
     }
 
     pub fn mark_connected(&self, id: &str) -> Result<(), String> {
@@ -598,8 +630,8 @@ mod tests {
 
     #[test]
     fn persists_manual_bookmark_order() {
-        let path = std::env::temp_dir().join(format!("ssh-client-{}.db", Uuid::new_v4()));
-        let db = Database::open(&path, "ssh-client-order-test").expect("open test database");
+        let path = std::env::temp_dir().join(format!("luna-remote-{}.db", Uuid::new_v4()));
+        let db = Database::open(&path, "luna-remote-order-test").expect("open test database");
         let first = db.save_bookmark(input("First", "A")).expect("save first");
         let second = db.save_bookmark(input("Second", "A")).expect("save second");
         let third = db.save_bookmark(input("Third", "B")).expect("save third");
@@ -623,8 +655,8 @@ mod tests {
 
     #[test]
     fn keeps_only_ten_most_recent_ai_commands() {
-        let path = std::env::temp_dir().join(format!("ssh-client-{}.db", Uuid::new_v4()));
-        let db = Database::open(&path, "ssh-client-ai-history-test").expect("open test database");
+        let path = std::env::temp_dir().join(format!("luna-remote-{}.db", Uuid::new_v4()));
+        let db = Database::open(&path, "luna-remote-ai-history-test").expect("open test database");
         for index in 0..12 {
             db.add_ai_command_history(AiCommandHistoryEntry {
                 id: index.to_string(),
@@ -662,8 +694,8 @@ mod tests {
 
     #[test]
     fn persists_and_manages_bookmark_groups() {
-        let path = std::env::temp_dir().join(format!("ssh-client-groups-{}.db", Uuid::new_v4()));
-        let db = Database::open(&path, "ssh-client-groups-test").expect("open test database");
+        let path = std::env::temp_dir().join(format!("luna-remote-groups-{}.db", Uuid::new_v4()));
+        let db = Database::open(&path, "luna-remote-groups-test").expect("open test database");
         let ungrouped = db
             .save_bookmark(input("Ungrouped", ""))
             .expect("save ungrouped");
@@ -677,7 +709,7 @@ mod tests {
         );
         drop(db);
 
-        let db = Database::open(&path, "ssh-client-groups-test").expect("reopen test database");
+        let db = Database::open(&path, "luna-remote-groups-test").expect("reopen test database");
         assert_eq!(
             db.list_bookmark_groups().expect("list persisted groups"),
             ["", "A", "Empty"]
@@ -727,8 +759,9 @@ mod tests {
 
     #[test]
     fn allows_renaming_and_deleting_ungrouped() {
-        let path = std::env::temp_dir().join(format!("ssh-client-ungrouped-{}.db", Uuid::new_v4()));
-        let db = Database::open(&path, "ssh-client-ungrouped-test").expect("open test database");
+        let path =
+            std::env::temp_dir().join(format!("luna-remote-ungrouped-{}.db", Uuid::new_v4()));
+        let db = Database::open(&path, "luna-remote-ungrouped-test").expect("open test database");
         let first = db.save_bookmark(input("First", "")).expect("save first");
         assert_eq!(
             db.rename_bookmark_group("", "Default")
@@ -756,7 +789,7 @@ mod tests {
 
     #[test]
     fn migrates_bookmark_sort_order_from_version_five() {
-        let path = std::env::temp_dir().join(format!("ssh-client-v5-{}.db", Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!("luna-remote-v5-{}.db", Uuid::new_v4()));
         let connection = rusqlite::Connection::open(&path).expect("create old database");
         connection
             .execute_batch(
@@ -778,7 +811,7 @@ mod tests {
             .expect("create version five schema");
         drop(connection);
 
-        let db = Database::open(&path, "ssh-client-migration-test").expect("migrate database");
+        let db = Database::open(&path, "luna-remote-migration-test").expect("migrate database");
         let bookmarks = db.list_bookmarks().expect("list migrated bookmarks");
         assert_eq!(
             bookmarks

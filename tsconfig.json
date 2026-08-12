@@ -9,7 +9,7 @@
     "skipLibCheck": true,
     "resolveJsonModule": true,
     "noUncheckedIndexedAccess": true,
-    "types": ["node"]
+    "types": ["node", "vite/client"]
   },
   "include": ["app/frontend/src/**/*.ts", "app/frontend/src/**/*.tsx", "vite.config.ts"]
 }

@@ -436,6 +436,7 @@ body.sidebar-item-dragging, body.sidebar-item-dragging * { cursor: grabbing !imp
 .port-field { min-width: 0; }
 .input-button, .password-input { display: flex; align-items: center; }
 .input-button input, .password-input input { min-width: 0; flex: 1; border-radius: 5px 0 0 5px !important; }
+.password-input input::-ms-reveal, .password-input input::-ms-clear { display: none; }
 .input-button button, .password-input button { height: 34px; border-radius: 0 5px 5px 0; }
 .password-input .icon-button { border: 1px solid var(--border-strong); border-left: 0; background: var(--surface-subtle); }
 .check-label { display: flex !important; grid-template-columns: none !important; align-items: center; gap: 7px !important; }
@@ -453,6 +454,7 @@ body.sidebar-item-dragging, body.sidebar-item-dragging * { cursor: grabbing !imp
 .ui-theme-settings { min-width: 0; margin: 0; padding: 0 0 18px; border: 0; border-bottom: 1px solid var(--border); }
 .ui-theme-settings legend { margin-bottom: 9px; color: var(--text-strong); font-size: 11px; }
 .theme-options { padding: 3px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 3px; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface-subtle); }
+.settings-content.appearance .ui-theme-settings:nth-of-type(2) .theme-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .theme-options button { min-width: 0; height: 48px; padding: 0 8px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; color: var(--text-muted); border: 0; border-radius: 5px; background: transparent; cursor: pointer; font-size: 11px; }
 .theme-options button:hover { color: var(--text-strong); background: var(--surface-hover); }
 .theme-options button.active { color: var(--text-strong); background: var(--surface); box-shadow: 0 1px 2px var(--shadow); font-weight: 600; }

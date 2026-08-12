@@ -6,88 +6,115 @@ use tauri::{
     menu::{Menu, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder},
 };
 
-use crate::models::{AppEvent, MenuCommand};
+use crate::models::{AppEvent, MenuCommand, NativeMenuLabels};
 
 #[cfg(target_os = "macos")]
-pub fn menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
-    let settings = MenuItemBuilder::with_id("settings", "设置...")
+pub fn menu<R: Runtime>(app: &AppHandle<R>, labels: &NativeMenuLabels) -> tauri::Result<Menu<R>> {
+    let settings = MenuItemBuilder::with_id("settings", labels.settings.as_str())
         .accelerator("CmdOrCtrl+,")
         .build(app)?;
-    let new_connection = MenuItemBuilder::with_id("new-connection", "新增连接")
+    let new_connection = MenuItemBuilder::with_id("new-connection", labels.new_connection.as_str())
         .accelerator("CmdOrCtrl+N")
         .build(app)?;
     let import_connections =
-        MenuItemBuilder::with_id("import-connections", "导入 OpenSSH Config...").build(app)?;
-    let new_session = MenuItemBuilder::with_id("new-session", "为当前机器新建会话")
+        MenuItemBuilder::with_id("import-connections", labels.import_open_ssh_config.as_str())
+            .build(app)?;
+    let new_session = MenuItemBuilder::with_id("new-session", labels.new_session.as_str())
         .accelerator("CmdOrCtrl+Shift+T")
         .build(app)?;
-    let close_tab = MenuItemBuilder::with_id("close-tab", "关闭当前标签")
+    let close_tab = MenuItemBuilder::with_id("close-tab", labels.close_tab.as_str())
         .accelerator("CmdOrCtrl+W")
         .build(app)?;
-    let show_terminal = MenuItemBuilder::with_id("show-terminal", "终端")
+    let show_terminal = MenuItemBuilder::with_id("show-terminal", labels.terminal.as_str())
         .accelerator("CmdOrCtrl+1")
         .build(app)?;
-    let show_files = MenuItemBuilder::with_id("show-files", "文件传输")
+    let show_files = MenuItemBuilder::with_id("show-files", labels.files.as_str())
         .accelerator("CmdOrCtrl+2")
         .build(app)?;
-    let toggle_sidebar = MenuItemBuilder::with_id("toggle-sidebar", "展开/折叠连接管理")
+    let toggle_sidebar = MenuItemBuilder::with_id("toggle-sidebar", labels.toggle_sidebar.as_str())
         .accelerator("CmdOrCtrl+B")
         .build(app)?;
-    let help = MenuItemBuilder::with_id("help", "Luna Remote 使用帮助")
+    let help = MenuItemBuilder::with_id("help", labels.help_item.as_str())
         .accelerator("F1")
         .build(app)?;
 
     let application = SubmenuBuilder::new(app, "Luna Remote")
         .item(&PredefinedMenuItem::about(
             app,
-            Some("关于 Luna Remote"),
+            Some(labels.about.as_str()),
             None,
         )?)
         .separator()
         .item(&settings)
         .separator()
-        .item(&PredefinedMenuItem::services(app, Some("服务"))?)
+        .item(&PredefinedMenuItem::services(
+            app,
+            Some(labels.services.as_str()),
+        )?)
         .separator()
-        .item(&PredefinedMenuItem::hide(app, Some("隐藏 Luna Remote"))?)
-        .item(&PredefinedMenuItem::hide_others(app, Some("隐藏其他"))?)
-        .item(&PredefinedMenuItem::show_all(app, Some("全部显示"))?)
+        .item(&PredefinedMenuItem::hide(app, Some(labels.hide.as_str()))?)
+        .item(&PredefinedMenuItem::hide_others(
+            app,
+            Some(labels.hide_others.as_str()),
+        )?)
+        .item(&PredefinedMenuItem::show_all(
+            app,
+            Some(labels.show_all.as_str()),
+        )?)
         .separator()
-        .item(&PredefinedMenuItem::quit(app, Some("退出 Luna Remote"))?)
+        .item(&PredefinedMenuItem::quit(app, Some(labels.quit.as_str()))?)
         .build()?;
-    let connection = SubmenuBuilder::new(app, "连接")
+    let connection = SubmenuBuilder::new(app, labels.connection_menu.as_str())
         .item(&new_connection)
         .item(&import_connections)
         .separator()
         .item(&new_session)
         .item(&close_tab)
         .build()?;
-    let edit = SubmenuBuilder::new(app, "编辑")
-        .item(&PredefinedMenuItem::undo(app, Some("撤销"))?)
-        .item(&PredefinedMenuItem::redo(app, Some("重做"))?)
+    let edit = SubmenuBuilder::new(app, labels.edit_menu.as_str())
+        .item(&PredefinedMenuItem::undo(app, Some(labels.undo.as_str()))?)
+        .item(&PredefinedMenuItem::redo(app, Some(labels.redo.as_str()))?)
         .separator()
-        .item(&PredefinedMenuItem::cut(app, Some("剪切"))?)
-        .item(&PredefinedMenuItem::copy(app, Some("复制"))?)
-        .item(&PredefinedMenuItem::paste(app, Some("粘贴"))?)
-        .item(&PredefinedMenuItem::select_all(app, Some("全选"))?)
+        .item(&PredefinedMenuItem::cut(app, Some(labels.cut.as_str()))?)
+        .item(&PredefinedMenuItem::copy(app, Some(labels.copy.as_str()))?)
+        .item(&PredefinedMenuItem::paste(
+            app,
+            Some(labels.paste.as_str()),
+        )?)
+        .item(&PredefinedMenuItem::select_all(
+            app,
+            Some(labels.select_all.as_str()),
+        )?)
         .build()?;
-    let view = SubmenuBuilder::new(app, "视图")
+    let view = SubmenuBuilder::new(app, labels.view_menu.as_str())
         .item(&show_terminal)
         .item(&show_files)
         .separator()
         .item(&toggle_sidebar)
         .separator()
-        .item(&PredefinedMenuItem::fullscreen(app, Some("进入/退出全屏"))?)
+        .item(&PredefinedMenuItem::fullscreen(
+            app,
+            Some(labels.fullscreen.as_str()),
+        )?)
         .build()?;
-    let window = SubmenuBuilder::new(app, "窗口")
-        .item(&PredefinedMenuItem::minimize(app, Some("最小化"))?)
-        .item(&PredefinedMenuItem::maximize(app, Some("缩放"))?)
+    let window = SubmenuBuilder::new(app, labels.window_menu.as_str())
+        .item(&PredefinedMenuItem::minimize(
+            app,
+            Some(labels.minimize.as_str()),
+        )?)
+        .item(&PredefinedMenuItem::maximize(
+            app,
+            Some(labels.zoom.as_str()),
+        )?)
         .separator()
         .item(&PredefinedMenuItem::bring_all_to_front(
             app,
-            Some("前置全部窗口"),
+            Some(labels.bring_all_to_front.as_str()),
         )?)
         .build()?;
-    let help_menu = SubmenuBuilder::new(app, "帮助").item(&help).build()?;
+    let help_menu = SubmenuBuilder::new(app, labels.help_menu.as_str())
+        .item(&help)
+        .build()?;
     MenuBuilder::new(app)
         .items(&[&application, &connection, &edit, &view, &window, &help_menu])
         .build()

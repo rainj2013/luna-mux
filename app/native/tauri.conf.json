@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Luna Remote",
-  "version": "0.1.0",
-  "identifier": "com.local.sshclient",
+  "version": "1.0.1",
+  "identifier": "com.local.lunaremote",
   "build": {
     "beforeDevCommand": "npm run web:dev",
     "devUrl": "http://127.0.0.1:1420",
@@ -34,6 +34,6 @@
     "shortDescription": "Cross-platform SSH and SFTP desktop client",
     "icon": ["../../assets/icons/ssh.png", "../../assets/icons/ssh.icns", "../../assets/icons/ssh.ico"],
     "createUpdaterArtifacts": false,
-    "windows": { "webviewInstallMode": { "type": "embedBootstrapper" } }
+    "windows": { "webviewInstallMode": { "type": "downloadBootstrapper" } }
   }
 }

@@ -4,5 +4,5 @@
 )]
 
 fn main() {
-    ssh_client_lib::run();
+    luna_remote_lib::run();
 }

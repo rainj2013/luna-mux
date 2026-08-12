@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { ArrowLeft, ArrowRight, ArrowUp, ChevronLeft, ChevronRight, Eye, EyeOff, File, FileText, Folder, FolderPlus, Link, Pencil, Plug, RefreshCw, Search, Server, Star, Trash2, X } from 'lucide-react'
 import type { DirectoryEntry, FilePreview } from '../types'
+import { useI18n } from '../i18n'
 
 function remoteParentPath(path: string): string { return path === '/' ? '/' : path.slice(0, path.lastIndexOf('/')) || '/' }
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message : String(error) }
@@ -45,6 +46,7 @@ function transferDropTargetAt(x: number, y: number): TransferDropTarget | null {
 }
 
 function FileBrowser(props: BrowserProps): React.JSX.Element {
+  const { t } = useI18n()
   const [pathInput, setPathInput] = useState(props.path)
   const [filter, setFilter] = useState('')
   const [showHidden, setShowHidden] = useState(false)
@@ -74,34 +76,34 @@ function FileBrowser(props: BrowserProps): React.JSX.Element {
   return <section ref={browser} data-file-browser-side={props.remote ? 'remote' : 'local'} className={`file-browser ${props.transferDropActive ? 'transfer-drop-target' : ''}`}>
     <header className="file-toolbar">
       <strong>{props.remote ? <Server size={15} /> : <Folder size={15} />}{props.title}</strong>
-      <button className="icon-button" title="后退" disabled={!props.canBack} onClick={props.onBack}><ChevronLeft size={16} /></button>
-      <button className="icon-button" title="前进" disabled={!props.canForward} onClick={props.onForward}><ChevronRight size={16} /></button>
-      <button className="icon-button" title="上级目录" onClick={props.onParent}><ArrowUp size={16} /></button>
-      <button className={`icon-button ${props.loading ? 'is-loading' : ''}`} title="刷新" onClick={props.onRefresh}><RefreshCw size={16} /></button>
-      <form onSubmit={(event) => { event.preventDefault(); props.onPath(pathInput) }}><input value={pathInput} onChange={(event) => setPathInput(event.target.value)} aria-label={`${props.title}路径`} /></form>
+      <button className="icon-button" title={t('sftp.back')} disabled={!props.canBack} onClick={props.onBack}><ChevronLeft size={16} /></button>
+      <button className="icon-button" title={t('sftp.forward')} disabled={!props.canForward} onClick={props.onForward}><ChevronRight size={16} /></button>
+      <button className="icon-button" title={t('sftp.parentDirectory')} onClick={props.onParent}><ArrowUp size={16} /></button>
+      <button className={`icon-button ${props.loading ? 'is-loading' : ''}`} title={t('sftp.refresh')} onClick={props.onRefresh}><RefreshCw size={16} /></button>
+      <form onSubmit={(event) => { event.preventDefault(); props.onPath(pathInput) }}><input value={pathInput} onChange={(event) => setPathInput(event.target.value)} aria-label={t('sftp.valuePath', { value0: props.title })} /></form>
     </header>
     <div className="file-actions">
-      <label className="file-filter"><Search size={14} /><input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="筛选当前目录" /></label>
-      <button className={`icon-button ${showHidden ? 'active' : ''}`} title={showHidden ? '不显示隐藏文件' : '显示隐藏文件'} aria-label={showHidden ? '不显示隐藏文件' : '显示隐藏文件'} onClick={() => setShowHidden((value) => !value)}>{showHidden ? <EyeOff size={15} /> : <Eye size={15} />}</button>
-      <button className={`icon-button ${props.favorites.includes(props.path) ? 'active' : ''}`} title="收藏当前路径" onClick={props.onToggleFavorite}><Star size={15} /></button>
-      {props.favorites.length > 0 && <select aria-label={`${props.title}收藏路径`} value="" onChange={(event) => { if (event.target.value) props.onPath(event.target.value) }}><option value="">收藏路径</option>{props.favorites.map((path) => <option key={path} value={path}>{path}</option>)}</select>}
+      <label className="file-filter"><Search size={14} /><input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder={t('sftp.filterThisDirectory')} /></label>
+      <button className={`icon-button ${showHidden ? 'active' : ''}`} title={showHidden ? t('common.hideHiddenFiles') : t('common.showHiddenFiles')} aria-label={showHidden ? t('common.hideHiddenFiles') : t('common.showHiddenFiles')} onClick={() => setShowHidden((value) => !value)}>{showHidden ? <EyeOff size={15} /> : <Eye size={15} />}</button>
+      <button className={`icon-button ${props.favorites.includes(props.path) ? 'active' : ''}`} title={t('sftp.favoriteCurrentPath')} onClick={props.onToggleFavorite}><Star size={15} /></button>
+      {props.favorites.length > 0 && <select aria-label={t('sftp.valueFavoritePaths', { value0: props.title })} value="" onChange={(event) => { if (event.target.value) props.onPath(event.target.value) }}><option value="">{t('sftp.favoritePaths')}</option>{props.favorites.map((path) => <option key={path} value={path}>{path}</option>)}</select>}
       <span className="file-action-spacer" />
-      <button className="icon-button" title="新建目录" onClick={props.onCreateDirectory}><FolderPlus size={15} /></button>
-      <button className="icon-button" title="预览文件内容" aria-label="预览文件内容" disabled={!previewable} onClick={() => previewable && props.onPreview(selectedEntries[0]!.path)}><FileText size={15} /></button>
-      <button className="icon-button" title="重命名" disabled={selectedEntries.length !== 1} onClick={() => selectedEntries[0] && props.onRename(selectedEntries[0].path)}><Pencil size={15} /></button>
+      <button className="icon-button" title={t('sftp.newDirectory')} onClick={props.onCreateDirectory}><FolderPlus size={15} /></button>
+      <button className="icon-button" title={t('common.previewFile')} aria-label={t('common.previewFile')} disabled={!previewable} onClick={() => previewable && props.onPreview(selectedEntries[0]!.path)}><FileText size={15} /></button>
+      <button className="icon-button" title={t('sftp.rename')} disabled={selectedEntries.length !== 1} onClick={() => selectedEntries[0] && props.onRename(selectedEntries[0].path)}><Pencil size={15} /></button>
       <span className="file-action-divider" />
-      <button className="icon-button danger" title="删除" disabled={selectedEntries.length === 0} onClick={() => props.onDelete(selectedEntries.map((entry) => entry.path))}><Trash2 size={15} /></button>
+      <button className="icon-button danger" title={t('sftp.delete')} disabled={selectedEntries.length === 0} onClick={() => props.onDelete(selectedEntries.map((entry) => entry.path))}><Trash2 size={15} /></button>
     </div>
-    <div className="file-header"><span>名称</span></div>
+    <div className="file-header"><span>{t('common.name')}</span></div>
     <div className="file-list" ref={scroll} tabIndex={0} onKeyDown={(event) => {
       const commandKey = window.api.platform === 'darwin' ? event.metaKey : event.ctrlKey
       if (commandKey && event.key.toLowerCase() === 'a') { event.preventDefault(); props.onSelectAll(paths) }
       else if (event.key === 'Delete' && props.selected.size) { event.preventDefault(); props.onDelete([...props.selected]) }
       else if (event.key === 'F2' && props.selected.size === 1) { event.preventDefault(); props.onRename([...props.selected][0]!) }
     }}>
-      {props.loading && shown.length === 0 && <div className="file-message">正在读取目录…</div>}
+      {props.loading && shown.length === 0 && <div className="file-message">{t('sftp.loadingDirectory')}</div>}
       {!props.loading && props.error && <div className="file-message error-text">{props.error}</div>}
-      {!props.loading && !props.error && shown.length === 0 && <div className="file-message">此目录为空</div>}
+      {!props.loading && !props.error && shown.length === 0 && <div className="file-message">{t('sftp.thisDirectoryIsEmpty')}</div>}
       {shown.length > 0 && <div className="file-virtual-space" style={{ height: virtualizer.getTotalSize() }}>{virtualizer.getVirtualItems().map((item) => {
         const entry = shown[item.index]!
         const dragPaths = props.selected.has(entry.path) ? [...props.selected] : [entry.path]
@@ -119,6 +121,7 @@ function FileBrowser(props: BrowserProps): React.JSX.Element {
 interface NavigationState { items: string[]; index: number }
 
 export function SftpPane({ sessionId, bookmarkId, connected, visible, onError, onConnect }: { sessionId?: string; bookmarkId: string; connected: boolean; visible: boolean; onError(message: string): void; onConnect?: () => void }): React.JSX.Element {
+  const { t } = useI18n()
   const [localPath, setLocalPath] = useState('')
   const [remotePath, setRemotePath] = useState('/')
   const [localEntries, setLocalEntries] = useState<DirectoryEntry[]>([])
@@ -160,7 +163,7 @@ export function SftpPane({ sessionId, bookmarkId, connected, visible, onError, o
   }, [])
 
   const fetchRemote = useCallback(async (path: string, force = false): Promise<DirectoryEntry[]> => {
-    if (!sessionId || !connected) throw new Error('SSH 会话未连接')
+    if (!sessionId || !connected) throw new Error(t('sftp.sshSessionIsNotConnected'))
     const key = `${sessionId}\0${path}`
     if (!force) { const pending = remoteInflight.current.get(key); if (pending) return await pending }
     const request = (async () => { try { return await window.api.files.listRemote(sessionId, path) } catch (error) { if (!errorMessage(error).includes('超时')) throw error; return await window.api.files.listRemote(sessionId, path) } })()
@@ -346,11 +349,11 @@ export function SftpPane({ sessionId, bookmarkId, connected, visible, onError, o
     if (!fileNameDialog || fileNameDialog.submitting) return
     const name = fileNameDialog.value.trim()
     if (!name) {
-      setFileNameDialog((current) => current ? { ...current, error: '名称不能为空' } : null)
+      setFileNameDialog((current) => current ? { ...current, error: t('sftp.nameIsRequired') } : null)
       return
     }
     if (name.includes('/') || (!fileNameDialog.remote && name.includes('\\'))) {
-      setFileNameDialog((current) => current ? { ...current, error: '名称不能包含路径分隔符' } : null)
+      setFileNameDialog((current) => current ? { ...current, error: t('sftp.nameCannotContainPathSeparators') } : null)
       return
     }
     if (fileNameDialog.mode === 'rename' && fileNameDialog.path && name === entryName(fileNameDialog.path)) {
@@ -399,7 +402,7 @@ export function SftpPane({ sessionId, bookmarkId, connected, visible, onError, o
     void window.api.files.setFavorites(bookmarkId, next).catch((error) => onError(errorMessage(error)))
   }
 
-  if (!sessionId || !connected) return <div className="sftp-disabled"><Folder size={25} /><strong>文件传输尚未连接</strong><span>连接后可浏览本地和远端目录</span>{onConnect && <button className="secondary-button" onClick={onConnect}><Plug size={15} />连接</button>}</div>
+  if (!sessionId || !connected) return <div className="sftp-disabled"><Folder size={25} /><strong>{t('sftp.fileTransferIsNotConnected')}</strong><span>{t('sftp.connectToBrowseLocalAndRemoteDirectories')}</span>{onConnect && <button className="secondary-button" onClick={onConnect}><Plug size={15} />{t('common.connect')}</button>}</div>
   const common = (remote: boolean): Pick<BrowserProps, 'onSelect' | 'onSelectAll' | 'onCreateDirectory' | 'onRename' | 'onDelete' | 'onPreview' | 'onToggleFavorite'> => ({
     onSelect: (path, additive, range, paths) => select(remote, path, additive, range, paths),
     onSelectAll: (paths) => (remote ? setRemoteSelected : setLocalSelected)(new Set(paths)),
@@ -408,43 +411,43 @@ export function SftpPane({ sessionId, bookmarkId, connected, visible, onError, o
   })
   return <>
     <div className="sftp-pane">
-      <FileBrowser title="本地" remote={false} path={localPath} entries={localEntries} selected={localSelected} loading={localState.loading} error={localState.error} favorites={favorites.local}
+      <FileBrowser title={t('sftp.local')} remote={false} path={localPath} entries={localEntries} selected={localSelected} loading={localState.loading} error={localState.error} favorites={favorites.local}
         canBack={localNavigation.index > 0} canForward={localNavigation.index < localNavigation.items.length - 1} onBack={() => moveHistory(false, -1)} onForward={() => moveHistory(false, 1)}
         onPath={navigateLocal} onParent={() => { void window.api.files.parentLocal(localPath).then(navigateLocal).catch((error) => onError(errorMessage(error))) }} onRefresh={() => void loadLocal(localPath)}
         onTransferDrop={(paths, sourceRemote) => { if (sourceRemote) void enqueue('download', paths) }} onTransferDragStart={beginTransferDrag}
         transferDropActive={transferDrag?.target?.remote === false} transferDropDirectory={transferDrag?.target?.remote === false ? transferDrag.target.directory : undefined} {...common(false)} />
       <div className="transfer-arrows">
-        <button className="icon-button transfer-button" title="上传到远端" disabled={!localSelected.size} onClick={() => void enqueue('upload', [...localSelected])}><ArrowRight size={18} /></button>
-        <button className="icon-button transfer-button" title="下载到本地" disabled={!remoteSelected.size} onClick={() => void enqueue('download', [...remoteSelected])}><ArrowLeft size={18} /></button>
+        <button className="icon-button transfer-button" title={t('sftp.uploadToRemote')} disabled={!localSelected.size} onClick={() => void enqueue('upload', [...localSelected])}><ArrowRight size={18} /></button>
+        <button className="icon-button transfer-button" title={t('sftp.downloadToLocal')} disabled={!remoteSelected.size} onClick={() => void enqueue('download', [...remoteSelected])}><ArrowLeft size={18} /></button>
       </div>
-      <FileBrowser title="远端" remote path={remotePath} entries={remoteEntries} selected={remoteSelected} loading={remoteState.loading} error={remoteState.error} favorites={favorites.remote}
+      <FileBrowser title={t('common.remote')} remote path={remotePath} entries={remoteEntries} selected={remoteSelected} loading={remoteState.loading} error={remoteState.error} favorites={favorites.remote}
         canBack={remoteNavigation.index > 0} canForward={remoteNavigation.index < remoteNavigation.items.length - 1} onBack={() => moveHistory(true, -1)} onForward={() => moveHistory(true, 1)}
         onPath={navigateRemote} onParent={() => navigateRemote(remoteParentPath(remotePath))} onRefresh={() => void loadRemote(remotePath, true)} onPrefetch={prefetchRemote}
         onTransferDrop={(paths, sourceRemote) => { if (!sourceRemote) void enqueue('upload', paths) }} onTransferDragStart={beginTransferDrag}
         transferDropActive={transferDrag?.target?.remote === true} transferDropDirectory={transferDrag?.target?.remote === true ? transferDrag.target.directory : undefined} {...common(true)} />
     </div>
-    {transferDrag && <div className="transfer-drag-ghost" style={{ left: transferDrag.x + 14, top: transferDrag.y + 14 }}><File size={15} /><span>{transferDrag.paths.length === 1 ? entryName(transferDrag.paths[0]!) : `${transferDrag.paths.length} 项`}</span></div>}
+    {transferDrag && <div className="transfer-drag-ghost" style={{ left: transferDrag.x + 14, top: transferDrag.y + 14 }}><File size={15} /><span>{transferDrag.paths.length === 1 ? entryName(transferDrag.paths[0]!) : t('sftp.valueItems', { value0: transferDrag.paths.length })}</span></div>}
     {fileNameDialog && <div className="modal-backdrop file-operation-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !fileNameDialog.submitting) setFileNameDialog(null) }}>
       <section className="modal file-operation-dialog" role="dialog" aria-modal="true" aria-labelledby="file-operation-title">
-        <header><strong id="file-operation-title">{fileNameDialog.mode === 'create' ? `新建${fileNameDialog.remote ? '远端' : '本地'}目录` : `重命名${fileNameDialog.remote ? '远端' : '本地'}项目`}</strong><button type="button" className="icon-button" title="关闭" disabled={fileNameDialog.submitting} onClick={() => setFileNameDialog(null)}><X size={17} /></button></header>
+        <header><strong id="file-operation-title">{fileNameDialog.mode === 'create' ? t('sftp.newDirectoryOnSide', { side: fileNameDialog.remote ? t('common.remote') : t('common.local') }) : t('sftp.renameItem', { side: fileNameDialog.remote ? t('common.remote') : t('common.local') })}</strong><button type="button" className="icon-button" title={t('common.close')} disabled={fileNameDialog.submitting} onClick={() => setFileNameDialog(null)}><X size={17} /></button></header>
         <form className="file-operation-form" onSubmit={(event) => void submitFileName(event)}>
-          <label>名称<input autoFocus maxLength={255} value={fileNameDialog.value} onFocus={(event) => { if (fileNameDialog.mode === 'rename') event.currentTarget.select() }} onChange={(event) => setFileNameDialog((current) => current ? { ...current, value: event.target.value, error: '' } : null)} /></label>
+          <label>{t('common.name')}<input autoFocus maxLength={255} value={fileNameDialog.value} onFocus={(event) => { if (fileNameDialog.mode === 'rename') event.currentTarget.select() }} onChange={(event) => setFileNameDialog((current) => current ? { ...current, value: event.target.value, error: '' } : null)} /></label>
           {fileNameDialog.error && <small className="error-text">{fileNameDialog.error}</small>}
-          <div className="dialog-actions"><button type="button" className="secondary-button" disabled={fileNameDialog.submitting} onClick={() => setFileNameDialog(null)}>取消</button><button className="primary-button" disabled={fileNameDialog.submitting}>{fileNameDialog.submitting ? '处理中…' : '确定'}</button></div>
+          <div className="dialog-actions"><button type="button" className="secondary-button" disabled={fileNameDialog.submitting} onClick={() => setFileNameDialog(null)}>{t('common.cancel')}</button><button className="primary-button" disabled={fileNameDialog.submitting}>{fileNameDialog.submitting ? t('sftp.processing') : t('sftp.ok')}</button></div>
         </form>
       </section>
     </div>}
     {fileDeleteDialog && <div className="modal-backdrop file-operation-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !fileDeleteDialog.submitting) setFileDeleteDialog(null) }}>
       <section className="modal file-operation-dialog" role="dialog" aria-modal="true" aria-labelledby="file-delete-title">
-        <header><strong id="file-delete-title">删除{fileDeleteDialog.remote ? '远端' : '本地'}文件</strong><button type="button" className="icon-button" title="关闭" disabled={fileDeleteDialog.submitting} onClick={() => setFileDeleteDialog(null)}><X size={17} /></button></header>
+        <header><strong id="file-delete-title">{t('sftp.deleteFiles', { side: fileDeleteDialog.remote ? t('common.remote') : t('common.local') })}</strong><button type="button" className="icon-button" title={t('common.close')} disabled={fileDeleteDialog.submitting} onClick={() => setFileDeleteDialog(null)}><X size={17} /></button></header>
         <form className="file-delete-confirm" onSubmit={(event) => void confirmDeleteEntries(event)}>
-          <div className="file-delete-heading"><Trash2 size={22} /><div><strong>永久删除选中的 {fileDeleteDialog.paths.length} 项？</strong><span>此操作无法撤销，请确认所选内容。</span></div></div>
-          <ul>{fileDeleteDialog.paths.slice(0, 5).map((path) => <li key={path} title={path}>{entryName(path)}</li>)}{fileDeleteDialog.paths.length > 5 && <li>另外 {fileDeleteDialog.paths.length - 5} 项</li>}</ul>
+          <div className="file-delete-heading"><Trash2 size={22} /><div><strong>{t('sftp.permanentlyDeleteValueSelectedItems', { value0: fileDeleteDialog.paths.length })}</strong><span>{t('sftp.thisCannotBeUndoneCheckTheSelectedItems')}</span></div></div>
+          <ul>{fileDeleteDialog.paths.slice(0, 5).map((path) => <li key={path} title={path}>{entryName(path)}</li>)}{fileDeleteDialog.paths.length > 5 && <li>{t('sftp.valueMore', { value0: fileDeleteDialog.paths.length - 5 })}</li>}</ul>
           {fileDeleteDialog.error && <small className="error-text">{fileDeleteDialog.error}</small>}
-          <div className="dialog-actions"><button type="button" autoFocus className="secondary-button" disabled={fileDeleteDialog.submitting} onClick={() => setFileDeleteDialog(null)}>取消</button><button type="submit" className="danger-button" disabled={fileDeleteDialog.submitting}><Trash2 size={15} />{fileDeleteDialog.submitting ? '正在删除…' : '永久删除'}</button></div>
+          <div className="dialog-actions"><button type="button" autoFocus className="secondary-button" disabled={fileDeleteDialog.submitting} onClick={() => setFileDeleteDialog(null)}>{t('common.cancel')}</button><button type="submit" className="danger-button" disabled={fileDeleteDialog.submitting}><Trash2 size={15} />{fileDeleteDialog.submitting ? t('sftp.deleting') : t('sftp.deletePermanently')}</button></div>
         </form>
       </section>
     </div>}
-    {preview && <div className="file-preview-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setPreview(null) }}><section className="file-preview" role="dialog" aria-modal="true"><header><strong>{entryName(preview.path)}</strong><span>{preview.value.size.toLocaleString()} bytes</span><button className="icon-button" title="关闭预览" onClick={() => setPreview(null)}><X size={16} /></button></header>{preview.value.binary ? <div className="binary-preview"><File size={34} /><strong>二进制文件</strong><span>此文件不适合文本预览</span></div> : <pre>{preview.value.content}</pre>}{preview.value.truncated && !preview.value.binary && <footer><span>文件较大，当前显示{preview.value.position === 'start' ? '开头' : '末尾'} 1 MiB</span><button className="secondary-button" onClick={() => void previewEntry(preview.remote, preview.path, preview.value.position === 'start' ? 'end' : 'start')}>查看{preview.value.position === 'start' ? '末尾' : '开头'}</button></footer>}</section></div>}
+    {preview && <div className="file-preview-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setPreview(null) }}><section className="file-preview" role="dialog" aria-modal="true"><header><strong>{entryName(preview.path)}</strong><span>{preview.value.size.toLocaleString()} bytes</span><button className="icon-button" title={t('sftp.closePreview')} onClick={() => setPreview(null)}><X size={16} /></button></header>{preview.value.binary ? <div className="binary-preview"><File size={34} /><strong>{t('sftp.binaryFile')}</strong><span>{t('sftp.thisFileCannotBePreviewedAsText')}</span></div> : <pre>{preview.value.content}</pre>}{preview.value.truncated && !preview.value.binary && <footer><span>{t(preview.value.position === 'start' ? 'sftp.largeFileStart' : 'sftp.largeFileEnd')}</span><button className="secondary-button" onClick={() => void previewEntry(preview.remote, preview.path, preview.value.position === 'start' ? 'end' : 'start')}>{t(preview.value.position === 'start' ? 'sftp.viewEnd' : 'sftp.viewStart')}</button></footer>}</section></div>}
   </>
 }

@@ -137,6 +137,40 @@ export interface DeploymentDiffEntry {
 export type TerminalBackgroundFit = 'cover' | 'contain' | 'stretch' | 'tile'
 export type AppIconId = 'ssh' | 'classic' | 'neon' | 'light'
 export type UiTheme = 'system' | 'light' | 'dark'
+export type AppLanguage = string
+
+export interface NativeMenuLabels {
+  settings: string
+  newConnection: string
+  importOpenSshConfig: string
+  newSession: string
+  closeTab: string
+  terminal: string
+  files: string
+  toggleSidebar: string
+  helpItem: string
+  about: string
+  services: string
+  hide: string
+  hideOthers: string
+  showAll: string
+  quit: string
+  connectionMenu: string
+  editMenu: string
+  undo: string
+  redo: string
+  cut: string
+  copy: string
+  paste: string
+  selectAll: string
+  viewMenu: string
+  fullscreen: string
+  windowMenu: string
+  minimize: string
+  zoom: string
+  bringAllToFront: string
+  helpMenu: string
+}
 export type AiShell = 'linux' | 'powerShell' | 'cmd' | 'macos'
 export type AiRiskLevel = 'low' | 'medium' | 'high'
 export type AiProvider = 'auto' | 'openAi' | 'anthropic' | 'qwen' | 'deepSeek' | 'kimi' | 'glm' | 'miniMax' | 'grok' | 'gemini'
@@ -382,6 +416,9 @@ export interface AppApi {
     setSidebarWidth(width: number): Promise<void>
   }
   settings: {
+    getLanguage(): Promise<AppLanguage>
+    applyLanguage(menu: NativeMenuLabels): Promise<void>
+    saveLanguage(language: AppLanguage, menu: NativeMenuLabels): Promise<AppLanguage>
     getUiTheme(): Promise<UiTheme>
     saveUiTheme(theme: UiTheme): Promise<UiTheme>
     getTerminal(): Promise<TerminalSettings>

@@ -3,7 +3,7 @@ import { listen } from '@tauri-apps/api/event'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { readText, writeText } from '@tauri-apps/plugin-clipboard-manager'
-import type { AiSettingsInput, AiShell, AppApi, AppEvent, AppIconId, BookmarkInput, ConnectInput, ConflictResolution, DeploymentProfile, Platform, PortForwardProfile, TerminalSettings, TransferRequest, UiTheme } from './types'
+import type { AiSettingsInput, AiShell, AppApi, AppEvent, AppIconId, AppLanguage, BookmarkInput, ConnectInput, ConflictResolution, DeploymentProfile, NativeMenuLabels, Platform, PortForwardProfile, TerminalSettings, TransferRequest, UiTheme } from './types'
 
 const call = <T>(command: string, args?: Record<string, unknown>): Promise<T> => invoke<T>(command, args).catch((error) => {
   throw new Error(typeof error === 'string' ? error : String(error))
@@ -124,6 +124,9 @@ export async function createTauriApi(): Promise<AppApi> {
       setSidebarWidth: (width) => call('state_set_sidebar_width', { width })
     },
     settings: {
+      getLanguage: () => call('settings_get_language'),
+      applyLanguage: (menu: NativeMenuLabels) => call('settings_apply_language', { menu }),
+      saveLanguage: (language: AppLanguage, menu: NativeMenuLabels) => call('settings_save_language', { language, menu }),
       getUiTheme: () => call('settings_get_ui_theme'),
       saveUiTheme: (theme: UiTheme) => call('settings_save_ui_theme', { theme }),
       getTerminal: () => call('settings_get_terminal'),

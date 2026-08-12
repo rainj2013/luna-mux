@@ -106,7 +106,6 @@ fn update_matching_shortcuts_initialized(
                     .is_some_and(|value| {
                         value.eq_ignore_ascii_case("Luna Remote")
                             || value.eq_ignore_ascii_case("RainSSH")
-                            || value.eq_ignore_ascii_case("SSH Client")
                     })
         })
     {

@@ -1,4 +1,5 @@
 node_modules/
+.cargo/config.toml
 app/frontend/dist/
 app/native/target/
 app/native/gen/schemas/
