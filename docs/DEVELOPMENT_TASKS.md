@@ -13,6 +13,7 @@ This file is the ordered, durable work breakdown. Task IDs do not change after w
 | M0.5 | DONE | Replace remaining brand literals with generated product info | Runtime and build code contain no editable Luna Mux brand duplicates |
 | M0.6 | TODO | Add explicit Luna Remote import wizard | Selective snapshot import; credentials require separate approval; source is never mutated |
 | M0.7 | DONE | Document design, tasks, progress, and upstream policy | All four durable documents exist and cross-reference each other |
+| M0.8 | TODO | Replace inherited SSH-centric product icons | Luna Mux has an original default icon and intentional selectable variants for Windows and macOS |
 
 ## M1 - Session abstraction
 

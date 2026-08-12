@@ -22,6 +22,7 @@ This is the durable development checkpoint. Update it in every development sessi
 - Isolated the database and credential namespace; startup performs no automatic Luna Remote data or credential migration.
 - Preserved Luna Remote and older connection archive formats only as explicit file-import compatibility.
 - Added the approved design, ordered development tasks, progress checkpoint, and upstream sync ledger.
+- Removed four unreferenced Luna Remote design and product screenshots (about 5.7 MB); retained only image assets still required by the current build.
 
 ## In progress
 
@@ -30,9 +31,10 @@ This is the durable development checkpoint. Update it in every development sessi
 
 ## Next actions
 
-1. Install or configure NASM and CMake, then run `cargo check` and the Rust tests on Windows.
-2. Implement M0.6 as an explicit, read-only Luna Remote import flow with a transactional Luna Mux write boundary.
-3. Begin M1.1 after the M0.6 acceptance gate is green.
+1. Design and replace the inherited SSH-centric application icon set under M0.8 before packaging a Luna Mux release.
+2. Install or configure NASM and CMake, then run `cargo check` and the Rust tests on Windows.
+3. Implement M0.6 as an explicit, read-only Luna Remote import flow with a transactional Luna Mux write boundary.
+4. Begin M1.1 after the M0.6 acceptance gate is green.
 
 ## Verification evidence
 
@@ -60,6 +62,7 @@ This is the durable development checkpoint. Update it in every development sessi
 | 2026-08-12 | Agents stop when Luna Mux exits; a thin SessionBackend preserves a future daemon extension point. |
 | 2026-08-12 | Browser runs locally; remote development services use SSH local forwarding. |
 | 2026-08-12 | Luna Remote updates are selectively ported by commit into in-repository core boundaries. |
+| 2026-08-12 | Unreferenced Luna Remote screenshots and design images are removed; build-required icons remain temporarily until Luna Mux visual identity is designed. |
 
 ## Session update protocol
 

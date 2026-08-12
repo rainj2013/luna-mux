@@ -1,5 +1,4 @@
 <div align="center">
-  <img src="assets/icons/ssh.png" width="96" alt="Luna Mux icon">
   <h1>Luna Mux</h1>
   <p>A local and remote terminal workspace for coding agents</p>
   <p><strong>Status: product foundation and design; no usable release yet.</strong></p>

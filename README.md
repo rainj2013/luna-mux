@@ -1,5 +1,4 @@
 <div align="center">
-  <img src="assets/icons/ssh.png" width="96" alt="Luna Mux 图标">
   <h1>Luna Mux</h1>
   <p>面向 Coding Agent 的本地与远程终端工作台</p>
   <p><strong>当前状态：设计与产品基础阶段，尚未发布可用版本。</strong></p>
