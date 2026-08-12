@@ -26,19 +26,18 @@ This is the durable development checkpoint. Update it in every development sessi
 - Added a two-phase connection-backup import: read-only preview, source identification, selective connection/empty-group choice, dependency-aware jump-host selection, and one SQLite transaction. Credentials are explicitly excluded.
 - Added versioned session contract metadata with generated Rust/TypeScript types for targets, capabilities, lifecycle, UTF-8 byte cursors, truncation reads, and exit events.
 - Added the thin `SessionBackend` trait and a lightweight Rust contract test crate; all three status/output/exit contract tests pass without requiring the native SSH dependency toolchain.
+- Installed NASM 3.02 from the official Windows archive, added it to the user PATH, and restored full native Rust compilation through `aws-lc-sys`.
 
 ## In progress
 
 - M0.6 still needs a direct Luna Remote data-source reader and selective Host Key/settings/forwarding-profile import. Credential import remains a separate, explicit authorization step.
 - Existing SSH sessions are not yet routed through `SessionBackend`; that work is M1.2.
-- Full native Rust compilation is waiting on the Windows native build prerequisite described below.
 
 ## Next actions
 
 1. Complete M0.6 with direct read-only Luna Remote source discovery/selection and import of the remaining approved data classes.
-2. Install or configure NASM, then run full `cargo check` and native Rust tests on Windows.
-3. Wrap the existing SSH manager as `InProcessSshBackend` under M1.2 without changing current SSH behavior.
-4. Design and replace the inherited SSH-centric application icon set under M0.8 before packaging a Luna Mux release.
+2. Wrap the existing SSH manager as `InProcessSshBackend` under M1.2 without changing current SSH behavior.
+3. Design and replace the inherited SSH-centric application icon set under M0.8 before packaging a Luna Mux release.
 
 ## Verification evidence
 
@@ -56,9 +55,10 @@ This is the durable development checkpoint. Update it in every development sessi
 | `npm run web:build` | Passed | 2026-08-12 |
 | `cargo metadata --manifest-path app/native/Cargo.toml --no-deps` | Passed | 2026-08-12 |
 | `cargo fmt --manifest-path app/native/Cargo.toml -- --check` | Passed | 2026-08-12 |
-| `cargo check --manifest-path app/native/Cargo.toml` | Blocked in third-party `aws-lc-sys`: NASM is unavailable; project Rust code was not reached | 2026-08-12 |
+| `cargo check --manifest-path app/native/Cargo.toml` | Passed with NASM 3.02; `aws-lc-sys`, `russh`, and Luna Mux compiled successfully | 2026-08-12 |
+| `cargo test --manifest-path app/native/Cargo.toml` | Passed (29 tests) | 2026-08-12 |
 | `git diff --check` | Passed | 2026-08-12 |
-| Browser visual verification | Not run: no in-app or Chrome browser instance was available; native Tauri launch is also blocked by NASM | 2026-08-12 |
+| Browser visual verification | Not run: no in-app or Chrome browser instance was available | 2026-08-12 |
 
 ## Decision log
 

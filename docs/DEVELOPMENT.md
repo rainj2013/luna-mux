@@ -21,7 +21,7 @@ docs/         架构、开发和设计资料
 - Node.js 24 和 npm，推荐使用 [fnm](https://github.com/Schniz/fnm) 管理。仓库根目录的 `.node-version` 已固定主版本。
 - Rust stable 1.85 或更高版本。项目使用 Rust 2024 edition，推荐通过 [rustup](https://rustup.rs/) 安装。
 - macOS 需要 Xcode Command Line Tools。
-- Windows 需要 Microsoft C++ Build Tools、Windows SDK 和 WebView2 Runtime。
+- Windows 需要 Microsoft C++ Build Tools、Windows SDK、WebView2 Runtime 和 NASM（`aws-lc-sys` 的 native crypto 构建依赖）。
 
 ### macOS
 
@@ -61,6 +61,7 @@ winget install --exact --id Schniz.fnm
 winget install --exact --id Rustlang.Rustup
 winget install --exact --id Microsoft.VisualStudio.2022.BuildTools --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
 winget install --exact --id Microsoft.EdgeWebView2Runtime
+winget install --exact --id NASM.NASM
 ```
 
 安装完成后重新打开 PowerShell。将下面一行加入 PowerShell 的 `$PROFILE`，并在当前终端执行一次。
@@ -253,7 +254,7 @@ Get-NetTCPConnection -LocalPort 1420 -ErrorAction SilentlyContinue
 
 ### Windows 无法编译或启动
 
-重新打开 Visual Studio Installer，确认已安装“使用 C++ 的桌面开发”、MSVC v143 和 Windows SDK，再确认 WebView2 Runtime 已安装。修改工具链后应重新打开 PowerShell。
+重新打开 Visual Studio Installer，确认已安装“使用 C++ 的桌面开发”、MSVC v143 和 Windows SDK，再确认 WebView2 Runtime 和 NASM（`nasm -v` 可执行）已安装。修改工具链后应重新打开 PowerShell。
 
 ### macOS 出现签名或 Keychain 提示
 
