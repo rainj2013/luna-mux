@@ -59,11 +59,27 @@ This file is the ordered, durable work breakdown. Task IDs do not change after w
 | M4.6 | TODO | Add Windows/macOS system notifications | Focused pane suppresses duplicate OS notification; in-app history remains |
 | M4.7 | TODO | Add terminal-only fallback signals | OSC/BEL/activity are labeled heuristic and never presented as authoritative state |
 
+## M4.8-M4.12 - Agent control of Luna Mux
+
+These tasks let an external AI Agent operate Luna Mux itself. They are
+separate from cross-agent collaboration: the caller is an Agent/CLI/automation
+client, while the resources are Luna Mux application objects. All transports
+must call `LunaControlService`; none may access SQLite, `SessionManager`, or a
+terminal backend directly.
+
+| ID | Status | Task | Acceptance |
+| --- | --- | --- | --- |
+| M4.8 | DONE | Define `LunaControlService` operation catalog and versioned request/response envelopes | Catalog, caller kinds, scoped grants, structured errors, idempotency field, and event cursor semantics are tested |
+| M4.9 | TODO | Add authenticated Agent control adapter | A local adapter authenticates the caller and injects `ControlCaller`; caller identity cannot be supplied by request JSON |
+| M4.10 | TODO | Expose Mux Session/Pane/Runtime/target discovery and safe control tools | Read-only discovery works first; mutating operations use explicit write/control grants and never expose raw database access |
+| M4.11 | TODO | Add approval policy for destructive operations | Close, interrupt, raw input, transfer, tunnel, and browser side effects can require user approval by policy |
+| M4.12 | TODO | Add control audit events and event cursor reads | Authorized callers receive bounded events with truncation markers; audit records include caller, resource, operation, result, and timestamp |
+
 ## M5 - Cross-agent Luna MCP
 
 | ID | Status | Task | Acceptance |
 | --- | --- | --- | --- |
-| M5.1 | TODO | Implement scoped in-process MCP transport | Local and SSH-managed Codex can connect only with a runtime-scoped token |
+| M5.1 | TODO | Implement scoped in-process MCP transport for agent-to-agent operations | Local and SSH-managed Codex can connect only with a runtime-scoped token; application control reuses M4.8-M4.12 |
 | M5.2 | TODO | Add agent list/status/task/interrupt tools | Only authorized managed agents are discoverable |
 | M5.3 | TODO | Add bounded output ring and cursor reads | Incremental reads and truncation semantics pass contract tests |
 | M5.4 | TODO | Add directional read/write/control grants | Grants are explicit, visible, persistent, and immediately revocable |

@@ -60,8 +60,19 @@ export interface TerminalRuntimeCreateRequest {
   title?: string
   cwd?: string
   command?: string
+  authentication?: TerminalRuntimeAuthentication
   cols: number
   rows: number
+}
+
+export type TerminalRuntimeAuthentication = {
+  type: 'ssh'
+  options: {
+    credential?: string
+    rememberCredential: boolean
+    jumpCredential?: string
+    rememberJumpCredential: boolean
+  }
 }
 
 export interface TerminalRuntime {
@@ -149,8 +160,20 @@ pub struct TerminalRuntimeCreateRequest {
     pub title: Option<String>,
     pub cwd: Option<String>,
     pub command: Option<String>,
+    pub authentication: Option<TerminalRuntimeAuthentication>,
     pub cols: u32,
     pub rows: u32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", content = "options", rename_all = "camelCase")]
+pub enum TerminalRuntimeAuthentication {
+    Ssh {
+        credential: Option<String>,
+        remember_credential: bool,
+        jump_credential: Option<String>,
+        remember_jump_credential: bool,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

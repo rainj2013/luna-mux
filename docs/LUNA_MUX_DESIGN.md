@@ -23,6 +23,7 @@ The first release does not keep agents running after Luna Mux exits. It preserve
 
 Luna Mux and Luna Remote are independent applications and repositories.
 
+- Luna Remote is a source of reusable implementation and proven capabilities, not a product-design template for Luna Mux.
 - Luna Mux keeps the Luna Remote Git history as its initial ancestry.
 - `origin` will point to the independent Luna Mux repository when it is created.
 - `upstream` is a fetch-only reference to Luna Remote.
@@ -30,7 +31,9 @@ Luna Mux and Luna Remote are independent applications and repositories.
 - Runtime identifiers, databases, credentials, settings, browser profiles, builds, and releases are isolated.
 - Luna Remote data is never migrated automatically. A later import wizard reads a snapshot only after explicit user approval.
 
-Reusable code is gradually separated into in-repository core modules. Product features may depend on core; core must not depend on Mux Session, agent, browser, or brand-specific code.
+Reuse is decided capability by capability. SSH transport, SFTP, tunnels, transfers, credential handling, terminal rendering, and platform fixes may be retained when they fit Luna Mux. Luna Remote navigation, tab semantics, state ownership, naming, data relationships, and UX flows carry no compatibility requirement and may be replaced completely.
+
+Reusable code is gradually separated into in-repository core modules. Product features may depend on core; core must not depend on Mux Session, agent, browser, or brand-specific code. When inherited code conflicts with the Luna Mux domain model, the Luna Mux model takes precedence and the inherited implementation must be adapted, rewritten, or omitted.
 
 ## 3. Product metadata
 
@@ -129,6 +132,35 @@ Terminal output uses a bounded in-memory ring and monotonically increasing curso
 
 Cross-agent actions record caller, target, timestamp, operation, input, and result for 30 days by default.
 
+### 4.5.1 Agent control of Luna Mux
+
+Luna Mux itself is an operable application for local AI Agents. The core
+control boundary is the versioned, transport-neutral `LunaControlService`.
+Future MCP, CLI, or local IPC adapters authenticate a caller and then invoke
+this service; they never access SQLite, `SessionManager`, or a terminal backend
+directly. The same operation catalog is used for capability discovery across
+transports.
+
+The first reserved operations are read-only `terminal.targets.list` and
+`terminal.runtimes.list`, plus a bounded event stream with monotonic cursors.
+The control envelope carries a contract version, request ID, optional resource
+scope, arguments, and an idempotency key. Caller identity is injected by the
+authenticated adapter and is intentionally absent from the request body.
+
+Grants are scoped by resource kind and optional resource ID, with `read`,
+`write`, and `control` levels. A control grant includes read and write access;
+it does not silently grant access to unrelated resources. Destructive
+operations such as interrupt, close, raw terminal input, transfer, tunnel, or
+browser side effects will be gated by an approval policy before they are
+exposed. Unauthorized, stale-version, invalid-argument, unavailable, and
+internal failures use structured error codes rather than transport-specific
+strings.
+
+This control plane is deliberately independent of the cross-agent MCP work:
+M4.8-M4.12 operate Luna Mux resources, while M5 handles directional discovery
+and cooperation between managed coding agents. Both layers share the same
+runtime IDs, event cursors, grants, and audit model.
+
 ### 4.6 Browser pane
 
 Chrome always runs on the desktop hosting Luna Mux. Each Mux Session receives an isolated, persistent profile, with an optional temporary profile.
@@ -152,7 +184,8 @@ Both Windows and macOS are release-one platforms. Every milestone is complete on
 3. Add Windows PowerShell/WSL and macOS login-shell PTYs with identical terminal behavior.
 4. Replace the single-terminal tab model with project-centered Mux Sessions and persisted recursive split panes.
 5. Add the Codex adapter, dashboard, event forwarding, and notifications.
-6. Add Luna MCP, output cursors, grants, and audit records.
+6. Reserve and implement the Luna Mux control service, then add Luna MCP for
+   cross-agent operations using that boundary.
 7. Add local Chrome lifecycle, browser pane, CDP tools, and remote-service forwarding.
 8. Continue selective upstream ports and cross-platform regression work throughout development.
 

@@ -16,8 +16,22 @@ use tauri_plugin_opener::OpenerExt;
 use uuid::Uuid;
 
 use crate::{
-    ai, app_icon, database::Database, desktop, models::*, product, sessions::SessionManager,
-    ssh_config, transfers::TransferManager, tunnels::TunnelManager,
+    ai, app_icon,
+    control_contract::{ControlCatalog, ControlEventReadResult, ControlRequest, ControlResponse},
+    control_service::{self, InProcessControlService, LunaControlService},
+    database::Database,
+    models::*,
+    product,
+    sessions::SessionManager,
+    ssh_config,
+    ssh_terminal_backend::InProcessSshTerminalBackend,
+    terminal_backend::TerminalBackend,
+    terminal_runtime_contract::{
+        TerminalRuntime, TerminalRuntimeAuthentication, TerminalRuntimeCreateRequest,
+        TerminalRuntimeOutputReadResult, TerminalTarget,
+    },
+    transfers::TransferManager,
+    tunnels::TunnelManager,
 };
 
 const LUNA_REMOTE_CONNECTION_ARCHIVE_FORMAT: &str = "luna-remote-connections";
@@ -30,6 +44,8 @@ const LUNA_REMOTE_LEGACY_CREDENTIAL_SERVICE: &str = "com.local.sshclient.credent
 pub struct AppState {
     pub db: Arc<Database>,
     pub sessions: Arc<SessionManager>,
+    pub ssh_terminal_backend: Arc<InProcessSshTerminalBackend>,
+    pub control: Arc<InProcessControlService>,
     pub transfers: Arc<TransferManager>,
     pub tunnels: Arc<TunnelManager>,
     pub ai_diagnostics: ai::AiDiagnostics,
@@ -37,6 +53,37 @@ pub struct AppState {
     pub pending_archive_imports: Mutex<HashMap<String, BookmarkArchive>>,
     pub pending_luna_remote_imports: Mutex<HashMap<String, LunaRemoteSnapshot>>,
     pub exit_cleanup_started: AtomicBool,
+}
+
+/// Tauri is the trusted local UI adapter. External Agent/CLI adapters must
+/// authenticate independently and inject their own caller identity.
+#[tauri::command]
+pub fn control_catalog(state: State<AppState>) -> ControlCatalog {
+    state.control.catalog(&control_service::ui_caller())
+}
+
+#[tauri::command]
+pub async fn control_invoke(
+    state: State<'_, AppState>,
+    request: ControlRequest,
+) -> Result<ControlResponse, serde_json::Value> {
+    state
+        .control
+        .invoke(&control_service::ui_caller(), request)
+        .await
+        .map_err(|error| serde_json::to_value(error).unwrap_or_else(|_| serde_json::json!({"code":"internal","message":"控制请求失败","retryable":false})))
+}
+
+#[tauri::command]
+pub fn control_read_events(
+    state: State<AppState>,
+    from_sequence: u64,
+    limit: usize,
+) -> Result<ControlEventReadResult, serde_json::Value> {
+    state
+        .control
+        .read_events(&control_service::ui_caller(), from_sequence, limit)
+        .map_err(|error| serde_json::to_value(error).unwrap_or_else(|_| serde_json::json!({"code":"internal","message":"事件读取失败","retryable":false})))
 }
 
 fn selected_path(value: Option<FilePath>) -> Option<String> {
@@ -73,16 +120,118 @@ pub fn system_open_external(app: AppHandle, value: String) -> Result<(), String>
 }
 
 #[tauri::command]
-pub fn sessions_connect(
-    state: State<AppState>,
+pub async fn sessions_connect(
+    state: State<'_, AppState>,
     input: ConnectInput,
 ) -> Result<SessionSummary, String> {
-    state.sessions.connect(input)
+    let target_id = InProcessSshTerminalBackend::target_id(&input.bookmark_id);
+    if !input.new_session {
+        if let Some(runtime) = state.ssh_terminal_backend.find_active_by_target(&target_id) {
+            return InProcessSshTerminalBackend::legacy_summary(&runtime);
+        }
+    }
+    let runtime = state
+        .ssh_terminal_backend
+        .create(TerminalRuntimeCreateRequest {
+            target_id,
+            title: None,
+            cwd: None,
+            command: None,
+            authentication: Some(TerminalRuntimeAuthentication::Ssh {
+                credential: input.credential,
+                remember_credential: input.remember_credential,
+                jump_credential: input.jump_credential,
+                remember_jump_credential: input.remember_jump_credential,
+            }),
+            cols: 100,
+            rows: 30,
+        })
+        .await?;
+    InProcessSshTerminalBackend::legacy_summary(&runtime)
+}
+
+#[tauri::command]
+pub async fn terminal_runtime_create(
+    state: State<'_, AppState>,
+    request: TerminalRuntimeCreateRequest,
+) -> Result<TerminalRuntime, String> {
+    state.ssh_terminal_backend.create(request).await
+}
+
+#[tauri::command]
+pub fn terminal_targets_list(state: State<AppState>) -> Result<Vec<TerminalTarget>, String> {
+    state.ssh_terminal_backend.targets()
+}
+
+#[tauri::command]
+pub fn terminal_runtimes_list(state: State<AppState>) -> Result<Vec<TerminalRuntime>, String> {
+    state.ssh_terminal_backend.list()
+}
+
+#[tauri::command]
+pub fn terminal_runtime_read_output(
+    state: State<AppState>,
+    runtime_id: String,
+    from_cursor: u64,
+    max_bytes: usize,
+) -> Result<TerminalRuntimeOutputReadResult, String> {
+    state
+        .ssh_terminal_backend
+        .read_output(&runtime_id, from_cursor, max_bytes)
+}
+
+#[tauri::command]
+pub async fn terminal_runtime_write(
+    state: State<'_, AppState>,
+    runtime_id: String,
+    data: String,
+) -> Result<(), String> {
+    state.ssh_terminal_backend.write(&runtime_id, &data).await
+}
+
+#[tauri::command]
+pub async fn terminal_runtime_resize(
+    state: State<'_, AppState>,
+    runtime_id: String,
+    cols: u32,
+    rows: u32,
+) -> Result<(), String> {
+    state
+        .ssh_terminal_backend
+        .resize(&runtime_id, cols, rows)
+        .await
+}
+
+#[tauri::command]
+pub fn terminal_runtime_flow(
+    state: State<AppState>,
+    runtime_id: String,
+    paused: bool,
+) -> Result<(), String> {
+    state
+        .ssh_terminal_backend
+        .set_output_paused(&runtime_id, paused)
+}
+
+#[tauri::command]
+pub async fn terminal_runtime_interrupt(
+    state: State<'_, AppState>,
+    runtime_id: String,
+) -> Result<(), String> {
+    state.ssh_terminal_backend.interrupt(&runtime_id).await
+}
+
+#[tauri::command]
+pub async fn terminal_runtime_close(
+    state: State<'_, AppState>,
+    runtime_id: String,
+) -> Result<(), String> {
+    state.ssh_terminal_backend.close(&runtime_id).await
 }
 #[tauri::command]
 pub async fn sessions_disconnect(state: State<'_, AppState>, id: String) -> Result<(), String> {
     state.tunnels.stop_session(&id).await;
-    state.sessions.disconnect(&id).await
+    state.ssh_terminal_backend.close(&id).await
 }
 #[tauri::command]
 pub async fn sessions_write(
@@ -90,7 +239,7 @@ pub async fn sessions_write(
     id: String,
     data: String,
 ) -> Result<(), String> {
-    state.sessions.write(&id, data).await
+    state.ssh_terminal_backend.write(&id, &data).await
 }
 #[tauri::command]
 pub async fn sessions_resize(
@@ -99,11 +248,11 @@ pub async fn sessions_resize(
     cols: u32,
     rows: u32,
 ) -> Result<(), String> {
-    state.sessions.resize(&id, cols, rows).await
+    state.ssh_terminal_backend.resize(&id, cols, rows).await
 }
 #[tauri::command]
 pub fn sessions_flow(state: State<AppState>, id: String, paused: bool) -> Result<(), String> {
-    state.sessions.flow(&id, paused)
+    state.ssh_terminal_backend.set_output_paused(&id, paused)
 }
 #[tauri::command]
 pub fn sessions_host_key_decision(state: State<AppState>, id: String, accept: bool) {

@@ -1,3 +1,19 @@
+import type {
+  TerminalRuntime,
+  TerminalRuntimeCreateRequest,
+  TerminalRuntimeEvent,
+  TerminalRuntimeOutputReadResult,
+  TerminalTarget
+} from './terminal-runtime-contract'
+
+export type {
+  TerminalRuntime,
+  TerminalRuntimeCreateRequest,
+  TerminalRuntimeEvent,
+  TerminalRuntimeOutputReadResult,
+  TerminalTarget
+} from './terminal-runtime-contract'
+
 export type AuthType = 'password' | 'privateKey' | 'agent'
 export type Platform = 'darwin' | 'win32' | 'linux'
 
@@ -431,6 +447,17 @@ export interface AppApi {
     flow(id: string, paused: boolean): void
     hostKeyDecision(id: string, accept: boolean): void
   }
+  terminalRuntimes: {
+    targets(): Promise<TerminalTarget[]>
+    list(): Promise<TerminalRuntime[]>
+    create(request: TerminalRuntimeCreateRequest): Promise<TerminalRuntime>
+    readOutput(runtimeId: string, fromCursor: number, maxBytes: number): Promise<TerminalRuntimeOutputReadResult>
+    write(runtimeId: string, data: string): Promise<void>
+    resize(runtimeId: string, cols: number, rows: number): Promise<void>
+    flow(runtimeId: string, paused: boolean): Promise<void>
+    interrupt(runtimeId: string): Promise<void>
+    close(runtimeId: string): Promise<void>
+  }
   files: {
     home(): Promise<string>
     parentLocal(path: string): Promise<string>
@@ -507,4 +534,5 @@ export interface AppApi {
     setAppIcon(icon: AppIconId): Promise<AppIconId>
   }
   onEvent(listener: (event: AppEvent) => void): () => void
+  onTerminalRuntimeEvent(listener: (event: TerminalRuntimeEvent) => void): () => void
 }

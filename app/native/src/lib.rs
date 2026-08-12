@@ -1,12 +1,15 @@
 mod ai;
 mod app_icon;
 mod commands;
+mod control_contract;
+mod control_service;
 mod database;
 mod desktop;
 mod models;
 mod product;
 mod sessions;
 mod ssh_config;
+mod ssh_terminal_backend;
 mod terminal_backend;
 mod terminal_runtime_contract;
 mod transfers;
@@ -24,9 +27,12 @@ use std::{
 };
 
 use commands::*;
+use control_service::InProcessControlService;
 use database::Database;
 use sessions::SessionManager;
+use ssh_terminal_backend::InProcessSshTerminalBackend;
 use tauri::{Manager, RunEvent, Theme};
+use terminal_backend::TerminalBackend;
 use transfers::TransferManager;
 use tunnels::TunnelManager;
 
@@ -101,12 +107,23 @@ pub fn run() {
             let selected_icon = database.get_setting("appIcon", models::AppIconId::Luna);
             app_icon::apply_at_startup(app.handle(), &selected_icon)?;
             let sessions = SessionManager::new(app.handle().clone(), database.clone());
+            let ssh_terminal_backend =
+                InProcessSshTerminalBackend::new(database.clone(), sessions.clone());
+            let control = InProcessControlService::new(ssh_terminal_backend.clone());
+            let control_events = control.event_buffer();
+            let app_handle = app.handle().clone();
+            ssh_terminal_backend.set_event_sink(Arc::new(move |event| {
+                control_events.record_runtime_event(event.clone());
+                let _ = tauri::Emitter::emit(&app_handle, "terminal-runtime:event", event);
+            }));
             let transfers =
                 TransferManager::new(app.handle().clone(), database.clone(), sessions.clone());
             let tunnels = TunnelManager::new(app.handle().clone(), sessions.clone());
             app.manage(AppState {
                 db: database,
                 sessions,
+                ssh_terminal_backend,
+                control,
                 transfers,
                 tunnels,
                 ai_diagnostics: ai::AiDiagnostics::default(),
@@ -147,6 +164,18 @@ pub fn run() {
             sessions_resize,
             sessions_flow,
             sessions_host_key_decision,
+            terminal_runtime_create,
+            terminal_targets_list,
+            terminal_runtimes_list,
+            terminal_runtime_read_output,
+            terminal_runtime_write,
+            terminal_runtime_resize,
+            terminal_runtime_flow,
+            terminal_runtime_interrupt,
+            terminal_runtime_close,
+            control_catalog,
+            control_invoke,
+            control_read_events,
             files_home,
             files_parent_local,
             files_remote_home,

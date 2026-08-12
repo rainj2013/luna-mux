@@ -4,6 +4,7 @@ import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { readText, writeText } from '@tauri-apps/plugin-clipboard-manager'
 import type { AiSettingsInput, AiShell, AppApi, AppEvent, AppIconId, AppLanguage, BookmarkInput, ConnectInput, ConflictResolution, DeploymentProfile, LunaRemoteImportSelection, NativeMenuLabels, Platform, PortForwardProfile, TerminalSettings, TransferRequest, UiTheme } from './types'
+import type { TerminalRuntimeEvent } from './terminal-runtime-contract'
 
 const call = <T>(command: string, args?: Record<string, unknown>): Promise<T> => invoke<T>(command, args).catch((error) => {
   throw new Error(typeof error === 'string' ? error : String(error))
@@ -68,6 +69,17 @@ export async function createTauriApi(): Promise<AppApi> {
       resize: (id, cols, rows) => send('sessions_resize', { id, cols, rows }),
       flow: (id, paused) => send('sessions_flow', { id, paused }),
       hostKeyDecision: (id, accept) => send('sessions_host_key_decision', { id, accept })
+    },
+    terminalRuntimes: {
+      targets: () => call('terminal_targets_list'),
+      list: () => call('terminal_runtimes_list'),
+      create: (request) => call('terminal_runtime_create', { request }),
+      readOutput: (runtimeId, fromCursor, maxBytes) => call('terminal_runtime_read_output', { runtimeId, fromCursor, maxBytes }),
+      write: (runtimeId, data) => call('terminal_runtime_write', { runtimeId, data }),
+      resize: (runtimeId, cols, rows) => call('terminal_runtime_resize', { runtimeId, cols, rows }),
+      flow: (runtimeId, paused) => call('terminal_runtime_flow', { runtimeId, paused }),
+      interrupt: (runtimeId) => call('terminal_runtime_interrupt', { runtimeId }),
+      close: (runtimeId) => call('terminal_runtime_close', { runtimeId })
     },
     files: {
       home: () => call('files_home'),
@@ -148,6 +160,14 @@ export async function createTauriApi(): Promise<AppApi> {
       void listen<AppEvent>('app:event', (event) => { if (!stopped) listener(event.payload) }).then((stop) => {
         if (stopped) stop(); else unlisten = stop
       }).catch((error) => console.error('Failed to register Tauri event listener', error))
+      return () => { stopped = true; unlisten?.() }
+    },
+    onTerminalRuntimeEvent: (listener: (event: TerminalRuntimeEvent) => void) => {
+      let stopped = false
+      let unlisten: (() => void) | undefined
+      void listen<TerminalRuntimeEvent>('terminal-runtime:event', (event) => { if (!stopped) listener(event.payload) }).then((stop) => {
+        if (stopped) stop(); else unlisten = stop
+      }).catch((error) => console.error('Failed to register terminal runtime event listener', error))
       return () => { stopped = true; unlisten?.() }
     }
   }

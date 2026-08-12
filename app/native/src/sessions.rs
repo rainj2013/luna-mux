@@ -26,6 +26,8 @@ use uuid::Uuid;
 
 use crate::{database::Database, models::*};
 
+pub type SessionEventObserver = Arc<dyn Fn(AppEvent) + Send + Sync>;
+
 trait AsyncTransport: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> AsyncTransport for T {}
 type Transport = Pin<Box<dyn AsyncTransport>>;
@@ -169,6 +171,7 @@ pub struct SessionManager {
     sessions: RwLock<HashMap<String, Arc<ActiveSession>>>,
     decisions: Arc<StdMutex<HashMap<String, oneshot::Sender<bool>>>>,
     forwarded_routes: ForwardedRoutes,
+    event_observer: RwLock<Option<SessionEventObserver>>,
 }
 
 impl SessionManager {
@@ -179,9 +182,21 @@ impl SessionManager {
             sessions: RwLock::new(HashMap::new()),
             decisions: Arc::new(StdMutex::new(HashMap::new())),
             forwarded_routes: Arc::new(StdMutex::new(HashMap::new())),
+            event_observer: RwLock::new(None),
         })
     }
+    pub fn set_event_observer(&self, observer: SessionEventObserver) {
+        *self.event_observer.write().expect("event observer lock") = Some(observer);
+    }
     fn emit(&self, event: AppEvent) {
+        if let Some(observer) = self
+            .event_observer
+            .read()
+            .expect("event observer lock")
+            .as_ref()
+        {
+            observer(event.clone());
+        }
         let _ = self.app.emit("app:event", event);
     }
     pub fn list(&self) -> Vec<SessionSummary> {
@@ -226,7 +241,26 @@ impl SessionManager {
                 return Ok(existing.summary());
             }
         }
-        let session_id = Uuid::new_v4().to_string();
+        self.connect_with_id(input, Uuid::new_v4().to_string())
+    }
+
+    pub(crate) fn connect_with_id(
+        self: &Arc<Self>,
+        input: ConnectInput,
+        session_id: String,
+    ) -> Result<SessionSummary, String> {
+        let bookmark = self
+            .db
+            .get_bookmark(&input.bookmark_id)?
+            .ok_or_else(|| "连接不存在".to_string())?;
+        if self
+            .sessions
+            .read()
+            .map_err(|_| "会话状态锁已损坏")?
+            .contains_key(&session_id)
+        {
+            return Err("终端 Runtime ID 已存在".into());
+        }
         let summary = SessionSummary {
             id: session_id.clone(),
             bookmark_id: bookmark.id.clone(),

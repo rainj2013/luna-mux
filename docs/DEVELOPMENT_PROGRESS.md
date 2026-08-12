@@ -5,9 +5,9 @@ This is the durable development checkpoint. Update it in every development sessi
 ## Current checkpoint
 
 - Date: 2026-08-12
-- Phase: M1 - Terminal runtime abstraction
+- Phase: M1 - Terminal runtime abstraction, with the M4.8 control boundary established
 - Active task: M1.2 - Wrap existing SSH manager in `InProcessSshTerminalBackend`
-- Task progress: 9 of 48 done (18.75%); 1 in progress
+- Task progress: 10 of 53 done (18.87%); 1 in progress
 - Overall state: M0 foundation and M1 terminal-runtime contract are complete; SSH runtime adaptation is in progress
 - Baseline Luna Remote commit: `7ccc61f0bb1ea7ffb74556c1fe207e802bfbfd2f`
 - Luna Mux repository: `D:\code\luna-mux`
@@ -32,10 +32,12 @@ This is the durable development checkpoint. Update it in every development sessi
 - Added explicit, default-off credential copying through the system credential stores with a second confirmation, new connection IDs, dependency-aware jump-host/forwarding rewrites, transactional database writes, and credential cleanup on failed imports.
 - Replaced inherited SSH, Classic, and Neon icon assets with an original Luna Mux family: Luna, Graphite, Signal, and Light. SVG masters feed a repeatable Tauri generation command; `npm run icons:check` compares deterministic PNG/ICO output and validates the packaged ICNS structure.
 - Renamed the new transport boundary from the ambiguous session terminology to `TerminalBackend` and `TerminalRuntime`. The project-level concept is now explicitly `MuxSession`, with one Mux Session containing multiple persistent panes and each Terminal pane owning at most one live runtime.
+- Added a transport-neutral `LunaControlService` boundary for future Agent, MCP, CLI, and local automation adapters. The initial implementation exposes a trusted UI adapter, a versioned operation catalog, scoped grants, structured errors, and a bounded runtime event cursor without implementing an external MCP server.
 
 ## In progress
 
-- Existing SSH connections are not yet routed through `InProcessSshTerminalBackend`; M1.2 is now active.
+- Existing SSH connections are not yet fully regression-validated through `InProcessSshTerminalBackend`; M1.2 is now active.
+- M4.8 is complete as a foundation task: only read-only terminal target/runtime discovery and event reads are implemented. No external Agent transport or mutating Agent operation is enabled yet.
 - The existing Luna Remote-derived `SessionManager` and UI `sessionId` fields remain compatibility-bound implementation names until M1.2 routes them through `runtimeId`; they do not define the new Mux Session domain model.
 
 ## Next actions
@@ -43,6 +45,7 @@ This is the durable development checkpoint. Update it in every development sessi
 1. Wrap the existing SSH manager as `InProcessSshTerminalBackend` under M1.2 without changing current SSH behavior.
 2. Bind TerminalPane and SFTP/tunnel/transfer adapters to `runtimeId` while preserving target-specific capabilities.
 3. Select and spike the cross-platform PTY library under M2.1 after the SSH runtime boundary is stable.
+4. Extend the control catalog and add an authenticated local Agent adapter before exposing write/control operations.
 
 ## Verification evidence
 
@@ -52,7 +55,7 @@ This is the durable development checkpoint. Update it in every development sessi
 | New repository retains baseline history | Passed (`7ccc61f`) | 2026-08-12 |
 | Upstream push disabled | Passed | 2026-08-12 |
 | `npm run product:check` | Passed | 2026-08-12 |
-| `npm run runtime:check` | Passed; terminal runtime contract v2 generated outputs match | 2026-08-12 |
+| `npm run runtime:check` | Passed; terminal runtime contract v3 generated outputs match | 2026-08-12 |
 | `npm run runtime:test` | Passed (3 tests; runtime status/output/exit) | 2026-08-12 |
 | `npm run icons:check` | Passed; four SVG-derived PNG variants and Luna ICO/ICNS validated | 2026-08-12 |
 | `npm run native-core:test` | Passed (7 tests, including read-only Luna Remote snapshot and transactional data-class import) | 2026-08-12 |
@@ -67,12 +70,15 @@ This is the durable development checkpoint. Update it in every development sessi
 | `git diff --check` | Passed | 2026-08-12 |
 | Luna Mux icon visual inspection | Passed at 512, 64, 32, and 16 px for Luna, Graphite, Signal, and Light variants | 2026-08-12 |
 | Browser visual verification | Not run: browser runtime reported no available in-app or Chrome instance | 2026-08-12 |
+| `cargo check --manifest-path app/native/Cargo.toml` after control boundary | Passed with structured control service and event buffer | 2026-08-12 |
+| `cargo test --manifest-path app/native/Cargo.toml control_service` | Passed (7 control service tests) | 2026-08-12 |
 
 ## Decision log
 
 | Date | Decision |
 | --- | --- |
 | 2026-08-12 | Luna Mux is an independent product and repository, not a Luna Remote feature branch. |
+| 2026-08-12 | Luna Remote is only an implementation and proven-capability donor. Luna Mux does not preserve its architecture, navigation, terminology, data model, or UX unless each part independently fits the Luna Mux design. |
 | 2026-08-12 | Windows and macOS are both first-release platforms. Distribution signing is out of scope. |
 | 2026-08-12 | Local and SSH terminals share one TerminalPane and differ only through capabilities. |
 | 2026-08-12 | Agents stop when Luna Mux exits; a thin `TerminalBackend` preserves a future daemon extension point for live runtimes. |
@@ -84,6 +90,7 @@ This is the durable development checkpoint. Update it in every development sessi
 | 2026-08-12 | Direct Luna Remote import opens SQLite with read-only/query-only flags, allowlists portable settings, clears source-private background paths, and requires a second confirmation before reading system credentials. |
 | 2026-08-12 | `MuxSession` is the project-level persistent container; it owns multiple panes. A Terminal pane owns one replaceable `TerminalRuntime`, and an optional Coding Agent runs inside that runtime. `runtimeId` is used for transport events; `sessionId` is not the new domain term. |
 | 2026-08-12 | Luna Mux application icons use editable SVG masters and one Tauri generation command; PNG/ICO are byte-checked, ICNS structure is validated, and old SSH-centric files are removed from the independent repository. |
+| 2026-08-12 | Agent operation of Luna Mux is a separate control-plane concern from agent-to-agent MCP. `LunaControlService` is the sole core entry point; future transports authenticate callers and inject scoped grants. |
 
 ## Development update protocol
 

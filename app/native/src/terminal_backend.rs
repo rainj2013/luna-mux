@@ -12,8 +12,8 @@ pub type TerminalRuntimeEventSink = Arc<dyn Fn(TerminalRuntimeEvent) + Send + Sy
 #[async_trait]
 pub trait TerminalBackend: Send + Sync {
     fn set_event_sink(&self, sink: TerminalRuntimeEventSink);
-    fn targets(&self) -> Vec<TerminalTarget>;
-    fn list(&self) -> Vec<TerminalRuntime>;
+    fn targets(&self) -> TerminalBackendResult<Vec<TerminalTarget>>;
+    fn list(&self) -> TerminalBackendResult<Vec<TerminalRuntime>>;
 
     async fn create(
         &self,

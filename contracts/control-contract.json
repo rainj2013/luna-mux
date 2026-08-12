@@ -1,0 +1,61 @@
+{
+  "contractVersion": 1,
+  "purpose": "Transport-neutral control boundary for AI Agents, CLI, and local automation",
+  "callerIdentity": "Injected by an authenticated adapter; never accepted from request JSON",
+  "accessLevels": ["read", "write", "control"],
+  "resourceKinds": [
+    "application",
+    "muxSession",
+    "pane",
+    "terminalTarget",
+    "terminalRuntime",
+    "agent",
+    "browserRuntime",
+    "transfer",
+    "tunnel"
+  ],
+  "envelope": {
+    "request": [
+      "contractVersion",
+      "requestId",
+      "operation",
+      "resource",
+      "arguments",
+      "idempotencyKey"
+    ],
+    "response": ["requestId", "result"],
+    "errors": [
+      "unsupportedVersion",
+      "unknownOperation",
+      "invalidArguments",
+      "notFound",
+      "unauthorized",
+      "conflict",
+      "unavailable",
+      "internal"
+    ]
+  },
+  "initialOperations": [
+    {
+      "name": "terminal.targets.list",
+      "version": 1,
+      "access": "read",
+      "resourceKind": "terminalTarget",
+      "mutating": false,
+      "supportsIdempotency": true
+    },
+    {
+      "name": "terminal.runtimes.list",
+      "version": 1,
+      "access": "read",
+      "resourceKind": "terminalRuntime",
+      "mutating": false,
+      "supportsIdempotency": true
+    }
+  ],
+  "eventStream": {
+    "bounded": true,
+    "cursor": "monotonicSequence",
+    "truncation": "requestedSequenceBeforeEarliestSequenceReturnsTruncated"
+  }
+}
