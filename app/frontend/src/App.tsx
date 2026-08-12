@@ -26,7 +26,7 @@ const minSidebarWidth = 200
 const maxSidebarWidth = 480
 const aiTerminalContextLines = 100
 const aiTerminalContextChars = 16_000
-const appIconMessageKeys: Record<AppIconId, MessageKey> = { ssh: 'appIcon.ssh', classic: 'appIcon.classic', neon: 'appIcon.neon', light: 'appIcon.light' }
+const appIconMessageKeys: Record<AppIconId, MessageKey> = { luna: 'appIcon.luna', graphite: 'appIcon.graphite', signal: 'appIcon.signal', light: 'appIcon.light' }
 
 function primaryFontName(fontFamily: string): string {
   return fontFamily.split(',')[0]?.trim().replace(/^["']|["']$/g, '') || 'JetBrains Mono'
@@ -74,7 +74,7 @@ export function App(): React.JSX.Element {
   const [savedLanguage, setSavedLanguage] = useState<AppLanguage>(language)
   const [uiThemePreview, setUiThemePreview] = useState<UiTheme | null>(null)
   const [systemDark, setSystemDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches)
-  const [appIcons, setAppIcons] = useState<AppIconSettings>({ selected: 'ssh', options: [] })
+  const [appIcons, setAppIcons] = useState<AppIconSettings>({ selected: 'luna', options: [] })
   const [aiSettings, setAiSettings] = useState<AiSettings>({ ...DEFAULT_AI_SETTINGS })
   const [aiDialog, setAiDialog] = useState(false)
   const [settingsDialog, setSettingsDialog] = useState(false)
@@ -1228,7 +1228,7 @@ function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, u
   }
   const reset = (): void => {
     if (section === 'ai') { setAiForm({ ...DEFAULT_AI_SETTINGS, apiKeyConfigured: aiForm.apiKeyConfigured }); setApiKey(''); setAiTested(false); return }
-    setForm({ ...DEFAULT_TERMINAL_SETTINGS }); setManualFontMode(false); setManualFontName('JetBrains Mono'); setPreviewImage(''); setAppIcon('ssh'); selectTheme('system'); setDialogLanguage('zh-CN'); onLanguagePreview('zh-CN')
+    setForm({ ...DEFAULT_TERMINAL_SETTINGS }); setManualFontMode(false); setManualFontName('JetBrains Mono'); setPreviewImage(''); setAppIcon('luna'); selectTheme('system'); setDialogLanguage('zh-CN'); onLanguagePreview('zh-CN')
   }
   const testAi = async (): Promise<void> => {
     setTestingAi(true); setAiTested(false)

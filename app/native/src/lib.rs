@@ -5,10 +5,10 @@ mod database;
 mod desktop;
 mod models;
 mod product;
-mod session_backend;
-mod session_contract;
 mod sessions;
 mod ssh_config;
+mod terminal_backend;
+mod terminal_runtime_contract;
 mod transfers;
 mod tunnels;
 #[cfg(target_os = "windows")]
@@ -98,7 +98,7 @@ pub fn run() {
                     .map_err(|error| error.to_string())?;
                 disable_browser_accelerator_keys(&window)?;
             }
-            let selected_icon = database.get_setting("appIcon", models::AppIconId::Ssh);
+            let selected_icon = database.get_setting("appIcon", models::AppIconId::Luna);
             app_icon::apply_at_startup(app.handle(), &selected_icon)?;
             let sessions = SessionManager::new(app.handle().clone(), database.clone());
             let transfers =

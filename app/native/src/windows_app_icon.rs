@@ -45,9 +45,9 @@ fn write_icon_file(data_dir: &Path, icon: &AppIconId) -> Result<PathBuf, String>
     let icon_dir = data_dir.join("icons");
     fs::create_dir_all(&icon_dir).map_err(|error| error.to_string())?;
     let name = match icon {
-        AppIconId::Ssh => "ssh",
-        AppIconId::Classic => "classic",
-        AppIconId::Neon => "neon",
+        AppIconId::Luna => "luna",
+        AppIconId::Graphite => "graphite",
+        AppIconId::Signal => "signal",
         AppIconId::Light => "light",
     };
     let path = icon_dir.join(format!("{name}.ico"));

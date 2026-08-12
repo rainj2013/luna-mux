@@ -41,9 +41,9 @@
     "category": "DeveloperTool",
     "shortDescription": "A local and remote terminal workspace for coding agents",
     "icon": [
-      "../../assets/icons/ssh.png",
-      "../../assets/icons/ssh.icns",
-      "../../assets/icons/ssh.ico"
+      "../../assets/icons/luna.png",
+      "../../assets/icons/luna.icns",
+      "../../assets/icons/luna.ico"
     ],
     "createUpdaterArtifacts": false,
     "windows": {

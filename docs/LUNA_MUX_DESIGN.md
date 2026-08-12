@@ -12,12 +12,12 @@ The first release supports Windows and macOS together and provides:
 - local terminals: PowerShell and WSL on Windows; the login shell on macOS;
 - remote Linux terminals through SSH;
 - a shared terminal UI for every local and remote target;
-- persistent workspace layout with recursive horizontal and vertical splits;
-- Codex session status, notifications, and controlled cross-agent interaction;
+- project-centered Mux Sessions with persistent horizontal and vertical split layouts;
+- coding-agent status, notifications, and controlled cross-agent interaction;
 - a local Chrome browser pane controlled through CDP;
 - the reusable SSH, SFTP, transfer, tunnel, credential, and terminal capabilities inherited from Luna Remote.
 
-The first release does not keep agents running after Luna Mux exits. It preserves a backend boundary so a daemon-backed session implementation can be added later without replacing the workspace or terminal UI.
+The first release does not keep agents running after Luna Mux exits. It preserves a terminal backend boundary so daemon-backed runtimes can be added later without replacing Mux Sessions, panes, or the terminal UI.
 
 ## 2. Repository and product boundary
 
@@ -30,7 +30,7 @@ Luna Mux and Luna Remote are independent applications and repositories.
 - Runtime identifiers, databases, credentials, settings, browser profiles, builds, and releases are isolated.
 - Luna Remote data is never migrated automatically. A later import wizard reads a snapshot only after explicit user approval.
 
-Reusable code is gradually separated into in-repository core modules. Product features may depend on core; core must not depend on workspace, agent, browser, or brand-specific code.
+Reusable code is gradually separated into in-repository core modules. Product features may depend on core; core must not depend on Mux Session, agent, browser, or brand-specific code.
 
 ## 3. Product metadata
 
@@ -44,53 +44,57 @@ If the product is renamed later, the previous identity is added to `legacyIdenti
 
 ```text
 Luna Mux Desktop
-|-- Workspace / split-pane manager
-|-- SessionService
-|   |-- InProcessLocalPtyBackend
-|   |-- InProcessSshBackend
-|   `-- future DaemonSessionBackend
+|-- Mux Session / split-pane manager
+|-- TerminalRuntimeService
+|   |-- InProcessLocalPtyTerminalBackend
+|   |-- InProcessSshTerminalBackend
+|   `-- future DaemonTerminalBackend
 |-- Agent dashboard and event receiver
 |-- Luna MCP server
 |-- Local Chrome CDP controller
 `-- SFTP / tunnel / transfer tools
 ```
 
-### 4.1 Session boundary
+### 4.1 Domain model and terminology
 
-The application distinguishes:
+The word session is reserved for the project-level container. The application distinguishes:
 
-- `paneId`: a stable workspace layout node;
-- `sessionId`: one running terminal instance;
+- `muxSessionId`: a stable, persistent project container;
+- `paneId`: a stable leaf in that Mux Session's layout;
+- `runtimeId`: one running terminal instance owned by a Terminal pane;
+- `agentId`: an optional managed coding-agent process running in a terminal runtime;
 - `targetId`: a PowerShell, WSL, macOS shell, or SSH target.
 
-All terminal implementations expose the same operations: create, write, resize, flow, interrupt, close, list, read output, and report capabilities. They emit normalized status, output-with-cursor, and exit events.
+A Mux Session has a name, one primary project root, a default target, a recursive pane layout, and browser profile settings. A pane may override the target and working directory, so one project can combine local terminals, different SSH hosts, coding agents, ordinary shells, and browser panes. A Terminal pane owns at most one live Terminal Runtime. Restarting it creates a new `runtimeId` without changing its `paneId` or `muxSessionId`.
 
-The initial implementation runs in the Luna Mux process. A future `DaemonSessionBackend` may implement attach/detach, IPC, persistent output, and remote bridges behind the same interface. No daemon wire protocol or persistence is implemented now.
+All terminal backends expose the same operations: create, write, resize, flow, interrupt, close, list, read output, and report capabilities. They emit normalized status, output-with-cursor, and exit events identified by `runtimeId`.
+
+The initial implementation runs Terminal Runtimes in the Luna Mux process. A future `DaemonTerminalBackend` may implement attach/detach, IPC, persistent output, and remote bridges behind the same interface. No daemon wire protocol or runtime persistence is implemented now.
 
 ### 4.2 Unified terminal
 
-Local and SSH sessions use the same React `TerminalPane` and xterm.js instance. Rendering, themes, fonts, backgrounds, search, copy/paste, shortcuts, resize, UTF-8 handling, WebGL fallback, and output flow control behave identically.
+Local and SSH Terminal Runtimes use the same React `TerminalPane` and xterm.js instance. Rendering, themes, fonts, backgrounds, search, copy/paste, shortcuts, resize, UTF-8 handling, WebGL fallback, and output flow control behave identically.
 
-Capabilities control target-specific tools. Local sessions do not show SFTP or SSH forwarding; SSH sessions keep those tools. The terminal surface itself does not fork by platform or transport.
+Capabilities control target-specific tools. Local runtimes do not show SFTP or SSH forwarding; SSH runtimes keep those tools. The terminal surface itself does not fork by platform or transport.
 
 Local PTY support uses a mature cross-platform PTY library:
 
 - Windows: ConPTY, PowerShell, and selected WSL distributions;
 - macOS: Unix PTY and the user's configured login shell.
 
-Windows child processes are assigned to a Job Object. macOS sessions use a process group and signals. Closing a pane terminates its foreground process tree after confirmation; exiting Luna Mux confirms once for all active agents and then closes every PTY, SSH channel, and managed Chrome process.
+Windows child processes are assigned to a Job Object. macOS runtimes use a process group and signals. Closing a pane terminates its foreground process tree after confirmation; exiting Luna Mux confirms once for all active agents and then closes every PTY, SSH channel, and managed Chrome process.
 
-### 4.3 Workspace
+### 4.3 Mux Sessions and panes
 
-A workspace is a free collection of panes and does not require one project or host. The first pane types are Terminal and Browser.
+A Mux Session normally represents one project. Its primary project root supplies the default cwd for local terminals and project-aware tools. The root may be absent for an ad-hoc session, and individual panes may override cwd and target. The first pane types are Terminal and Browser.
 
 The layout is a recursive tree of pane leaves and horizontal/vertical branches with ratios. Users can split, resize, focus, move, maximize, restore, restart, and close panes.
 
-The database stores layout, target, cwd, title, launch profile, and browser profile references. Restarting Luna Mux restores this configuration but never reconnects, reruns a shell, or restores scrollback automatically.
+The database stores the Mux Session, project root, layout, pane target/cwd overrides, titles, launch profiles, and browser profile references. Restarting Luna Mux restores this configuration but never reconnects, reruns a shell, or restores scrollback automatically. Runtime IDs and agent process IDs are not reused after an application restart.
 
 ### 4.4 Codex integration
 
-Only Codex sessions launched through Luna Mux are fully managed. Launching creates stable workspace, pane, session, and agent identifiers and injects a scoped event endpoint and MCP configuration.
+Only coding agents launched through Luna Mux are fully managed. Launching associates stable Mux Session and pane identifiers with a fresh terminal runtime and agent identifier, then injects a scoped event endpoint and MCP configuration.
 
 The Codex adapter uses structured hooks and notifications to report:
 
@@ -99,7 +103,7 @@ The Codex adapter uses structured hooks and notifications to report:
 - `completed`;
 - `error`.
 
-Local hooks report to a loopback receiver. Remote hooks use an ephemeral reverse forward on the current SSH connection, scoped by connection, session, and random token. The adapter installation flow previews and backs up configuration changes and can uninstall them.
+Local hooks report to a loopback receiver. Remote hooks use an ephemeral reverse forward on the current SSH connection, scoped by connection, runtime, and random token. The adapter installation flow previews and backs up configuration changes and can uninstall them.
 
 Permission requests produce a notification and focus the associated terminal. Approval remains in the Codex TUI in the first release.
 
@@ -127,7 +131,7 @@ Cross-agent actions record caller, target, timestamp, operation, input, and resu
 
 ### 4.6 Browser pane
 
-Chrome always runs on the desktop hosting Luna Mux. Each workspace receives an isolated, persistent profile, with an optional temporary profile.
+Chrome always runs on the desktop hosting Luna Mux. Each Mux Session receives an isolated, persistent profile, with an optional temporary profile.
 
 The Browser pane uses CDP screencast frames and forwards mouse, keyboard, wheel, navigation, viewport, and screenshot operations. It also supports opening the page in the external Chrome window. Native WebView parity for IME, drag/drop, accessibility, DRM, and all browser extensions is not promised.
 
@@ -144,9 +148,9 @@ Both Windows and macOS are release-one platforms. Every milestone is complete on
 ## 6. Delivery sequence
 
 1. Establish the independent repository, product metadata, isolated identity, import boundary, and upstream workflow.
-2. Extract `SessionBackend` and remove SSH assumptions from `TerminalPane`.
+2. Extract `TerminalBackend` and remove SSH assumptions from `TerminalPane`.
 3. Add Windows PowerShell/WSL and macOS login-shell PTYs with identical terminal behavior.
-4. Replace the single-session tab model with persisted recursive workspaces and split panes.
+4. Replace the single-terminal tab model with project-centered Mux Sessions and persisted recursive split panes.
 5. Add the Codex adapter, dashboard, event forwarding, and notifications.
 6. Add Luna MCP, output cursors, grants, and audit records.
 7. Add local Chrome lifecycle, browser pane, CDP tools, and remote-service forwarding.

@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "transports": ["localPty", "ssh"],
   "targetKinds": ["powershell", "wsl", "macosShell", "ssh"],
   "statuses": ["starting", "connecting", "running", "exited", "error"],

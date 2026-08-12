@@ -1210,12 +1210,12 @@ pub fn settings_load_terminal_background(path: String) -> Result<String, String>
 
 #[tauri::command]
 pub fn settings_get_app_icons(state: State<AppState>) -> Result<AppIconSettings, String> {
-    let selected = state.db.get_setting("appIcon", AppIconId::Ssh);
+    let selected = state.db.get_setting("appIcon", AppIconId::Luna);
     let definitions = [
-        (AppIconId::Ssh, "SSH 终端"),
-        (AppIconId::Classic, "蓝色传输"),
-        (AppIconId::Neon, "霓虹深色"),
-        (AppIconId::Light, "清新传输"),
+        (AppIconId::Luna, "Luna"),
+        (AppIconId::Graphite, "Graphite"),
+        (AppIconId::Signal, "Signal"),
+        (AppIconId::Light, "Light"),
     ];
     let options = definitions
         .into_iter()

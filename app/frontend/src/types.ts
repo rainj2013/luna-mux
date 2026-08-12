@@ -207,7 +207,7 @@ export interface DeploymentDiffEntry {
 }
 
 export type TerminalBackgroundFit = 'cover' | 'contain' | 'stretch' | 'tile'
-export type AppIconId = 'ssh' | 'classic' | 'neon' | 'light'
+export type AppIconId = 'luna' | 'graphite' | 'signal' | 'light'
 export type UiTheme = 'system' | 'light' | 'dark'
 export type AppLanguage = string
 

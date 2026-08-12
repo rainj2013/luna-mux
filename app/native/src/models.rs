@@ -563,9 +563,12 @@ impl Default for NativeMenuLabels {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AppIconId {
-    Ssh,
-    Classic,
-    Neon,
+    #[serde(alias = "ssh")]
+    Luna,
+    #[serde(alias = "classic")]
+    Graphite,
+    #[serde(alias = "neon")]
+    Signal,
     Light,
 }
 

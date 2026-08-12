@@ -1,5 +1,5 @@
-#[path = "../../app/native/src/session_contract.rs"]
-pub mod session_contract;
+#[path = "../../app/native/src/terminal_runtime_contract.rs"]
+pub mod terminal_runtime_contract;
 
-#[path = "../../app/native/src/session_backend.rs"]
-pub mod session_backend;
+#[path = "../../app/native/src/terminal_backend.rs"]
+pub mod terminal_backend;

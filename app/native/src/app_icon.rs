@@ -23,9 +23,9 @@ use crate::models::AppIconId;
 
 pub fn bytes(icon: &AppIconId) -> &'static [u8] {
     match icon {
-        AppIconId::Ssh => include_bytes!("../../../assets/icons/ssh.png"),
-        AppIconId::Classic => include_bytes!("../../../assets/icons/classic.png"),
-        AppIconId::Neon => include_bytes!("../../../assets/icons/neon.png"),
+        AppIconId::Luna => include_bytes!("../../../assets/icons/luna.png"),
+        AppIconId::Graphite => include_bytes!("../../../assets/icons/graphite.png"),
+        AppIconId::Signal => include_bytes!("../../../assets/icons/signal.png"),
         AppIconId::Light => include_bytes!("../../../assets/icons/light.png"),
     }
 }
@@ -162,12 +162,40 @@ mod tests {
     #[test]
     fn embedded_icons_are_valid_images() {
         for icon in [
-            AppIconId::Ssh,
-            AppIconId::Classic,
-            AppIconId::Neon,
+            AppIconId::Luna,
+            AppIconId::Graphite,
+            AppIconId::Signal,
             AppIconId::Light,
         ] {
-            image::load_from_memory(bytes(&icon)).expect("valid embedded app icon");
+            let image = image::load_from_memory(bytes(&icon)).expect("valid embedded app icon");
+            assert_eq!(image.width(), 512);
+            assert_eq!(image.height(), 512);
+            assert_eq!(image.to_rgba8().get_pixel(0, 0).0[3], 0);
         }
+    }
+
+    #[test]
+    fn icon_ids_read_legacy_values_but_serialize_with_luna_mux_names() {
+        let legacy = [
+            ("\"ssh\"", AppIconId::Luna),
+            ("\"classic\"", AppIconId::Graphite),
+            ("\"neon\"", AppIconId::Signal),
+        ];
+        for (json, expected) in legacy {
+            let parsed: AppIconId = serde_json::from_str(json).expect("legacy app icon id");
+            assert_eq!(
+                std::mem::discriminant(&parsed),
+                std::mem::discriminant(&expected)
+            );
+        }
+        assert_eq!(serde_json::to_string(&AppIconId::Luna).unwrap(), "\"luna\"");
+        assert_eq!(
+            serde_json::to_string(&AppIconId::Graphite).unwrap(),
+            "\"graphite\""
+        );
+        assert_eq!(
+            serde_json::to_string(&AppIconId::Signal).unwrap(),
+            "\"signal\""
+        );
     }
 }

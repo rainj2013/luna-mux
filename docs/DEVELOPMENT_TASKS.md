@@ -13,48 +13,48 @@ This file is the ordered, durable work breakdown. Task IDs do not change after w
 | M0.5 | DONE | Replace remaining brand literals with generated product info | Runtime and build code contain no editable Luna Mux brand duplicates |
 | M0.6 | DONE | Add explicit Luna Remote import wizard | Selective snapshot import; credentials require separate approval; source is never mutated |
 | M0.7 | DONE | Document design, tasks, progress, and upstream policy | All four durable documents exist and cross-reference each other |
-| M0.8 | IN_PROGRESS | Replace inherited SSH-centric product icons | Luna Mux has an original default icon and intentional selectable variants for Windows and macOS |
+| M0.8 | DONE | Replace inherited SSH-centric product icons | Luna Mux has an original default icon and intentional selectable variants for Windows and macOS |
 
-## M1 - Session abstraction
+## M1 - Terminal runtime abstraction
 
 | ID | Status | Task | Acceptance |
 | --- | --- | --- | --- |
-| M1.1 | DONE | Define session IDs, targets, capabilities, events, and cursor semantics | Rust and TypeScript contracts agree; contract tests cover status/output/exit |
-| M1.2 | TODO | Wrap existing SSH manager in `InProcessSshBackend` | Existing SSH, resize, flow, close, SFTP, and tunnels pass regression tests |
-| M1.3 | TODO | Make `TerminalPane` transport-independent | No SSH-specific decision exists in the terminal rendering component |
-| M1.4 | TODO | Add a mock backend contract suite | A backend can be substituted without changing workspace or TerminalPane |
-| M1.5 | TODO | Document future daemon extension contract | Scope is limited to backend behavior; no IPC protocol is implemented |
+| M1.1 | DONE | Define runtime IDs, targets, capabilities, events, and cursor semantics | Rust and TypeScript contracts agree; contract tests cover status/output/exit without using project-level session terminology |
+| M1.2 | IN_PROGRESS | Wrap existing SSH manager in `InProcessSshTerminalBackend` | Existing SSH, resize, flow, close, SFTP, and tunnels pass regression tests; new APIs use `runtimeId` |
+| M1.3 | TODO | Make `TerminalPane` transport-independent | No SSH-specific decision exists in the terminal rendering component; it binds by `runtimeId` |
+| M1.4 | TODO | Add a mock terminal backend contract suite | A backend can be substituted without changing Mux Session, pane, or TerminalPane behavior |
+| M1.5 | TODO | Document future daemon terminal extension contract | Scope is limited to runtime backend behavior; no IPC protocol is implemented |
 
 ## M2 - Cross-platform local PTY
 
 | ID | Status | Task | Acceptance |
 | --- | --- | --- | --- |
-| M2.1 | TODO | Select and spike the PTY library on Windows and macOS | Unicode, resize, interrupt, exit code, and sustained output work on both platforms |
+| M2.1 | TODO | Select and spike the PTY library on Windows and macOS | Unicode, resize, interrupt, exit code, sustained output, and runtime cleanup work on both platforms |
 | M2.2 | TODO | Implement Windows PowerShell target | Same TerminalPane behavior as SSH; child tree is cleaned on close |
 | M2.3 | TODO | Implement Windows WSL discovery and targets | Installed distributions are selectable; cwd and command launch are predictable |
 | M2.4 | TODO | Implement macOS login-shell target | Shell is resolved without hardcoding zsh; process group cleanup works |
 | M2.5 | TODO | Normalize terminal capabilities and target labels | Only remote tools differ; terminal controls and appearance remain shared |
 | M2.6 | TODO | Add active-process close and application-exit confirmation | No managed PTY process remains after confirmed close or exit |
 
-## M3 - Workspace and split panes
+## M3 - Mux Sessions and split panes
 
 | ID | Status | Task | Acceptance |
 | --- | --- | --- | --- |
-| M3.1 | TODO | Define Workspace, Pane, SplitNode, and launch-profile schema | Schema supports Terminal/Browser leaves and recursive branches |
+| M3.1 | TODO | Define MuxSession, Pane, SplitNode, and launch-profile schema | One project-centered Mux Session owns recursive Terminal/Browser panes; panes may override cwd and target |
 | M3.2 | TODO | Add SQLite migration and repository APIs | Existing Luna Mux data migrates transactionally; layouts round-trip |
 | M3.3 | TODO | Implement horizontal/vertical splitting and resize | Ratios remain stable and panes never overlap at supported window sizes |
 | M3.4 | TODO | Implement focus, move, maximize, restart, and close | Keyboard and pointer workflows work on Windows and macOS |
-| M3.5 | TODO | Restore layout without launching processes | Restart restores configuration with every runtime pane stopped |
+| M3.5 | TODO | Restore Mux Session layout without launching processes | Restart restores panes and launch configuration with every Terminal Runtime stopped |
 | M3.6 | TODO | Reframe SFTP/tunnels/transfers as selected-target tools | Existing features remain available without becoming pane types |
 
 ## M4 - Codex adapter and dashboard
 
 | ID | Status | Task | Acceptance |
 | --- | --- | --- | --- |
-| M4.1 | TODO | Implement Luna-managed Codex launch profiles | Every managed process has stable workspace/pane/session/agent IDs |
+| M4.1 | TODO | Implement Luna-managed Codex launch profiles | Every managed process is scoped by muxSessionId, paneId, runtimeId, and agentId |
 | M4.2 | TODO | Implement local structured hook receiver | Working, waiting, completed, and error transitions are deterministic |
 | M4.3 | TODO | Implement previewable adapter install/uninstall | Existing user hooks are merged and backed up, never overwritten wholesale |
-| M4.4 | TODO | Implement remote hook upload and reverse forwarding | Events are scoped by SSH connection, session, and random token |
+| M4.4 | TODO | Implement remote hook upload and reverse forwarding | Events are scoped by SSH connection, terminal runtime, and random token |
 | M4.5 | TODO | Build Agent dashboard and unread history | Filter, focus, input, interrupt, restart, and mark-read work |
 | M4.6 | TODO | Add Windows/macOS system notifications | Focused pane suppresses duplicate OS notification; in-app history remains |
 | M4.7 | TODO | Add terminal-only fallback signals | OSC/BEL/activity are labeled heuristic and never presented as authoritative state |
@@ -63,7 +63,7 @@ This file is the ordered, durable work breakdown. Task IDs do not change after w
 
 | ID | Status | Task | Acceptance |
 | --- | --- | --- | --- |
-| M5.1 | TODO | Implement scoped in-process MCP transport | Local and SSH-managed Codex can connect only with a session token |
+| M5.1 | TODO | Implement scoped in-process MCP transport | Local and SSH-managed Codex can connect only with a runtime-scoped token |
 | M5.2 | TODO | Add agent list/status/task/interrupt tools | Only authorized managed agents are discoverable |
 | M5.3 | TODO | Add bounded output ring and cursor reads | Incremental reads and truncation semantics pass contract tests |
 | M5.4 | TODO | Add directional read/write/control grants | Grants are explicit, visible, persistent, and immediately revocable |
@@ -75,7 +75,7 @@ This file is the ordered, durable work breakdown. Task IDs do not change after w
 | ID | Status | Task | Acceptance |
 | --- | --- | --- | --- |
 | M6.1 | TODO | Discover and launch Chrome on Windows/macOS | CDP binds to loopback on a random port; managed processes close with Luna Mux |
-| M6.2 | TODO | Implement isolated workspace profiles | Login state persists per workspace; temporary profiles are removable |
+| M6.2 | TODO | Implement isolated Mux Session profiles | Login state persists per Mux Session; temporary profiles are removable |
 | M6.3 | TODO | Implement CDP screencast pane | Frames, viewport, mouse, keyboard, wheel, and navigation are interactive |
 | M6.4 | TODO | Add local forwarding for remote dev services | Browser uses loopback URL; SSH disconnect is visible and recoverable |
 | M6.5 | TODO | Implement browser MCP tools | Navigate, snapshot, click, type, press, scroll, evaluate, screenshot, and wait work |
