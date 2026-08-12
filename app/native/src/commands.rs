@@ -22,6 +22,10 @@ use crate::{
 
 const LUNA_REMOTE_CONNECTION_ARCHIVE_FORMAT: &str = "luna-remote-connections";
 const LEGACY_CONNECTION_ARCHIVE_FORMAT: &str = "ssh-client-connections";
+const LUNA_REMOTE_IDENTIFIER: &str = "com.local.lunaremote";
+const LUNA_REMOTE_DATABASE_FILE: &str = "luna-remote.db";
+const LUNA_REMOTE_CREDENTIAL_SERVICE: &str = "com.local.lunaremote.credentials";
+const LUNA_REMOTE_LEGACY_CREDENTIAL_SERVICE: &str = "com.local.sshclient.credentials";
 
 pub struct AppState {
     pub db: Arc<Database>,
@@ -31,6 +35,7 @@ pub struct AppState {
     pub ai_diagnostics: ai::AiDiagnostics,
     pub allowed_imports: Mutex<HashSet<PathBuf>>,
     pub pending_archive_imports: Mutex<HashMap<String, BookmarkArchive>>,
+    pub pending_luna_remote_imports: Mutex<HashMap<String, LunaRemoteSnapshot>>,
     pub exit_cleanup_started: AtomicBool,
 }
 
@@ -801,6 +806,181 @@ pub fn bookmarks_import_archive(
         .lock()
         .map_err(|_| "导入状态锁已损坏")?
         .remove(&preview_id);
+    Ok(result)
+}
+
+fn default_luna_remote_database_path() -> Option<PathBuf> {
+    dirs::data_dir().map(|path| {
+        path.join(LUNA_REMOTE_IDENTIFIER)
+            .join(LUNA_REMOTE_DATABASE_FILE)
+    })
+}
+
+#[tauri::command]
+pub fn bookmarks_discover_luna_remote_sources() -> Vec<LunaRemoteSource> {
+    default_luna_remote_database_path()
+        .filter(|path| path.is_file())
+        .and_then(|path| {
+            Database::read_luna_remote_snapshot(&path)
+                .ok()
+                .map(|snapshot| LunaRemoteSource {
+                    path: snapshot.path,
+                    source_modified_at: snapshot.source_modified_at,
+                })
+        })
+        .into_iter()
+        .collect()
+}
+
+fn store_luna_remote_preview(
+    state: &AppState,
+    snapshot: LunaRemoteSnapshot,
+) -> Result<LunaRemoteImportPreview, String> {
+    let preview_id = Uuid::new_v4().to_string();
+    let preview = LunaRemoteImportPreview {
+        preview_id: preview_id.clone(),
+        path: snapshot.path.clone(),
+        source_modified_at: snapshot.source_modified_at.clone(),
+        groups: snapshot.groups.clone(),
+        connections: snapshot.connections.clone(),
+        known_hosts: snapshot.known_hosts.clone(),
+        setting_keys: snapshot
+            .settings
+            .iter()
+            .map(|entry| entry.key.clone())
+            .collect(),
+        forwarding_profiles: snapshot.forwarding_profiles.clone(),
+        credential_connection_ids: snapshot.credential_connection_ids.clone(),
+    };
+    let mut pending = state
+        .pending_luna_remote_imports
+        .lock()
+        .map_err(|_| "Luna Remote 导入状态锁已损坏")?;
+    pending.clear();
+    pending.insert(preview_id, snapshot);
+    Ok(preview)
+}
+
+#[tauri::command]
+pub fn bookmarks_preview_luna_remote(
+    state: State<AppState>,
+    path: String,
+) -> Result<LunaRemoteImportPreview, String> {
+    let path = PathBuf::from(path);
+    let snapshot = Database::read_luna_remote_snapshot(&path)?;
+    store_luna_remote_preview(&state, snapshot)
+}
+
+#[tauri::command]
+pub async fn bookmarks_choose_luna_remote_database(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<LunaRemoteImportPreview>, String> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .set_title("选择 Luna Remote 数据库")
+        .add_filter("Luna Remote 数据库", &["db"])
+        .pick_file(move |path| {
+            let _ = sender.send(path);
+        });
+    let Some(path) = selected_path(receiver.await.ok().flatten()) else {
+        return Ok(None);
+    };
+    let snapshot = Database::read_luna_remote_snapshot(Path::new(&path))?;
+    store_luna_remote_preview(&state, snapshot).map(Some)
+}
+
+#[tauri::command]
+pub fn bookmarks_import_luna_remote(
+    state: State<AppState>,
+    selection: LunaRemoteImportSelection,
+) -> Result<LunaRemoteImportResult, String> {
+    let snapshot = state
+        .pending_luna_remote_imports
+        .lock()
+        .map_err(|_| "Luna Remote 导入状态锁已损坏")?
+        .get(&selection.preview_id)
+        .cloned()
+        .ok_or_else(|| "Luna Remote 导入预览已失效，请重新选择数据源".to_string())?;
+    let selected_ids = selection.connection_ids.into_iter().collect::<HashSet<_>>();
+    let source_ids = snapshot
+        .connections
+        .iter()
+        .map(|entry| entry.id.as_str())
+        .collect::<HashSet<_>>();
+    if selected_ids.len() > snapshot.connections.len()
+        || selected_ids
+            .iter()
+            .any(|id| !source_ids.contains(id.as_str()))
+    {
+        return Err("导入选择包含未知的 Luna Remote 连接，请重新预览".into());
+    }
+    let entries = snapshot
+        .connections
+        .iter()
+        .filter(|entry| selected_ids.contains(&entry.id))
+        .cloned()
+        .collect::<Vec<_>>();
+    if let Some(entry) = entries.iter().find(|entry| {
+        !entry.jump_bookmark_id.is_empty() && !selected_ids.contains(&entry.jump_bookmark_id)
+    }) {
+        return Err(format!("连接“{}”依赖的跳板机未被选择", entry.name));
+    }
+    let allowed_groups = snapshot
+        .groups
+        .iter()
+        .chain(snapshot.connections.iter().map(|entry| &entry.group_name))
+        .map(|group| group.trim())
+        .filter(|group| !group.is_empty())
+        .collect::<HashSet<_>>();
+    let mut requested_groups = Vec::new();
+    for group in selection.groups {
+        let group = group.trim().to_string();
+        if !group.is_empty() && !requested_groups.contains(&group) {
+            requested_groups.push(group);
+        }
+    }
+    if requested_groups
+        .iter()
+        .any(|group| !allowed_groups.contains(group.as_str()))
+    {
+        return Err("导入选择包含未知的 Luna Remote 分组，请重新预览".into());
+    }
+    let has_selected_forwarding_profiles = selection.import_forwarding_profiles
+        && snapshot
+            .forwarding_profiles
+            .iter()
+            .any(|profile| selected_ids.contains(&profile.bookmark_id));
+    if entries.is_empty()
+        && requested_groups.is_empty()
+        && !selection.import_host_keys
+        && !selection.import_settings
+        && !has_selected_forwarding_profiles
+    {
+        return Err("请至少选择一种要导入的数据".into());
+    }
+    if selection.import_credentials && entries.is_empty() {
+        return Err("导入凭据前必须选择对应连接".into());
+    }
+    let result = state.db.import_luna_remote_snapshot(
+        &snapshot,
+        &entries,
+        &requested_groups,
+        selection.import_host_keys,
+        selection.import_settings,
+        has_selected_forwarding_profiles,
+        selection.import_credentials,
+        &[
+            LUNA_REMOTE_CREDENTIAL_SERVICE,
+            LUNA_REMOTE_LEGACY_CREDENTIAL_SERVICE,
+        ],
+    )?;
+    state
+        .pending_luna_remote_imports
+        .lock()
+        .map_err(|_| "Luna Remote 导入状态锁已损坏")?
+        .remove(&selection.preview_id);
     Ok(result)
 }
 #[tauri::command]

@@ -74,6 +74,49 @@ export interface BookmarkArchivePreview {
   credentialsIncluded: false
 }
 
+export interface KnownHostImportEntry {
+  host: string
+  port: number
+  fingerprint: string
+}
+
+export interface LunaRemoteSource {
+  path: string
+  sourceModifiedAt: string
+}
+
+export interface LunaRemoteImportPreview {
+  previewId: string
+  path: string
+  sourceModifiedAt: string
+  groups: string[]
+  connections: BookmarkArchiveEntry[]
+  knownHosts: KnownHostImportEntry[]
+  settingKeys: string[]
+  forwardingProfiles: PortForwardProfile[]
+  credentialConnectionIds: string[]
+}
+
+export interface LunaRemoteImportSelection {
+  previewId: string
+  connectionIds: string[]
+  groups: string[]
+  importHostKeys: boolean
+  importSettings: boolean
+  importForwardingProfiles: boolean
+  importCredentials: boolean
+}
+
+export interface LunaRemoteImportResult {
+  importedConnections: number
+  importedGroups: number
+  importedHostKeys: number
+  importedSettings: number
+  importedForwardingProfiles: number
+  importedCredentials: number
+  unavailableCredentials: number
+}
+
 export interface ConnectInput {
   bookmarkId: string
   newSession?: boolean
@@ -367,6 +410,10 @@ export interface AppApi {
     exportArchive(): Promise<string | null>
     previewArchive(): Promise<BookmarkArchivePreview | null>
     importArchive(previewId: string, connectionIds: string[], groups: string[]): Promise<{ importedConnections: number; importedGroups: number }>
+    discoverLunaRemoteSources(): Promise<LunaRemoteSource[]>
+    previewLunaRemote(path: string): Promise<LunaRemoteImportPreview>
+    chooseLunaRemoteDatabase(): Promise<LunaRemoteImportPreview | null>
+    importLunaRemote(selection: LunaRemoteImportSelection): Promise<LunaRemoteImportResult>
   }
   bookmarkGroups: {
     list(): Promise<string[]>

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowRight, Bookmark as BookmarkIcon, Bot, Check, ChevronDown, ChevronRight, CircleHelp, CirclePlus, Copy, Download, Edit3, Eye, EyeOff, FileInput, FileJson2, Folder, FolderOpen, FolderPlus, GripVertical, History as HistoryIcon, Image as ImageIcon, KeyRound, Languages, Minus, Monitor, Moon, Network, Palette, PanelLeftClose, PanelLeftOpen, Play, Plug, Power, Rocket, RotateCcw, Search, Send, Server, Settings as SettingsIcon, ShieldAlert, Square, SquareTerminal, Star, Sun, Trash2, Upload, WandSparkles, X } from 'lucide-react'
-import { BUNDLED_TERMINAL_FONT, DEFAULT_AI_SETTINGS, DEFAULT_TERMINAL_SETTINGS, type AiCommandHistoryEntry, type AiCommandSuggestion, type AiProvider, type AiRawExchange, type AiRiskAssessment, type AiSettings, type AiSettingsInput, type AiShell, type AiThinkingMode, type AppEvent, type AppIconId, type AppIconSettings, type AppLanguage, type Bookmark, type BookmarkArchivePreview, type BookmarkArchiveSource, type BookmarkInput, type ConflictResolution, type ConnectInput, type DeploymentDiffEntry, type DeploymentProfile, type HostKeyPrompt, type PortForwardProfile, type SessionStatus, type SshConfigPreview, type TerminalSettings, type TransferTask, type TunnelSummary, type UiTheme } from './types'
+import { ArrowRight, Bookmark as BookmarkIcon, Bot, Check, ChevronDown, ChevronRight, CircleHelp, CirclePlus, Copy, Database as DatabaseIcon, Download, Edit3, Eye, EyeOff, FileInput, FileJson2, Folder, FolderOpen, FolderPlus, GripVertical, History as HistoryIcon, Image as ImageIcon, KeyRound, Languages, Minus, Monitor, Moon, Network, Palette, PanelLeftClose, PanelLeftOpen, Play, Plug, Power, Rocket, RotateCcw, Search, Send, Server, Settings as SettingsIcon, ShieldAlert, Square, SquareTerminal, Star, Sun, Trash2, Upload, WandSparkles, X } from 'lucide-react'
+import { BUNDLED_TERMINAL_FONT, DEFAULT_AI_SETTINGS, DEFAULT_TERMINAL_SETTINGS, type AiCommandHistoryEntry, type AiCommandSuggestion, type AiProvider, type AiRawExchange, type AiRiskAssessment, type AiSettings, type AiSettingsInput, type AiShell, type AiThinkingMode, type AppEvent, type AppIconId, type AppIconSettings, type AppLanguage, type Bookmark, type BookmarkArchivePreview, type BookmarkArchiveSource, type BookmarkInput, type ConflictResolution, type ConnectInput, type DeploymentDiffEntry, type DeploymentProfile, type HostKeyPrompt, type LunaRemoteImportPreview, type LunaRemoteImportResult, type LunaRemoteSource, type PortForwardProfile, type SessionStatus, type SshConfigPreview, type TerminalSettings, type TransferTask, type TunnelSummary, type UiTheme } from './types'
 import { TerminalPane, type TerminalPaneHandle } from './components/TerminalPane'
 import { SftpPane } from './components/SftpPane'
 import { HelpDialog } from './components/HelpDialog'
@@ -84,6 +84,8 @@ export function App(): React.JSX.Element {
   const [tunnelDialog, setTunnelDialog] = useState(false)
   const [importPreview, setImportPreview] = useState<SshConfigPreview | null>(null)
   const [archiveImportPreview, setArchiveImportPreview] = useState<BookmarkArchivePreview | null>(null)
+  const [lunaRemoteSources, setLunaRemoteSources] = useState<LunaRemoteSource[] | null>(null)
+  const [lunaRemoteImportPreview, setLunaRemoteImportPreview] = useState<LunaRemoteImportPreview | null>(null)
   const [sidebarContextMenu, setSidebarContextMenu] = useState<SidebarContextMenu | null>(null)
   const [groupDialog, setGroupDialog] = useState<GroupDialogState | null>(null)
   const [confirmation, setConfirmation] = useState<PendingConfirmation | null>(null)
@@ -110,6 +112,22 @@ export function App(): React.JSX.Element {
     const [items, groups] = await Promise.all([window.api.bookmarks.list(), window.api.bookmarkGroups.list()])
     setBookmarks(items)
     setBookmarkGroupNames(groups)
+  }
+  const reloadImportedSettings = async (): Promise<void> => {
+    const [appearance, theme, importedLanguage, ai, collapsed, collapsedGroups, width] = await Promise.all([window.api.settings.getTerminal(), window.api.settings.getUiTheme(), window.api.settings.getLanguage(), window.api.ai.getSettings(), window.api.state.getSidebarCollapsed(), window.api.state.getCollapsedBookmarkGroups(), window.api.state.getSidebarWidth()])
+    setTerminalSettings(appearance)
+    setUiTheme(theme)
+    setUiThemePreview(null)
+    setSavedLanguage(importedLanguage)
+    setLanguage(importedLanguage)
+    setAiSettings(ai)
+    setSidebarCollapsed(collapsed)
+    setCollapsedBookmarkGroups(new Set(collapsedGroups))
+    sidebarWidthRef.current = width
+    setSidebarWidth(width)
+    await window.api.settings.applyLanguage(getNativeMenuLabels(importedLanguage))
+    if (appearance.backgroundImagePath) setTerminalBackground(await window.api.settings.loadTerminalBackground(appearance.backgroundImagePath).catch(() => ''))
+    else setTerminalBackground('')
   }
 
   useEffect(() => {
@@ -600,6 +618,25 @@ export function App(): React.JSX.Element {
       if (preview) setArchiveImportPreview(preview)
     } catch (error) { showError(errorMessage(error)) }
   }
+  const importLunaRemoteDatabase = async (): Promise<void> => {
+    try {
+      const sources = await window.api.bookmarks.discoverLunaRemoteSources()
+      setLunaRemoteSources(sources)
+    } catch (error) { showError(errorMessage(error)) }
+  }
+  const previewLunaRemoteSource = async (path: string): Promise<void> => {
+    try {
+      const preview = await window.api.bookmarks.previewLunaRemote(path)
+      setLunaRemoteSources(null)
+      setLunaRemoteImportPreview(preview)
+    } catch (error) { showError(errorMessage(error)) }
+  }
+  const chooseLunaRemoteDatabase = async (): Promise<void> => {
+    try {
+      const preview = await window.api.bookmarks.chooseLunaRemoteDatabase()
+      if (preview) { setLunaRemoteSources(null); setLunaRemoteImportPreview(preview) }
+    } catch (error) { showError(errorMessage(error)) }
+  }
 
   const contextBookmark = sidebarContextMenu?.bookmark ?? selectedBookmark
 
@@ -683,6 +720,7 @@ export function App(): React.JSX.Element {
       </> : <>
         <button role="menuitem" onClick={() => { setSidebarContextMenu(null); void chooseSshConfig() }}><FileInput size={15} />{t('common.importOpensshConfig')}</button>
         <button role="menuitem" onClick={() => { setSidebarContextMenu(null); void importConnectionArchive() }}><Upload size={15} />{t('app.importConnectionBackup')}</button>
+        <button role="menuitem" onClick={() => { setSidebarContextMenu(null); void importLunaRemoteDatabase() }}><DatabaseIcon size={15} />{t('app.importFromLunaRemote')}</button>
         <button role="menuitem" onClick={() => { setSidebarContextMenu(null); void exportConnectionArchive() }}><Download size={15} />{t('app.exportConnectionBackup')}</button>
         <div className="context-menu-separator" />
         <button role="menuitem" onClick={() => { setSidebarContextMenu(null); setBookmarkDialog('new') }}><CirclePlus size={15} />{t('common.newConnection')}</button>
@@ -705,6 +743,8 @@ export function App(): React.JSX.Element {
     {tunnelDialog && activeBookmark && activeTab?.sessionId && <TunnelDialog bookmark={activeBookmark} sessionId={activeTab.sessionId} onClose={() => setTunnelDialog(false)} onError={showError} />}
     {importPreview && <SshConfigImportDialog preview={importPreview} onClose={() => setImportPreview(null)} onImported={async () => { setImportPreview(null); await reloadSidebarData() }} onError={showError} />}
     {archiveImportPreview && <BookmarkArchiveImportDialog preview={archiveImportPreview} onClose={() => setArchiveImportPreview(null)} onImported={async (result) => { setArchiveImportPreview(null); await reloadSidebarData(); showToast(t('app.importedValueConnectionsAndValueNewGroupsCredentials', { value0: result.importedConnections, value1: result.importedGroups }), 'success') }} onError={showError} />}
+    {lunaRemoteSources && <LunaRemoteSourceDialog sources={lunaRemoteSources} onClose={() => setLunaRemoteSources(null)} onChoose={() => void chooseLunaRemoteDatabase()} onSelect={(path) => void previewLunaRemoteSource(path)} />}
+    {lunaRemoteImportPreview && <LunaRemoteImportDialog preview={lunaRemoteImportPreview} onClose={() => setLunaRemoteImportPreview(null)} onImported={async (result) => { setLunaRemoteImportPreview(null); await Promise.all([reloadSidebarData(), reloadImportedSettings()]); const credentialText = result.unavailableCredentials ? t('app.importedLunaRemoteWithUnavailableCredentials', { value0: result.unavailableCredentials }) : ''; showToast(`${t('app.importedLunaRemoteData', { value0: result.importedConnections, value1: result.importedGroups, value2: result.importedHostKeys, value3: result.importedSettings, value4: result.importedForwardingProfiles, value5: result.importedCredentials })}${credentialText}`, 'success') }} onConfirm={confirmAction} onError={showError} />}
     {confirmation && <ConfirmationDialog confirmation={confirmation} onDecision={resolveConfirmation} />}
     {toast && <div className={`toast ${toastKind}`}>{toast}</div>}
   </div>
@@ -972,6 +1012,71 @@ function BookmarkArchiveImportDialog({ preview, onClose, onImported, onError }: 
       <em>{entry.groupName || t('common.ungrouped')}</em>
     </label>)}</div>
     <div className="dialog-actions"><button className="secondary-button" onClick={onClose}>{t('common.cancel')}</button><button className="primary-button" disabled={(!selectedConnections.size && !selectedGroups.size) || loading} onClick={() => void importSelected()}>{loading ? t('app.importing') : t('app.importSelectedBackupData', { value0: selectedConnections.size, value1: selectedGroups.size })}</button></div>
+  </div></Modal>
+}
+
+function LunaRemoteSourceDialog({ sources, onClose, onChoose, onSelect }: { sources: LunaRemoteSource[]; onClose(): void; onChoose(): void; onSelect(path: string): void }): React.JSX.Element {
+  const { t } = useI18n()
+  return <Modal title={t('app.importFromLunaRemote')} onClose={onClose} wide><div className="ssh-import-dialog luna-remote-source-dialog">
+    <div className="dialog-copy"><p>{t('app.lunaRemoteSourceDescription')}</p></div>
+    {sources.length > 0 ? <div className="import-list">{sources.map((source) => <button className="source-choice" key={source.path} onClick={() => onSelect(source.path)}><DatabaseIcon size={16} /><span><strong>{t('app.lunaRemoteDetectedDatabase')}</strong><small title={source.path}>{source.path}</small><em>{new Date(source.sourceModifiedAt).toLocaleString()}</em></span><ChevronRight size={16} /></button>)}</div> : <div className="import-empty">{t('app.noLunaRemoteDatabaseDetected')}</div>}
+    <div className="dialog-actions"><button className="secondary-button" onClick={onClose}>{t('common.cancel')}</button><button className="primary-button" onClick={onChoose}><FolderOpen size={15} />{t('app.chooseLunaRemoteDatabase')}</button></div>
+  </div></Modal>
+}
+
+function LunaRemoteImportDialog({ preview, onClose, onImported, onConfirm, onError }: { preview: LunaRemoteImportPreview; onClose(): void; onImported(result: LunaRemoteImportResult): void; onConfirm: ConfirmAction; onError(message: string): void }): React.JSX.Element {
+  const { t } = useI18n()
+  const connectionGroups = useMemo(() => new Set(preview.connections.map((item) => item.groupName).filter(Boolean)), [preview])
+  const emptyGroups = useMemo(() => preview.groups.filter((group) => group && !connectionGroups.has(group)), [preview, connectionGroups])
+  const [selectedConnections, setSelectedConnections] = useState(() => new Set(preview.connections.map((item) => item.id)))
+  const [selectedGroups, setSelectedGroups] = useState(() => new Set(emptyGroups))
+  const [importHostKeys, setImportHostKeys] = useState(preview.knownHosts.length > 0)
+  const [importSettings, setImportSettings] = useState(false)
+  const [importForwardingProfiles, setImportForwardingProfiles] = useState(preview.forwardingProfiles.length > 0)
+  const [importCredentials, setImportCredentials] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const byId = useMemo(() => new Map(preview.connections.map((item) => [item.id, item])), [preview])
+  const credentialCount = preview.connections.filter((item) => selectedConnections.has(item.id) && preview.credentialConnectionIds.includes(item.id)).length
+  useEffect(() => { if (!selectedConnections.size) setImportForwardingProfiles(false) }, [selectedConnections])
+  useEffect(() => { if (!credentialCount) setImportCredentials(false) }, [credentialCount])
+  const toggleConnection = (id: string): void => setSelectedConnections((current) => {
+    const next = new Set(current)
+    if (next.has(id)) {
+      next.delete(id)
+      let changed = true
+      while (changed) {
+        changed = false
+        for (const entry of preview.connections) {
+          if (next.has(entry.id) && entry.jumpBookmarkId && !next.has(entry.jumpBookmarkId)) { next.delete(entry.id); changed = true }
+        }
+      }
+    } else {
+      let currentId: string | undefined = id
+      while (currentId && !next.has(currentId)) { next.add(currentId); currentId = byId.get(currentId)?.jumpBookmarkId || undefined }
+    }
+    return next
+  })
+  const toggleGroup = (group: string): void => setSelectedGroups((current) => { const next = new Set(current); if (next.has(group)) next.delete(group); else next.add(group); return next })
+  const importSelected = async (): Promise<void> => {
+    if (importCredentials && credentialCount > 0) {
+      const confirmed = await onConfirm({ title: t('app.importCredentialsTitle'), message: t('app.importCredentialsMessage', { value0: credentialCount }), detail: t('app.importCredentialsDetail'), kind: 'warning', confirmLabel: t('app.importCredentialsConfirm') })
+      if (!confirmed) return
+    }
+    setLoading(true)
+    try {
+      const result = await window.api.bookmarks.importLunaRemote({ previewId: preview.previewId, connectionIds: [...selectedConnections], groups: [...selectedGroups], importHostKeys, importSettings, importForwardingProfiles: importForwardingProfiles && selectedConnections.size > 0, importCredentials: importCredentials && credentialCount > 0 })
+      onImported(result)
+    } catch (error) { onError(errorMessage(error)) }
+    finally { setLoading(false) }
+  }
+  return <Modal title={t('app.importFromLunaRemote')} onClose={onClose} wide><div className="ssh-import-dialog luna-remote-import-dialog">
+    <div className="import-source" title={preview.path}>{preview.path}</div>
+    <div className="archive-import-meta"><span>{t('app.lunaRemoteDatabaseModifiedValue', { value0: new Date(preview.sourceModifiedAt).toLocaleString() })}</span><span>{t('app.lunaRemoteCounts', { value0: preview.connections.length, value1: preview.knownHosts.length, value2: preview.forwardingProfiles.length })}</span></div>
+    <div className="archive-import-notice"><KeyRound size={15} /><span>{t('app.lunaRemoteCredentialsDefaultOff')}</span></div>
+    {emptyGroups.length > 0 && <fieldset className="archive-import-groups"><legend>{t('app.emptyGroups')}</legend><div>{emptyGroups.map((group) => <label key={group}><input type="checkbox" checked={selectedGroups.has(group)} onChange={() => toggleGroup(group)} /><span>{group}</span></label>)}</div></fieldset>}
+    <fieldset className="archive-import-groups"><legend>{t('app.lunaRemoteDataClasses')}</legend><div className="import-options"><label><input type="checkbox" checked={importHostKeys} disabled={!preview.knownHosts.length} onChange={(event) => setImportHostKeys(event.target.checked)} /><span>{t('app.lunaRemoteHostKeys', { value0: preview.knownHosts.length })}</span></label><label><input type="checkbox" checked={importSettings} disabled={!preview.settingKeys.length} onChange={(event) => setImportSettings(event.target.checked)} /><span>{t('app.lunaRemoteSettings', { value0: preview.settingKeys.length })}</span></label><label><input type="checkbox" checked={importForwardingProfiles} disabled={!preview.forwardingProfiles.length || !selectedConnections.size} onChange={(event) => setImportForwardingProfiles(event.target.checked)} /><span>{t('app.lunaRemoteForwardingProfiles', { value0: preview.forwardingProfiles.length })}</span></label><label className="sensitive-option"><input type="checkbox" checked={importCredentials} disabled={!credentialCount || !selectedConnections.size} onChange={(event) => setImportCredentials(event.target.checked)} /><span>{t('app.lunaRemoteCredentials', { value0: credentialCount })}</span></label></div></fieldset>
+    <div className="import-list">{preview.connections.length === 0 ? <div className="import-empty">{t('app.noConnectionsInLunaRemote')}</div> : preview.connections.map((entry) => <label key={entry.id}><input type="checkbox" checked={selectedConnections.has(entry.id)} onChange={() => toggleConnection(entry.id)} /><span><strong>{entry.name}</strong><small>{entry.username}@{entry.host}:{entry.port}{entry.jumpBookmarkId ? t('common.viaValue', { value0: byId.get(entry.jumpBookmarkId)?.name ?? entry.jumpBookmarkId }) : ''}</small></span><em>{entry.groupName || t('common.ungrouped')}</em></label>)}</div>
+    <div className="dialog-actions"><button className="secondary-button" onClick={onClose}>{t('common.cancel')}</button><button className="primary-button" disabled={(!selectedConnections.size && !selectedGroups.size && !importHostKeys && !importSettings && !importForwardingProfiles) || loading} onClick={() => void importSelected()}>{loading ? t('app.importing') : t('app.importLunaRemoteSelected')}</button></div>
   </div></Modal>
 }
 

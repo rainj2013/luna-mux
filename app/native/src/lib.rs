@@ -112,6 +112,7 @@ pub fn run() {
                 ai_diagnostics: ai::AiDiagnostics::default(),
                 allowed_imports: Mutex::new(HashSet::new()),
                 pending_archive_imports: Mutex::new(std::collections::HashMap::new()),
+                pending_luna_remote_imports: Mutex::new(std::collections::HashMap::new()),
                 exit_cleanup_started: AtomicBool::new(false),
             });
             Ok(())
@@ -136,6 +137,10 @@ pub fn run() {
             bookmarks_export_archive,
             bookmarks_preview_archive,
             bookmarks_import_archive,
+            bookmarks_discover_luna_remote_sources,
+            bookmarks_preview_luna_remote,
+            bookmarks_choose_luna_remote_database,
+            bookmarks_import_luna_remote,
             sessions_connect,
             sessions_disconnect,
             sessions_write,

@@ -611,6 +611,16 @@ body.sidebar-item-dragging, body.sidebar-item-dragging * { cursor: grabbing !imp
 .archive-import-groups legend { padding: 0 4px; color: var(--text-muted); font-size: 10px; }
 .archive-import-groups > div { display: flex; flex-wrap: wrap; gap: 5px 12px; max-height: 72px; overflow: auto; }
 .archive-import-groups label { display: flex; align-items: center; gap: 5px; font-size: 10px; }
+.import-options { display: grid; gap: 7px; }
+.import-options label { min-width: 0; }
+.import-options .sensitive-option { color: var(--warning); }
+.source-choice { width: 100%; min-width: 0; display: flex; align-items: center; gap: 9px; padding: 9px; color: var(--text); border: 1px solid var(--border); background: var(--surface-subtle); text-align: left; cursor: pointer; }
+.source-choice:hover { border-color: var(--accent); background: var(--surface-hover); }
+.source-choice > svg:first-child { flex: 0 0 auto; color: var(--accent); }
+.source-choice > svg:last-child { flex: 0 0 auto; color: var(--text-muted); }
+.source-choice span { min-width: 0; display: grid; gap: 3px; flex: 1; }
+.source-choice strong { font-size: 11px; }
+.source-choice small, .source-choice em { overflow: hidden; color: var(--text-muted); font-size: 9px; font-style: normal; white-space: nowrap; text-overflow: ellipsis; }
 .tunnel-dialog > .form-grid { padding: 0; }
 .tunnel-route-preview { min-width: 0; display: grid; gap: 7px; }
 .tunnel-route-preview > span, .tunnel-target-setting > span { color: var(--text-strong); font-size: 11px; }

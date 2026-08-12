@@ -6,8 +6,8 @@ This is the durable development checkpoint. Update it in every development sessi
 
 - Date: 2026-08-12
 - Phase: M0 - Independent product foundation
-- Active task: M0.6 - Complete the explicit Luna Remote import wizard
-- Overall state: implementation started; connection import and session contracts are in place
+- Active task: M0.8 - Replace inherited SSH-centric product icons
+- Overall state: M0 import boundary and M1 session contracts are complete; Luna Mux visual identity is next
 - Baseline Luna Remote commit: `7ccc61f0bb1ea7ffb74556c1fe207e802bfbfd2f`
 - Luna Mux repository: `D:\code\luna-mux`
 - Luna Remote source repository: `D:\code\ssh_tools`
@@ -27,17 +27,19 @@ This is the durable development checkpoint. Update it in every development sessi
 - Added versioned session contract metadata with generated Rust/TypeScript types for targets, capabilities, lifecycle, UTF-8 byte cursors, truncation reads, and exit events.
 - Added the thin `SessionBackend` trait and a lightweight Rust contract test crate; all three status/output/exit contract tests pass without requiring the native SSH dependency toolchain.
 - Installed NASM 3.02 from the official Windows archive, added it to the user PATH, and restored full native Rust compilation through `aws-lc-sys`.
+- Completed the Luna Remote import wizard with automatic standard-path discovery, manual database selection, read-only SQLite snapshot validation, and selective connection/group/Host Key/portable-setting/forwarding-profile import.
+- Added explicit, default-off credential copying through the system credential stores with a second confirmation, new connection IDs, dependency-aware jump-host/forwarding rewrites, transactional database writes, and credential cleanup on failed imports.
 
 ## In progress
 
-- M0.6 still needs a direct Luna Remote data-source reader and selective Host Key/settings/forwarding-profile import. Credential import remains a separate, explicit authorization step.
+- M0.8 needs an original Luna Mux application icon set to replace the inherited SSH-centric assets.
 - Existing SSH sessions are not yet routed through `SessionBackend`; that work is M1.2.
 
 ## Next actions
 
-1. Complete M0.6 with direct read-only Luna Remote source discovery/selection and import of the remaining approved data classes.
+1. Design and replace the inherited SSH-centric application icon set under M0.8 before packaging a Luna Mux release.
 2. Wrap the existing SSH manager as `InProcessSshBackend` under M1.2 without changing current SSH behavior.
-3. Design and replace the inherited SSH-centric application icon set under M0.8 before packaging a Luna Mux release.
+3. Select and spike the cross-platform PTY library under M2.1 after the SSH backend boundary is stable.
 
 ## Verification evidence
 
@@ -49,16 +51,16 @@ This is the durable development checkpoint. Update it in every development sessi
 | `npm run product:check` | Passed | 2026-08-12 |
 | `npm run session:check` | Passed | 2026-08-12 |
 | `npm run session:test` | Passed (3 tests) | 2026-08-12 |
-| `npm run native-core:test` | Passed (6 tests, including transactional archive import) | 2026-08-12 |
+| `npm run native-core:test` | Passed (7 tests, including read-only Luna Remote snapshot and transactional data-class import) | 2026-08-12 |
 | `npm run i18n:check` | Passed | 2026-08-12 |
 | `npm run typecheck` | Passed | 2026-08-12 |
 | `npm run web:build` | Passed | 2026-08-12 |
 | `cargo metadata --manifest-path app/native/Cargo.toml --no-deps` | Passed | 2026-08-12 |
 | `cargo fmt --manifest-path app/native/Cargo.toml -- --check` | Passed | 2026-08-12 |
 | `cargo check --manifest-path app/native/Cargo.toml` | Passed with NASM 3.02; `aws-lc-sys`, `russh`, and Luna Mux compiled successfully | 2026-08-12 |
-| `cargo test --manifest-path app/native/Cargo.toml` | Passed (29 tests) | 2026-08-12 |
+| `cargo test --manifest-path app/native/Cargo.toml` | Passed (30 tests) | 2026-08-12 |
 | `git diff --check` | Passed | 2026-08-12 |
-| Browser visual verification | Not run: no in-app or Chrome browser instance was available | 2026-08-12 |
+| Browser visual verification | Not run: browser runtime reported no available in-app or Chrome instance | 2026-08-12 |
 
 ## Decision log
 
@@ -73,6 +75,7 @@ This is the durable development checkpoint. Update it in every development sessi
 | 2026-08-12 | Unreferenced Luna Remote screenshots and design images are removed; build-required icons remain temporarily until Luna Mux visual identity is designed. |
 | 2026-08-12 | Session cursors count UTF-8 bytes and are capped at JavaScript's maximum safe integer so Rust and TypeScript retain exact cursor values. |
 | 2026-08-12 | Connection backups use an in-memory preview snapshot and a single SQLite transaction; source files are never mutated and credentials are excluded. |
+| 2026-08-12 | Direct Luna Remote import opens SQLite with read-only/query-only flags, allowlists portable settings, clears source-private background paths, and requires a second confirmation before reading system credentials. |
 
 ## Session update protocol
 

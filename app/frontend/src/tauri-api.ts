@@ -3,7 +3,7 @@ import { listen } from '@tauri-apps/api/event'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { readText, writeText } from '@tauri-apps/plugin-clipboard-manager'
-import type { AiSettingsInput, AiShell, AppApi, AppEvent, AppIconId, AppLanguage, BookmarkInput, ConnectInput, ConflictResolution, DeploymentProfile, NativeMenuLabels, Platform, PortForwardProfile, TerminalSettings, TransferRequest, UiTheme } from './types'
+import type { AiSettingsInput, AiShell, AppApi, AppEvent, AppIconId, AppLanguage, BookmarkInput, ConnectInput, ConflictResolution, DeploymentProfile, LunaRemoteImportSelection, NativeMenuLabels, Platform, PortForwardProfile, TerminalSettings, TransferRequest, UiTheme } from './types'
 
 const call = <T>(command: string, args?: Record<string, unknown>): Promise<T> => invoke<T>(command, args).catch((error) => {
   throw new Error(typeof error === 'string' ? error : String(error))
@@ -47,7 +47,11 @@ export async function createTauriApi(): Promise<AppApi> {
       importSshConfig: (path, aliases) => call('bookmarks_import_ssh_config', { path, aliases }),
       exportArchive: () => call('bookmarks_export_archive'),
       previewArchive: () => call('bookmarks_preview_archive'),
-      importArchive: (previewId, connectionIds, groups) => call('bookmarks_import_archive', { previewId, connectionIds, groups })
+      importArchive: (previewId, connectionIds, groups) => call('bookmarks_import_archive', { previewId, connectionIds, groups }),
+      discoverLunaRemoteSources: () => call('bookmarks_discover_luna_remote_sources'),
+      previewLunaRemote: (path) => call('bookmarks_preview_luna_remote', { path }),
+      chooseLunaRemoteDatabase: () => call('bookmarks_choose_luna_remote_database'),
+      importLunaRemote: (selection: LunaRemoteImportSelection) => call('bookmarks_import_luna_remote', { selection })
     },
     bookmarkGroups: {
       list: () => call('bookmark_groups_list'),

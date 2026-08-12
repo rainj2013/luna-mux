@@ -1,8 +1,14 @@
-use std::{fs, path::Path, sync::Mutex};
+use std::{
+    collections::{HashMap, HashSet},
+    fs,
+    path::Path,
+    sync::Mutex,
+    time::SystemTime,
+};
 
 use chrono::Utc;
 use keyring::Entry;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde::{Serialize, de::DeserializeOwned};
 use uuid::Uuid;
 
@@ -11,6 +17,15 @@ use crate::models::*;
 const AI_API_KEY_ACCOUNT: &str = "__ai_api_key__";
 const AI_COMMAND_HISTORY_KEY: &str = "aiCommandHistory";
 const AI_COMMAND_HISTORY_LIMIT: usize = 10;
+const PORTABLE_SETTING_KEYS: &[&str] = &[
+    "aiSettings",
+    "collapsedBookmarkGroups",
+    "language",
+    "sidebarCollapsed",
+    "sidebarWidth",
+    "terminalSettings",
+    "uiTheme",
+];
 
 pub struct Database {
     connection: Mutex<Connection>,
@@ -19,6 +34,231 @@ pub struct Database {
 }
 
 impl Database {
+    pub fn read_luna_remote_snapshot(path: &Path) -> Result<LunaRemoteSnapshot, String> {
+        let metadata = fs::metadata(path).map_err(|error| error.to_string())?;
+        if !metadata.is_file() {
+            return Err("Luna Remote 数据源必须是普通数据库文件".into());
+        }
+        let source_modified_at =
+            chrono::DateTime::<Utc>::from(metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH))
+                .to_rfc3339();
+        let connection = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(|error| format!("无法只读打开 Luna Remote 数据库：{error}"))?;
+        connection
+            .execute_batch("PRAGMA query_only = ON; BEGIN DEFERRED TRANSACTION;")
+            .map_err(|error| error.to_string())?;
+
+        let required_tables = ["bookmarks", "settings", "known_hosts"];
+        for table in required_tables {
+            let exists = connection
+                .query_row(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                    [table],
+                    |_| Ok(()),
+                )
+                .optional()
+                .map_err(|error| error.to_string())?
+                .is_some();
+            if !exists {
+                return Err(format!(
+                    "所选文件不是兼容的 Luna Remote 数据库：缺少 {table} 表"
+                ));
+            }
+        }
+        let has_sort_order = {
+            let mut statement = connection
+                .prepare("PRAGMA table_info(bookmarks)")
+                .map_err(|error| error.to_string())?;
+            statement
+                .query_map([], |row| row.get::<_, String>(1))
+                .map_err(|error| error.to_string())?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(|error| error.to_string())?
+                .iter()
+                .any(|column| column == "sortOrder")
+        };
+        let order = if has_sort_order {
+            "sortOrder ASC, createdAt ASC"
+        } else {
+            "createdAt ASC"
+        };
+        let connections = {
+            let mut statement = connection
+                .prepare(&format!(
+                    "SELECT id,name,host,port,username,authType,privateKeyPath,jumpBookmarkId,groupName,favorite,keepaliveEnabled,keepaliveIntervalSeconds,keepaliveCountMax,note FROM bookmarks ORDER BY {order}"
+                ))
+                .map_err(|error| error.to_string())?;
+            statement
+                .query_map([], |row| {
+                    Ok(BookmarkArchiveEntry {
+                        id: row.get(0)?,
+                        name: row.get(1)?,
+                        host: row.get(2)?,
+                        port: row.get(3)?,
+                        username: row.get(4)?,
+                        auth_type: AuthType::parse(&row.get::<_, String>(5)?),
+                        private_key_path: row.get(6)?,
+                        jump_bookmark_id: row.get(7)?,
+                        group_name: row.get(8)?,
+                        favorite: row.get::<_, i64>(9)? != 0,
+                        keepalive_enabled: row.get::<_, i64>(10)? != 0,
+                        keepalive_interval_seconds: row.get(11)?,
+                        keepalive_count_max: row.get(12)?,
+                        note: row.get(13)?,
+                    })
+                })
+                .map_err(|error| error.to_string())?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(|error| error.to_string())?
+        };
+        if connections.len() > 10_000 {
+            return Err("Luna Remote 数据库中的连接数量过多".into());
+        }
+        let connection_ids = connections
+            .iter()
+            .map(|entry| entry.id.as_str())
+            .collect::<HashSet<_>>();
+        if connection_ids.len() != connections.len()
+            || connections.iter().any(|entry| {
+                entry.id.trim().is_empty()
+                    || entry.name.trim().is_empty()
+                    || entry.host.trim().is_empty()
+                    || entry.username.trim().is_empty()
+                    || entry.port == 0
+                    || entry.jump_bookmark_id == entry.id
+                    || (!entry.jump_bookmark_id.is_empty()
+                        && !connection_ids.contains(entry.jump_bookmark_id.as_str()))
+            })
+        {
+            return Err("Luna Remote 数据库包含无效连接或跳板机引用".into());
+        }
+        let connections_by_id = connections
+            .iter()
+            .map(|entry| (entry.id.as_str(), entry))
+            .collect::<HashMap<_, _>>();
+        if connections.iter().any(|entry| {
+            !entry.jump_bookmark_id.is_empty()
+                && connections_by_id
+                    .get(entry.jump_bookmark_id.as_str())
+                    .is_some_and(|jump| !jump.jump_bookmark_id.is_empty())
+        }) {
+            return Err("Luna Remote 数据库包含多层跳板机，当前仅支持一层跳板机".into());
+        }
+
+        let raw_settings = {
+            let mut statement = connection
+                .prepare("SELECT key,value FROM settings")
+                .map_err(|error| error.to_string())?;
+            statement
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
+                .map_err(|error| error.to_string())?
+                .collect::<rusqlite::Result<HashMap<_, _>>>()
+                .map_err(|error| error.to_string())?
+        };
+        let mut groups = raw_settings
+            .get("bookmarkGroups")
+            .and_then(|value| serde_json::from_str::<Vec<String>>(value).ok())
+            .unwrap_or_default();
+        for group in connections.iter().map(|entry| entry.group_name.trim()) {
+            if !group.is_empty() && !groups.iter().any(|existing| existing == group) {
+                groups.push(group.to_string());
+            }
+        }
+        groups.retain(|group| !group.trim().is_empty());
+        groups.truncate(1_000);
+        let settings = PORTABLE_SETTING_KEYS
+            .iter()
+            .filter_map(|key| {
+                raw_settings.get(*key).and_then(|value| {
+                    if *key == "terminalSettings" {
+                        let mut settings = serde_json::from_str::<TerminalSettings>(value).ok()?;
+                        settings.background_image_path.clear();
+                        return Some(PortableSettingEntry {
+                            key: (*key).to_string(),
+                            value: serde_json::to_string(&settings).ok()?,
+                        });
+                    }
+                    serde_json::from_str::<serde_json::Value>(value).ok()?;
+                    Some(PortableSettingEntry {
+                        key: (*key).to_string(),
+                        value: value.clone(),
+                    })
+                })
+            })
+            .collect();
+        let forwarding_profiles = raw_settings
+            .get("portForwardProfiles")
+            .and_then(|value| serde_json::from_str::<Vec<PortForwardProfile>>(value).ok())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|profile| connection_ids.contains(profile.bookmark_id.as_str()))
+            .take(10_000)
+            .collect();
+        let known_hosts = {
+            let mut statement = connection
+                .prepare("SELECT host,port,fingerprint FROM known_hosts ORDER BY host,port")
+                .map_err(|error| error.to_string())?;
+            statement
+                .query_map([], |row| {
+                    Ok(KnownHostImportEntry {
+                        host: row.get(0)?,
+                        port: row.get(1)?,
+                        fingerprint: row.get(2)?,
+                    })
+                })
+                .map_err(|error| error.to_string())?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(|error| error.to_string())?
+        };
+        if known_hosts.len() > 100_000 {
+            return Err("Luna Remote 数据库中的主机指纹数量过多".into());
+        }
+        let credential_connection_ids = {
+            let has_table = connection
+                .query_row(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='credential_refs'",
+                    [],
+                    |_| Ok(()),
+                )
+                .optional()
+                .map_err(|error| error.to_string())?
+                .is_some();
+            if has_table {
+                let mut statement = connection
+                    .prepare("SELECT bookmarkId FROM credential_refs ORDER BY bookmarkId")
+                    .map_err(|error| error.to_string())?;
+                statement
+                    .query_map([], |row| row.get::<_, String>(0))
+                    .map_err(|error| error.to_string())?
+                    .collect::<rusqlite::Result<Vec<_>>>()
+                    .map_err(|error| error.to_string())?
+                    .into_iter()
+                    .filter(|id| connection_ids.contains(id.as_str()))
+                    .collect()
+            } else {
+                Vec::new()
+            }
+        };
+        connection
+            .execute_batch("COMMIT")
+            .map_err(|error| error.to_string())?;
+        Ok(LunaRemoteSnapshot {
+            path: path.to_string_lossy().into_owned(),
+            source_modified_at,
+            groups,
+            connections,
+            known_hosts,
+            settings,
+            forwarding_profiles,
+            credential_connection_ids,
+        })
+    }
+
     pub fn open(path: &Path, credential_service: &str) -> Result<Self, String> {
         Self::open_with_legacy(path, credential_service, None)
     }
@@ -294,6 +534,232 @@ impl Database {
         Ok(BookmarkArchiveImportResult {
             imported_connections: entries.len(),
             imported_groups,
+        })
+    }
+
+    pub fn import_luna_remote_snapshot(
+        &self,
+        snapshot: &LunaRemoteSnapshot,
+        entries: &[BookmarkArchiveEntry],
+        selected_groups: &[String],
+        import_host_keys: bool,
+        import_settings: bool,
+        import_forwarding_profiles: bool,
+        import_credentials: bool,
+        source_credential_services: &[&str],
+    ) -> Result<LunaRemoteImportResult, String> {
+        let existing_groups = self.list_bookmark_groups()?;
+        let existing_named_groups = existing_groups
+            .iter()
+            .filter(|group| !group.is_empty())
+            .cloned()
+            .collect::<HashSet<_>>();
+        let mut groups = existing_groups;
+        for group in selected_groups
+            .iter()
+            .chain(entries.iter().map(|entry| &entry.group_name))
+        {
+            let group = group.trim();
+            if !group.is_empty() && !groups.iter().any(|existing| existing == group) {
+                groups.push(group.to_string());
+            }
+        }
+        let imported_groups = groups
+            .iter()
+            .filter(|group| !group.is_empty() && !existing_named_groups.contains(*group))
+            .count();
+        let group_json = serde_json::to_string(&groups).map_err(|error| error.to_string())?;
+        let connection_id_map = entries
+            .iter()
+            .map(|entry| (entry.id.clone(), Uuid::new_v4().to_string()))
+            .collect::<HashMap<_, _>>();
+        let selected_ids = connection_id_map.keys().cloned().collect::<HashSet<_>>();
+        let source_credential_ids = snapshot
+            .credential_connection_ids
+            .iter()
+            .map(String::as_str)
+            .collect::<HashSet<_>>();
+        let mut credential_values = HashMap::new();
+        let mut unavailable_credentials = 0;
+        if import_credentials {
+            for entry in entries {
+                if !source_credential_ids.contains(entry.id.as_str()) {
+                    continue;
+                }
+                let secret = source_credential_services.iter().find_map(|service| {
+                    Entry::new(service, &entry.id)
+                        .ok()
+                        .and_then(|item| item.get_password().ok())
+                        .filter(|value| !value.is_empty())
+                });
+                if let Some(secret) = secret {
+                    credential_values.insert(entry.id.clone(), secret);
+                } else {
+                    unavailable_credentials += 1;
+                }
+            }
+        }
+        let forwarding_profiles = if import_forwarding_profiles {
+            snapshot
+                .forwarding_profiles
+                .iter()
+                .filter(|profile| selected_ids.contains(&profile.bookmark_id))
+                .map(|profile| PortForwardProfile {
+                    id: Uuid::new_v4().to_string(),
+                    bookmark_id: connection_id_map
+                        .get(&profile.bookmark_id)
+                        .expect("selected forwarding profile connection was mapped")
+                        .clone(),
+                    name: profile.name.clone(),
+                    forward_type: profile.forward_type.clone(),
+                    bind_address: profile.bind_address.clone(),
+                    bind_port: profile.bind_port,
+                    target_host: profile.target_host.clone(),
+                    target_port: profile.target_port,
+                })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+
+        let mut created_credential_accounts: Vec<String> = Vec::new();
+        for (source_id, secret) in &credential_values {
+            let target_id = connection_id_map
+                .get(source_id)
+                .expect("credential connection was mapped");
+            let write_result = Entry::new(&self.credential_service, target_id)
+                .map_err(|error| error.to_string())
+                .and_then(|entry| {
+                    entry
+                        .set_password(secret)
+                        .map_err(|error| error.to_string())
+                });
+            if let Err(error) = write_result {
+                for account in created_credential_accounts {
+                    if let Ok(entry) = Entry::new(&self.credential_service, &account) {
+                        let _ = entry.delete_credential();
+                    }
+                }
+                return Err(error);
+            }
+            created_credential_accounts.push(target_id.clone());
+        }
+
+        let now = Utc::now().to_rfc3339();
+        let database_result = self.with_conn(|db| {
+            let transaction = db.transaction()?;
+            let first_sort_order = transaction.query_row(
+                "SELECT COALESCE(MAX(sortOrder), -1) + 1 FROM bookmarks",
+                [],
+                |row| row.get::<_, i64>(0),
+            )?;
+            for (index, entry) in entries.iter().enumerate() {
+                let id = connection_id_map
+                    .get(&entry.id)
+                    .expect("snapshot connection ID was mapped");
+                let jump_bookmark_id = connection_id_map
+                    .get(&entry.jump_bookmark_id)
+                    .cloned()
+                    .unwrap_or_default();
+                transaction.execute(
+                    r#"INSERT INTO bookmarks(id,name,host,port,username,authType,privateKeyPath,jumpBookmarkId,note,groupName,favorite,lastConnectedAt,keepaliveEnabled,keepaliveIntervalSeconds,keepaliveCountMax,sortOrder,createdAt,updatedAt)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"#,
+                    params![
+                        id,
+                        entry.name.trim(),
+                        entry.host.trim(),
+                        entry.port,
+                        entry.username.trim(),
+                        entry.auth_type.as_str(),
+                        entry.private_key_path.trim(),
+                        jump_bookmark_id,
+                        entry.note.trim(),
+                        entry.group_name.trim(),
+                        entry.favorite as i64,
+                        "",
+                        entry.keepalive_enabled as i64,
+                        entry.keepalive_interval_seconds.clamp(5, 300),
+                        entry.keepalive_count_max.clamp(1, 10),
+                        first_sort_order + index as i64,
+                        now,
+                        now,
+                    ],
+                )?;
+                if credential_values.contains_key(&entry.id) {
+                    transaction.execute(
+                        "INSERT INTO credential_refs(bookmarkId,account) VALUES(?,?)",
+                        params![id, id],
+                    )?;
+                }
+            }
+            transaction.execute(
+                "INSERT OR REPLACE INTO settings(key,value) VALUES('bookmarkGroups',?)",
+                [&group_json],
+            )?;
+            if import_host_keys {
+                for entry in &snapshot.known_hosts {
+                    transaction.execute(
+                        "INSERT OR REPLACE INTO known_hosts(host,port,fingerprint) VALUES(?,?,?)",
+                        params![entry.host.trim(), entry.port, entry.fingerprint.trim()],
+                    )?;
+                }
+            }
+            if import_settings {
+                for entry in &snapshot.settings {
+                    transaction.execute(
+                        "INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)",
+                        params![entry.key, entry.value],
+                    )?;
+                }
+            }
+            if import_forwarding_profiles && !forwarding_profiles.is_empty() {
+                let current = transaction
+                    .query_row(
+                        "SELECT value FROM settings WHERE key='portForwardProfiles'",
+                        [],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .optional()?
+                    .and_then(|value| serde_json::from_str::<Vec<PortForwardProfile>>(&value).ok())
+                    .unwrap_or_default();
+                let merged = forwarding_profiles
+                    .iter()
+                    .cloned()
+                    .chain(current)
+                    .collect::<Vec<_>>();
+                transaction.execute(
+                    "INSERT OR REPLACE INTO settings(key,value) VALUES('portForwardProfiles',?)",
+                    [serde_json::to_string(&merged)
+                        .map_err(|error| rusqlite::Error::ToSqlConversionFailure(error.into()))?],
+                )?;
+            }
+            transaction.commit()
+        });
+        if let Err(error) = database_result {
+            for account in created_credential_accounts {
+                if let Ok(entry) = Entry::new(&self.credential_service, &account) {
+                    let _ = entry.delete_credential();
+                }
+            }
+            return Err(error);
+        }
+
+        Ok(LunaRemoteImportResult {
+            imported_connections: entries.len(),
+            imported_groups,
+            imported_host_keys: if import_host_keys {
+                snapshot.known_hosts.len()
+            } else {
+                0
+            },
+            imported_settings: if import_settings {
+                snapshot.settings.len()
+            } else {
+                0
+            },
+            imported_forwarding_profiles: forwarding_profiles.len(),
+            imported_credentials: credential_values.len(),
+            unavailable_credentials,
         })
     }
 
@@ -687,6 +1153,7 @@ mod tests {
     use super::Database;
     use crate::models::{
         AiCommandHistoryEntry, AiRiskLevel, AiShell, AuthType, BookmarkArchiveEntry, BookmarkInput,
+        PortForwardProfile,
     };
     use uuid::Uuid;
 
@@ -962,6 +1429,118 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("db-wal"));
         let _ = std::fs::remove_file(path.with_extension("db-shm"));
+    }
+
+    #[test]
+    fn reads_and_imports_luna_remote_snapshot_without_mutating_source() {
+        let source_path = std::env::temp_dir().join(format!(
+            "{}-remote-source-{}.db",
+            crate::product::PRODUCT_KEY,
+            Uuid::new_v4()
+        ));
+        let source = rusqlite::Connection::open(&source_path).expect("create source database");
+        source
+            .execute_batch(
+                r#"
+                CREATE TABLE bookmarks (
+                  id TEXT PRIMARY KEY, name TEXT NOT NULL, host TEXT NOT NULL, port INTEGER NOT NULL,
+                  username TEXT NOT NULL, authType TEXT NOT NULL, privateKeyPath TEXT NOT NULL DEFAULT '',
+                  jumpBookmarkId TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '', groupName TEXT NOT NULL DEFAULT '',
+                  favorite INTEGER NOT NULL DEFAULT 0, lastConnectedAt TEXT NOT NULL DEFAULT '',
+                  keepaliveEnabled INTEGER NOT NULL DEFAULT 1, keepaliveIntervalSeconds INTEGER NOT NULL DEFAULT 15,
+                  keepaliveCountMax INTEGER NOT NULL DEFAULT 3, sortOrder INTEGER NOT NULL DEFAULT 0,
+                  createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL
+                );
+                CREATE TABLE credential_refs (bookmarkId TEXT PRIMARY KEY, account TEXT NOT NULL);
+                CREATE TABLE known_hosts (host TEXT NOT NULL, port INTEGER NOT NULL, fingerprint TEXT NOT NULL, PRIMARY KEY(host, port));
+                CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                INSERT INTO bookmarks VALUES
+                  ('jump','Jump','jump.example.com',22,'jump-user','agent','','','','Imported',0,'',1,15,3,0,'2026-01-01','2026-01-01'),
+                  ('target','Target','target.example.com',2202,'target-user','password','','jump','note','Imported',1,'',1,30,4,1,'2026-01-01','2026-01-01');
+                INSERT INTO credential_refs VALUES ('target','target');
+                INSERT INTO known_hosts VALUES ('target.example.com',2202,'SHA256:test');
+                INSERT INTO settings VALUES ('bookmarkGroups','["Imported","Empty"]');
+                INSERT INTO settings VALUES ('uiTheme','"dark"');
+                INSERT INTO settings VALUES ('portForwardProfiles','[{"id":"forward-source","bookmarkId":"target","name":"Web","type":"local","bindAddress":"127.0.0.1","bindPort":8080,"targetHost":"127.0.0.1","targetPort":80}]');
+                "#,
+            )
+            .expect("seed source database");
+        drop(source);
+        let before = std::fs::read(&source_path).expect("read source before preview");
+
+        let snapshot = Database::read_luna_remote_snapshot(&source_path).expect("read snapshot");
+        assert_eq!(snapshot.connections.len(), 2);
+        assert_eq!(snapshot.groups, ["Imported", "Empty"]);
+        assert_eq!(snapshot.known_hosts.len(), 1);
+        assert_eq!(snapshot.settings.len(), 1);
+        assert_eq!(snapshot.forwarding_profiles.len(), 1);
+        assert_eq!(snapshot.credential_connection_ids, ["target"]);
+        assert_eq!(
+            std::fs::read(&source_path).expect("read source after preview"),
+            before
+        );
+
+        let target_path = std::env::temp_dir().join(format!(
+            "{}-remote-target-{}.db",
+            crate::product::PRODUCT_KEY,
+            Uuid::new_v4()
+        ));
+        let credential_service =
+            format!("{}.remote-import-test", crate::product::CREDENTIAL_SERVICE);
+        let db = Database::open(&target_path, &credential_service).expect("open target database");
+        let result = db
+            .import_luna_remote_snapshot(
+                &snapshot,
+                &snapshot.connections,
+                &["Empty".into()],
+                true,
+                true,
+                true,
+                false,
+                &[],
+            )
+            .expect("import snapshot");
+        assert_eq!(result.imported_connections, 2);
+        assert_eq!(result.imported_groups, 2);
+        assert_eq!(result.imported_host_keys, 1);
+        assert_eq!(result.imported_settings, 1);
+        assert_eq!(result.imported_forwarding_profiles, 1);
+        assert_eq!(result.imported_credentials, 0);
+        assert_eq!(result.unavailable_credentials, 0);
+
+        let bookmarks = db.list_bookmarks().expect("list imported bookmarks");
+        let jump = bookmarks
+            .iter()
+            .find(|bookmark| bookmark.name == "Jump")
+            .expect("jump imported");
+        let target = bookmarks
+            .iter()
+            .find(|bookmark| bookmark.name == "Target")
+            .expect("target imported");
+        assert_ne!(jump.id, "jump");
+        assert_ne!(target.id, "target");
+        assert_eq!(target.jump_bookmark_id, jump.id);
+        assert_eq!(
+            db.known_host("target.example.com", 2202)
+                .expect("read host key"),
+            Some("SHA256:test".into())
+        );
+        assert_eq!(db.get_setting::<String>("uiTheme", String::new()), "dark");
+        let profiles = db.get_setting::<Vec<PortForwardProfile>>("portForwardProfiles", vec![]);
+        assert_eq!(profiles.len(), 1);
+        assert_ne!(profiles[0].id, "forward-source");
+        assert_eq!(profiles[0].bookmark_id, target.id);
+        assert_eq!(
+            std::fs::read(&source_path).expect("read source after import"),
+            before
+        );
+
+        drop(db);
+        for path in [&source_path, &target_path] {
+            let _ = std::fs::remove_file(path);
+            let _ = std::fs::remove_file(path.with_extension("db-wal"));
+            let _ = std::fs::remove_file(path.with_extension("db-shm"));
+        }
     }
 
     #[test]

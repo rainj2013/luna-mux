@@ -11,9 +11,9 @@ This file is the ordered, durable work breakdown. Task IDs do not change after w
 | M0.3 | DONE | Add product metadata single source | Metadata validates and generates frontend/Rust identity constants and manifests |
 | M0.4 | DONE | Isolate runtime identity and storage | Bundle, package, database, credential, title, diagnostics, and backup identifiers use Luna Mux values |
 | M0.5 | DONE | Replace remaining brand literals with generated product info | Runtime and build code contain no editable Luna Mux brand duplicates |
-| M0.6 | IN_PROGRESS | Add explicit Luna Remote import wizard | Selective snapshot import; credentials require separate approval; source is never mutated |
+| M0.6 | DONE | Add explicit Luna Remote import wizard | Selective snapshot import; credentials require separate approval; source is never mutated |
 | M0.7 | DONE | Document design, tasks, progress, and upstream policy | All four durable documents exist and cross-reference each other |
-| M0.8 | TODO | Replace inherited SSH-centric product icons | Luna Mux has an original default icon and intentional selectable variants for Windows and macOS |
+| M0.8 | IN_PROGRESS | Replace inherited SSH-centric product icons | Luna Mux has an original default icon and intentional selectable variants for Windows and macOS |
 
 ## M1 - Session abstraction
 

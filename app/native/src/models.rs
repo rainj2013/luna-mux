@@ -109,6 +109,78 @@ pub struct BookmarkArchiveImportResult {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct KnownHostImportEntry {
+    pub host: String,
+    pub port: u16,
+    pub fingerprint: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PortableSettingEntry {
+    pub key: String,
+    pub value: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct LunaRemoteSnapshot {
+    pub path: String,
+    pub source_modified_at: String,
+    pub groups: Vec<String>,
+    pub connections: Vec<BookmarkArchiveEntry>,
+    pub known_hosts: Vec<KnownHostImportEntry>,
+    pub settings: Vec<PortableSettingEntry>,
+    pub forwarding_profiles: Vec<PortForwardProfile>,
+    pub credential_connection_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LunaRemoteSource {
+    pub path: String,
+    pub source_modified_at: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LunaRemoteImportPreview {
+    pub preview_id: String,
+    pub path: String,
+    pub source_modified_at: String,
+    pub groups: Vec<String>,
+    pub connections: Vec<BookmarkArchiveEntry>,
+    pub known_hosts: Vec<KnownHostImportEntry>,
+    pub setting_keys: Vec<String>,
+    pub forwarding_profiles: Vec<PortForwardProfile>,
+    pub credential_connection_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LunaRemoteImportSelection {
+    pub preview_id: String,
+    pub connection_ids: Vec<String>,
+    pub groups: Vec<String>,
+    pub import_host_keys: bool,
+    pub import_settings: bool,
+    pub import_forwarding_profiles: bool,
+    pub import_credentials: bool,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LunaRemoteImportResult {
+    pub imported_connections: usize,
+    pub imported_groups: usize,
+    pub imported_host_keys: usize,
+    pub imported_settings: usize,
+    pub imported_forwarding_profiles: usize,
+    pub imported_credentials: usize,
+    pub unavailable_credentials: usize,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub enum AuthType {
     Password,
     PrivateKey,
