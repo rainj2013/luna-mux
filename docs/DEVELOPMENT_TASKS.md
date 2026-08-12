@@ -21,9 +21,9 @@ This file is the ordered, durable work breakdown. Task IDs do not change after w
 | --- | --- | --- | --- |
 | M1.1 | DONE | Define runtime IDs, targets, capabilities, events, and cursor semantics | Rust and TypeScript contracts agree; contract tests cover status/output/exit without using project-level session terminology |
 | M1.2 | IN_PROGRESS | Wrap existing SSH manager in `InProcessSshTerminalBackend` | Existing SSH, resize, flow, close, SFTP, and tunnels pass regression tests; new APIs use `runtimeId` |
-| M1.3 | TODO | Make `TerminalPane` transport-independent | No SSH-specific decision exists in the terminal rendering component; it binds by `runtimeId` |
-| M1.4 | TODO | Add a mock terminal backend contract suite | A backend can be substituted without changing Mux Session, pane, or TerminalPane behavior |
-| M1.5 | TODO | Document future daemon terminal extension contract | Scope is limited to runtime backend behavior; no IPC protocol is implemented |
+| M1.3 | DONE | Make `TerminalPane` transport-independent | No SSH-specific decision exists in the terminal rendering component; it binds by `runtimeId` |
+| M1.4 | DONE | Add a mock terminal backend contract suite | A backend can be substituted without changing Mux Session, pane, or TerminalPane behavior |
+| M1.5 | DONE | Document future daemon terminal extension contract | Scope is limited to runtime backend behavior; no IPC protocol is implemented |
 
 ## M2 - Cross-platform local PTY
 

@@ -4,7 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { ChevronDown, ChevronUp, ClipboardPaste, Copy, Palette, Plug, Search, X } from 'lucide-react'
-import type { TerminalSettings } from '../types'
+import type { TerminalRuntimeEvent, TerminalSettings } from '../types'
 import { colorWithOpacity, terminalBackgroundStyle } from '../terminal-style'
 import { useI18n } from '../i18n'
 
@@ -69,7 +69,7 @@ export interface TerminalPaneHandle {
 }
 
 interface TerminalPaneProps {
-  sessionId?: string
+  runtimeId?: string
   connected: boolean
   visible: boolean
   settings: TerminalSettings
@@ -78,7 +78,7 @@ interface TerminalPaneProps {
   onOpenSettings?: () => void
 }
 
-export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function TerminalPane({ sessionId, connected, visible, settings, backgroundImage, onConnect, onOpenSettings }, ref): React.JSX.Element {
+export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function TerminalPane({ runtimeId, connected, visible, settings, backgroundImage, onConnect, onOpenSettings }, ref): React.JSX.Element {
   const { t } = useI18n()
   const container = useRef<HTMLDivElement>(null)
   const terminal = useRef<Terminal | null>(null)
@@ -87,16 +87,18 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
   const searchMatches = useRef<TerminalSearchMatch[]>([])
   const activeSearchIndex = useRef(-1)
   const webglAddon = useRef<WebglAddon | null>(null)
-  const sessionIdRef = useRef(sessionId)
-  const boundSessionId = useRef<string | undefined>(undefined)
-  const [started, setStarted] = useState(Boolean(sessionId))
+  const runtimeIdRef = useRef(runtimeId)
+  const connectedRef = useRef(connected)
+  const boundRuntimeId = useRef<string | undefined>(undefined)
+  const outputCursor = useRef(0)
+  const [started, setStarted] = useState(Boolean(runtimeId))
   const [searchOpen, setSearchOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [searchResult, setSearchResult] = useState({ index: -1, count: 0 })
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; hasSelection: boolean } | null>(null)
   const searchInput = useRef<HTMLInputElement>(null)
 
-  const shouldRenderTerminal = Boolean(sessionId) || started
+  const shouldRenderTerminal = Boolean(runtimeId) || started
   const rendererBackground = settings.backgroundImagePath && backgroundImage ? 'rgba(0, 0, 0, 0)' : colorWithOpacity(settings.backgroundColor, settings.backgroundOpacity)
 
   useImperativeHandle(ref, () => ({
@@ -104,29 +106,35 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
   }), [])
 
   useEffect(() => {
-    sessionIdRef.current = sessionId
-    if (sessionId) setStarted(true)
+    runtimeIdRef.current = runtimeId
+    connectedRef.current = connected
+    if (runtimeId) setStarted(true)
     const term = terminal.current
-    if (!term || !sessionId || boundSessionId.current === sessionId) return
-    if (boundSessionId.current) term.writeln(`\r\n\x1b[90m--- ${t('terminal.newSshSessionEstablished')} ---\x1b[0m\r\n`)
-    boundSessionId.current = sessionId
+    if (!term || !runtimeId || boundRuntimeId.current === runtimeId) return
+    if (boundRuntimeId.current) term.writeln(`\r\n\x1b[90m--- ${t('terminal.newRuntimeEstablished')} ---\x1b[0m\r\n`)
+    boundRuntimeId.current = runtimeId
+    outputCursor.current = 0
     requestAnimationFrame(() => {
       fitAddon.current?.fit()
-      window.api.sessions.resize(sessionId, term.cols, term.rows)
+      void window.api.terminalRuntimes.resize(runtimeId, term.cols, term.rows)
     })
-  }, [sessionId])
+  }, [runtimeId, connected, t])
 
   useEffect(() => {
-    if (!connected || !visible || !sessionId) return
+    connectedRef.current = connected
+  }, [connected])
+
+  useEffect(() => {
+    if (!connected || !visible || !runtimeId) return
     const frame = requestAnimationFrame(() => {
       const term = terminal.current
       if (!term) return
       fitAddon.current?.fit()
-      window.api.sessions.resize(sessionId, term.cols, term.rows)
+      void window.api.terminalRuntimes.resize(runtimeId, term.cols, term.rows)
       term.focus()
     })
     return () => cancelAnimationFrame(frame)
-  }, [connected, visible, sessionId])
+  }, [connected, visible, runtimeId])
 
   useEffect(() => {
     if (!shouldRenderTerminal || !container.current || terminal.current) return
@@ -142,9 +150,10 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     term.open(container.current)
     fit.fit()
     terminal.current = term
-    boundSessionId.current = sessionIdRef.current
+    boundRuntimeId.current = runtimeIdRef.current
     let pendingOutput = 0
     let paused = false
+    let disposed = false
 
     term.attachCustomKeyEventHandler((event) => {
       const commandKey = window.api.platform === 'darwin' ? event.metaKey : event.ctrlKey
@@ -168,35 +177,48 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
       }
       return true
     })
-    const input = term.onData((data) => { if (sessionIdRef.current) window.api.sessions.write(sessionIdRef.current, data) })
-    const resize = term.onResize(({ cols, rows }) => { if (sessionIdRef.current) window.api.sessions.resize(sessionIdRef.current, cols, rows) })
-    const stop = window.api.onEvent((event) => {
-      if (event.type !== 'terminal-data' || event.payload.sessionId !== sessionIdRef.current) return
+    const input = term.onData((data) => { if (connectedRef.current && runtimeIdRef.current) void window.api.terminalRuntimes.write(runtimeIdRef.current, data) })
+    const resize = term.onResize(({ cols, rows }) => { if (runtimeIdRef.current) void window.api.terminalRuntimes.resize(runtimeIdRef.current, cols, rows) })
+    const stop = window.api.onTerminalRuntimeEvent((event: TerminalRuntimeEvent) => {
+      if (event.type !== 'output' || event.payload.runtimeId !== runtimeIdRef.current) return
+      if (event.payload.endCursor <= outputCursor.current) return
       const length = event.payload.data.length
+      outputCursor.current = event.payload.endCursor
       pendingOutput += length
       if (!paused && pendingOutput >= terminalHighWaterMark) {
         paused = true
-        window.api.sessions.flow(event.payload.sessionId, true)
+        void window.api.terminalRuntimes.flow(event.payload.runtimeId, true)
       }
       term.write(event.payload.data, () => {
         pendingOutput = Math.max(0, pendingOutput - length)
-        if (paused && pendingOutput <= terminalLowWaterMark && sessionIdRef.current) {
+        if (paused && pendingOutput <= terminalLowWaterMark && runtimeIdRef.current) {
           paused = false
-          window.api.sessions.flow(sessionIdRef.current, false)
+          void window.api.terminalRuntimes.flow(runtimeIdRef.current, false)
         }
       })
     })
+    const catchUp = runtimeIdRef.current
+      ? window.api.terminalRuntimes.readOutput(runtimeIdRef.current, outputCursor.current, terminalHighWaterMark)
+          .then((result) => {
+            if (disposed || result.runtimeId !== runtimeIdRef.current || !result.data || result.nextCursor <= outputCursor.current) return
+            outputCursor.current = result.nextCursor
+            term.write(result.data)
+          })
+          .catch(() => undefined)
+      : Promise.resolve()
     const observer = new ResizeObserver(() => {
       if (container.current?.offsetParent) requestAnimationFrame(() => {
         fit.fit()
-        if (sessionIdRef.current) window.api.sessions.resize(sessionIdRef.current, term.cols, term.rows)
+        if (runtimeIdRef.current) void window.api.terminalRuntimes.resize(runtimeIdRef.current, term.cols, term.rows)
       })
     })
     observer.observe(container.current)
     term.focus()
     return () => {
-      if (paused && sessionIdRef.current) window.api.sessions.flow(sessionIdRef.current, false)
+      disposed = true
+      if (paused && runtimeIdRef.current) void window.api.terminalRuntimes.flow(runtimeIdRef.current, false)
       stop(); observer.disconnect(); input.dispose(); resize.dispose(); webglAddon.current?.dispose(); term.dispose()
+      void catchUp
       webglAddon.current = null; terminal.current = null; fitAddon.current = null
     }
   }, [shouldRenderTerminal])

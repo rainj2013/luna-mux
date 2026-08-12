@@ -74,6 +74,15 @@ All terminal backends expose the same operations: create, write, resize, flow, i
 
 The initial implementation runs Terminal Runtimes in the Luna Mux process. A future `DaemonTerminalBackend` may implement attach/detach, IPC, persistent output, and remote bridges behind the same interface. No daemon wire protocol or runtime persistence is implemented now.
 
+The daemon extension must preserve the same `TerminalBackend` operations and
+runtime event contract. `runtimeId` remains stable while a caller is attached,
+and attach/detach is an implementation concern rather than a new pane or
+session type. A daemon may retain output after the desktop exits only after an
+explicit product decision; the current release discards output on exit. The
+future extension must define authentication, process ownership, shutdown,
+backpressure, reconnect, and version negotiation before it is enabled. No
+daemon-specific fields are allowed to leak into `TerminalPane`.
+
 ### 4.2 Unified terminal
 
 Local and SSH Terminal Runtimes use the same React `TerminalPane` and xterm.js instance. Rendering, themes, fonts, backgrounds, search, copy/paste, shortcuts, resize, UTF-8 handling, WebGL fallback, and output flow control behave identically.

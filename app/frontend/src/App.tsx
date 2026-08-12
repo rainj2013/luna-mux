@@ -8,7 +8,7 @@ import { colorWithOpacity, terminalBackgroundStyle } from './terminal-style'
 import { availableLanguages, getNativeMenuLabels, useI18n, type MessageKey } from './i18n'
 import { PRODUCT_INFO } from './product-info'
 
-interface WorkspaceTab { key: string; bookmarkId: string; sessionId?: string; status: SessionStatus; error?: string }
+interface WorkspaceTab { key: string; bookmarkId: string; sessionId?: string; runtimeId?: string; status: SessionStatus; error?: string }
 interface ConnectionTarget { newSession?: boolean; tabKey?: string }
 interface SidebarContextMenu { x: number; y: number; group?: string; bookmark?: Bookmark }
 interface GroupDialogState { mode: 'create' | 'rename'; group?: string }
@@ -375,11 +375,11 @@ export function App(): React.JSX.Element {
   const connect = async (bookmark: Bookmark, credentials: ConnectionCredentials = {}, target: ConnectionTarget = {}): Promise<void> => {
     let key = target.tabKey ?? (target.newSession ? undefined : tabs.find((tab) => tab.bookmarkId === bookmark.id)?.key)
     if (!key) { key = crypto.randomUUID(); setTabs((current) => [...current, { key: key!, bookmarkId: bookmark.id, status: 'connecting' }]) }
-    else setTabs((current) => current.map((tab) => tab.key === key ? { ...tab, sessionId: undefined, status: 'connecting', error: undefined } : tab))
+    else setTabs((current) => current.map((tab) => tab.key === key ? { ...tab, sessionId: undefined, runtimeId: undefined, status: 'connecting', error: undefined } : tab))
     setActiveKey(key); setAuthRequest(null)
     try {
       const summary = await window.api.sessions.connect({ bookmarkId: bookmark.id, newSession: target.newSession, ...credentials })
-      setTabs((current) => current.map((tab) => tab.key === key ? { ...tab, sessionId: summary.id, status: summary.status, error: undefined } : tab))
+      setTabs((current) => current.map((tab) => tab.key === key ? { ...tab, sessionId: summary.id, runtimeId: summary.id, status: summary.status, error: undefined } : tab))
       if (credentials.rememberCredential || credentials.rememberJumpCredential) await reloadBookmarks()
     } catch (error) {
       setTabs((current) => current.map((tab) => tab.key === key ? { ...tab, status: 'error', error: errorMessage(error) } : tab))
@@ -704,7 +704,7 @@ export function App(): React.JSX.Element {
           </div></div>
           <div className="session-stack">
             {tabs.map((tab) => { const bookmark = bookmarkMap.get(tab.bookmarkId); const reconnect = bookmark ? () => openBookmark(bookmark, { tabKey: tab.key }) : undefined; return <div key={tab.key} className={`session-view ${tab.key === activeKey ? 'active' : ''} ${workspaceView}`}>
-              <div className="terminal-region"><TerminalPane ref={(pane) => { if (pane) terminalPaneRefs.current.set(tab.key, pane); else terminalPaneRefs.current.delete(tab.key) }} sessionId={tab.sessionId} connected={tab.status === 'connected'} visible={tab.key === activeKey && workspaceView === 'terminal'} settings={terminalSettings} backgroundImage={terminalBackground} onConnect={reconnect} onOpenSettings={() => openSettings('terminal')} /></div>
+              <div className="terminal-region"><TerminalPane ref={(pane) => { if (pane) terminalPaneRefs.current.set(tab.key, pane); else terminalPaneRefs.current.delete(tab.key) }} runtimeId={tab.runtimeId} connected={tab.status === 'connected'} visible={tab.key === activeKey && workspaceView === 'terminal'} settings={terminalSettings} backgroundImage={terminalBackground} onConnect={reconnect} onOpenSettings={() => openSettings('terminal')} /></div>
               <div className="sftp-region"><SftpPane sessionId={tab.sessionId} bookmarkId={tab.bookmarkId} connected={tab.status === 'connected'} visible={tab.key === activeKey && workspaceView === 'files'} onError={showError} onConnect={reconnect} /></div>
             </div> })}
           </div>

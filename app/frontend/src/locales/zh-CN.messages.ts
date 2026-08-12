@@ -361,6 +361,7 @@ export default {
   "terminal.closeSearch": "关闭搜索",
   "terminal.connectToStartAnSshSession": "连接后即可开始 SSH 会话",
   "terminal.newSshSessionEstablished": "已建立新的 SSH session",
+  "terminal.newRuntimeEstablished": "已建立新的终端运行实例",
   "terminal.nextResult": "下一个结果",
   "terminal.noResults": "无结果",
   "terminal.notConnected": "尚未连接",

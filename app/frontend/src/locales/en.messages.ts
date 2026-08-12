@@ -361,6 +361,7 @@ export default {
   "terminal.closeSearch": "Close search",
   "terminal.connectToStartAnSshSession": "Connect to start an SSH session",
   "terminal.newSshSessionEstablished": "New SSH session established",
+  "terminal.newRuntimeEstablished": "New terminal runtime established",
   "terminal.nextResult": "Next result",
   "terminal.noResults": "No results",
   "terminal.notConnected": "Not connected",
