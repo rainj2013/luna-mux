@@ -70,27 +70,6 @@ pub struct BookmarkArchiveEntry {
     pub note: String,
 }
 
-impl BookmarkArchiveEntry {
-    pub fn to_input(&self, id: Option<String>, jump_bookmark_id: String) -> BookmarkInput {
-        BookmarkInput {
-            id,
-            name: self.name.clone(),
-            host: self.host.clone(),
-            port: self.port,
-            username: self.username.clone(),
-            auth_type: self.auth_type.clone(),
-            private_key_path: self.private_key_path.clone(),
-            jump_bookmark_id,
-            group_name: self.group_name.trim().to_string(),
-            favorite: self.favorite,
-            keepalive_enabled: self.keepalive_enabled,
-            keepalive_interval_seconds: self.keepalive_interval_seconds,
-            keepalive_count_max: self.keepalive_count_max,
-            note: self.note.clone(),
-        }
-    }
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BookmarkArchive {
@@ -99,6 +78,26 @@ pub struct BookmarkArchive {
     pub exported_at: String,
     pub groups: Vec<String>,
     pub connections: Vec<BookmarkArchiveEntry>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum BookmarkArchiveSource {
+    LunaMux,
+    LunaRemote,
+    Legacy,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BookmarkArchivePreview {
+    pub preview_id: String,
+    pub path: String,
+    pub source: BookmarkArchiveSource,
+    pub exported_at: String,
+    pub groups: Vec<String>,
+    pub connections: Vec<BookmarkArchiveEntry>,
+    pub credentials_included: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

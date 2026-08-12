@@ -6,8 +6,8 @@ This is the durable development checkpoint. Update it in every development sessi
 
 - Date: 2026-08-12
 - Phase: M0 - Independent product foundation
-- Active task: none; M0.6 is the next planned implementation task
-- Overall state: repository foundation complete; product development not started
+- Active task: M0.6 - Complete the explicit Luna Remote import wizard
+- Overall state: implementation started; connection import and session contracts are in place
 - Baseline Luna Remote commit: `7ccc61f0bb1ea7ffb74556c1fe207e802bfbfd2f`
 - Luna Mux repository: `D:\code\luna-mux`
 - Luna Remote source repository: `D:\code\ssh_tools`
@@ -23,18 +23,22 @@ This is the durable development checkpoint. Update it in every development sessi
 - Preserved Luna Remote and older connection archive formats only as explicit file-import compatibility.
 - Added the approved design, ordered development tasks, progress checkpoint, and upstream sync ledger.
 - Removed four unreferenced Luna Remote design and product screenshots (about 5.7 MB); retained only image assets still required by the current build.
+- Added a two-phase connection-backup import: read-only preview, source identification, selective connection/empty-group choice, dependency-aware jump-host selection, and one SQLite transaction. Credentials are explicitly excluded.
+- Added versioned session contract metadata with generated Rust/TypeScript types for targets, capabilities, lifecycle, UTF-8 byte cursors, truncation reads, and exit events.
+- Added the thin `SessionBackend` trait and a lightweight Rust contract test crate; all three status/output/exit contract tests pass without requiring the native SSH dependency toolchain.
 
 ## In progress
 
-- No implementation task is active at this checkpoint.
-- Full Rust compilation is waiting on the Windows native build prerequisites described below.
+- M0.6 still needs a direct Luna Remote data-source reader and selective Host Key/settings/forwarding-profile import. Credential import remains a separate, explicit authorization step.
+- Existing SSH sessions are not yet routed through `SessionBackend`; that work is M1.2.
+- Full native Rust compilation is waiting on the Windows native build prerequisite described below.
 
 ## Next actions
 
-1. Design and replace the inherited SSH-centric application icon set under M0.8 before packaging a Luna Mux release.
-2. Install or configure NASM and CMake, then run `cargo check` and the Rust tests on Windows.
-3. Implement M0.6 as an explicit, read-only Luna Remote import flow with a transactional Luna Mux write boundary.
-4. Begin M1.1 after the M0.6 acceptance gate is green.
+1. Complete M0.6 with direct read-only Luna Remote source discovery/selection and import of the remaining approved data classes.
+2. Install or configure NASM, then run full `cargo check` and native Rust tests on Windows.
+3. Wrap the existing SSH manager as `InProcessSshBackend` under M1.2 without changing current SSH behavior.
+4. Design and replace the inherited SSH-centric application icon set under M0.8 before packaging a Luna Mux release.
 
 ## Verification evidence
 
@@ -44,13 +48,17 @@ This is the durable development checkpoint. Update it in every development sessi
 | New repository retains baseline history | Passed (`7ccc61f`) | 2026-08-12 |
 | Upstream push disabled | Passed | 2026-08-12 |
 | `npm run product:check` | Passed | 2026-08-12 |
+| `npm run session:check` | Passed | 2026-08-12 |
+| `npm run session:test` | Passed (3 tests) | 2026-08-12 |
+| `npm run native-core:test` | Passed (6 tests, including transactional archive import) | 2026-08-12 |
 | `npm run i18n:check` | Passed | 2026-08-12 |
 | `npm run typecheck` | Passed | 2026-08-12 |
 | `npm run web:build` | Passed | 2026-08-12 |
 | `cargo metadata --manifest-path app/native/Cargo.toml --no-deps` | Passed | 2026-08-12 |
 | `cargo fmt --manifest-path app/native/Cargo.toml -- --check` | Passed | 2026-08-12 |
-| `cargo check --manifest-path app/native/Cargo.toml` | Blocked before project compilation: `aws-lc-sys` requires NASM; its no-assembly path requires CMake, neither available in the current environment | 2026-08-12 |
+| `cargo check --manifest-path app/native/Cargo.toml` | Blocked in third-party `aws-lc-sys`: NASM is unavailable; project Rust code was not reached | 2026-08-12 |
 | `git diff --check` | Passed | 2026-08-12 |
+| Browser visual verification | Not run: no in-app or Chrome browser instance was available; native Tauri launch is also blocked by NASM | 2026-08-12 |
 
 ## Decision log
 
@@ -63,6 +71,8 @@ This is the durable development checkpoint. Update it in every development sessi
 | 2026-08-12 | Browser runs locally; remote development services use SSH local forwarding. |
 | 2026-08-12 | Luna Remote updates are selectively ported by commit into in-repository core boundaries. |
 | 2026-08-12 | Unreferenced Luna Remote screenshots and design images are removed; build-required icons remain temporarily until Luna Mux visual identity is designed. |
+| 2026-08-12 | Session cursors count UTF-8 bytes and are capped at JavaScript's maximum safe integer so Rust and TypeScript retain exact cursor values. |
+| 2026-08-12 | Connection backups use an in-memory preview snapshot and a single SQLite transaction; source files are never mutated and credentials are excluded. |
 
 ## Session update protocol
 

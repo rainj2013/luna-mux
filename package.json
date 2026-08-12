@@ -14,9 +14,13 @@
     "web:build": "vite build",
     "product:sync": "node scripts/sync-product.mjs",
     "product:check": "node scripts/sync-product.mjs --check",
+    "session:sync": "node scripts/sync-session-contract.mjs",
+    "session:check": "node scripts/sync-session-contract.mjs --check",
+    "session:test": "cargo test --manifest-path contracts/rust-tests/Cargo.toml",
+    "native-core:test": "cargo test --manifest-path tests/native-core/Cargo.toml",
     "i18n:check": "node scripts/check-i18n.mjs",
     "typecheck": "tsc --noEmit",
-    "check": "npm run product:check && npm run i18n:check && npm run typecheck && cargo check --manifest-path app/native/Cargo.toml",
+    "check": "npm run product:check && npm run session:check && npm run i18n:check && npm run typecheck && cargo check --manifest-path app/native/Cargo.toml",
     "test": "cargo test --manifest-path app/native/Cargo.toml"
   },
   "dependencies": {

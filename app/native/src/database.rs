@@ -214,6 +214,89 @@ impl Database {
         Ok(bookmark)
     }
 
+    pub fn import_bookmark_archive(
+        &self,
+        entries: &[BookmarkArchiveEntry],
+        selected_groups: &[String],
+    ) -> Result<BookmarkArchiveImportResult, String> {
+        let existing_groups = self.list_bookmark_groups()?;
+        let existing_named_groups = existing_groups
+            .iter()
+            .filter(|group| !group.is_empty())
+            .cloned()
+            .collect::<std::collections::HashSet<_>>();
+        let mut groups = existing_groups;
+        for group in selected_groups
+            .iter()
+            .chain(entries.iter().map(|entry| &entry.group_name))
+        {
+            let group = group.trim();
+            if !group.is_empty() && !groups.iter().any(|existing| existing == group) {
+                groups.push(group.to_string());
+            }
+        }
+        let imported_groups = groups
+            .iter()
+            .filter(|group| !group.is_empty() && !existing_named_groups.contains(*group))
+            .count();
+        let group_json = serde_json::to_string(&groups).map_err(|error| error.to_string())?;
+        let id_map = entries
+            .iter()
+            .map(|entry| (entry.id.clone(), Uuid::new_v4().to_string()))
+            .collect::<std::collections::HashMap<_, _>>();
+        let now = Utc::now().to_rfc3339();
+
+        self.with_conn(|db| {
+            let transaction = db.transaction()?;
+            let first_sort_order = transaction.query_row(
+                "SELECT COALESCE(MAX(sortOrder), -1) + 1 FROM bookmarks",
+                [],
+                |row| row.get::<_, i64>(0),
+            )?;
+            for (index, entry) in entries.iter().enumerate() {
+                let id = id_map.get(&entry.id).expect("archive ID was mapped");
+                let jump_bookmark_id = id_map
+                    .get(&entry.jump_bookmark_id)
+                    .cloned()
+                    .unwrap_or_default();
+                transaction.execute(
+                    r#"INSERT INTO bookmarks(id,name,host,port,username,authType,privateKeyPath,jumpBookmarkId,note,groupName,favorite,lastConnectedAt,keepaliveEnabled,keepaliveIntervalSeconds,keepaliveCountMax,sortOrder,createdAt,updatedAt)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"#,
+                    params![
+                        id,
+                        entry.name.trim(),
+                        entry.host.trim(),
+                        entry.port,
+                        entry.username.trim(),
+                        entry.auth_type.as_str(),
+                        entry.private_key_path.trim(),
+                        jump_bookmark_id,
+                        entry.note.trim(),
+                        entry.group_name.trim(),
+                        entry.favorite as i64,
+                        "",
+                        entry.keepalive_enabled as i64,
+                        entry.keepalive_interval_seconds.clamp(5, 300),
+                        entry.keepalive_count_max.clamp(1, 10),
+                        first_sort_order + index as i64,
+                        now,
+                        now,
+                    ],
+                )?;
+            }
+            transaction.execute(
+                "INSERT OR REPLACE INTO settings(key,value) VALUES('bookmarkGroups',?)",
+                [group_json],
+            )?;
+            transaction.commit()
+        })?;
+
+        Ok(BookmarkArchiveImportResult {
+            imported_connections: entries.len(),
+            imported_groups,
+        })
+    }
+
     pub fn reorder_bookmarks(&self, ids: &[String]) -> Result<Vec<Bookmark>, String> {
         let existing = self.list_bookmarks()?;
         let expected = existing
@@ -378,10 +461,6 @@ impl Database {
         }
         self.set_setting("bookmarkGroups", &normalized)?;
         Ok(normalized)
-    }
-
-    pub fn set_bookmark_groups(&self, groups: &[String]) -> Result<(), String> {
-        self.set_setting("bookmarkGroups", &groups)
     }
 
     pub fn move_bookmark_to_group(
@@ -606,7 +685,9 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use super::Database;
-    use crate::models::{AiCommandHistoryEntry, AiRiskLevel, AiShell, AuthType, BookmarkInput};
+    use crate::models::{
+        AiCommandHistoryEntry, AiRiskLevel, AiShell, AuthType, BookmarkArchiveEntry, BookmarkInput,
+    };
     use uuid::Uuid;
 
     fn input(name: &str, group_name: &str) -> BookmarkInput {
@@ -799,6 +880,83 @@ mod tests {
         let deleted = db.delete_bookmark_group("").expect("delete ungrouped");
         assert_eq!(deleted.deleted_bookmark_ids, [second.id]);
         assert_eq!(deleted.groups, ["Default"]);
+
+        drop(db);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("db-wal"));
+        let _ = std::fs::remove_file(path.with_extension("db-shm"));
+    }
+
+    #[test]
+    fn imports_archive_transaction_with_new_ids_and_jump_relationships() {
+        let path = std::env::temp_dir().join(format!(
+            "{}-archive-import-{}.db",
+            crate::product::PRODUCT_KEY,
+            Uuid::new_v4()
+        ));
+        let credential_service = format!("{}.archive-test", crate::product::CREDENTIAL_SERVICE);
+        let db = Database::open(&path, &credential_service).expect("open test database");
+        db.create_bookmark_group("Existing")
+            .expect("create existing group");
+        let entries = vec![
+            BookmarkArchiveEntry {
+                id: "jump-source-id".into(),
+                name: "Jump".into(),
+                host: "jump.example.com".into(),
+                port: 22,
+                username: "jump-user".into(),
+                auth_type: AuthType::Agent,
+                private_key_path: String::new(),
+                jump_bookmark_id: String::new(),
+                group_name: "Imported".into(),
+                favorite: false,
+                keepalive_enabled: true,
+                keepalive_interval_seconds: 15,
+                keepalive_count_max: 3,
+                note: String::new(),
+            },
+            BookmarkArchiveEntry {
+                id: "target-source-id".into(),
+                name: "Target".into(),
+                host: "target.example.com".into(),
+                port: 2202,
+                username: "target-user".into(),
+                auth_type: AuthType::Password,
+                private_key_path: String::new(),
+                jump_bookmark_id: "jump-source-id".into(),
+                group_name: "Imported".into(),
+                favorite: true,
+                keepalive_enabled: true,
+                keepalive_interval_seconds: 30,
+                keepalive_count_max: 4,
+                note: "from archive".into(),
+            },
+        ];
+
+        let result = db
+            .import_bookmark_archive(&entries, &["Empty imported".into()])
+            .expect("import archive");
+        assert_eq!(result.imported_connections, 2);
+        assert_eq!(result.imported_groups, 2);
+
+        let bookmarks = db.list_bookmarks().expect("list imported bookmarks");
+        let jump = bookmarks
+            .iter()
+            .find(|bookmark| bookmark.name == "Jump")
+            .expect("jump imported");
+        let target = bookmarks
+            .iter()
+            .find(|bookmark| bookmark.name == "Target")
+            .expect("target imported");
+        assert_ne!(jump.id, "jump-source-id");
+        assert_ne!(target.id, "target-source-id");
+        assert_eq!(target.jump_bookmark_id, jump.id);
+        assert!(!jump.has_saved_credential);
+        assert!(!target.has_saved_credential);
+        assert_eq!(
+            db.list_bookmark_groups().expect("list groups"),
+            ["Existing", "Empty imported", "Imported"]
+        );
 
         drop(db);
         let _ = std::fs::remove_file(&path);

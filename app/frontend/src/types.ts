@@ -45,6 +45,35 @@ export interface SshConfigPreview {
   entries: SshConfigImportEntry[]
 }
 
+export interface BookmarkArchiveEntry {
+  id: string
+  name: string
+  host: string
+  port: number
+  username: string
+  authType: AuthType
+  privateKeyPath: string
+  jumpBookmarkId: string
+  groupName: string
+  favorite: boolean
+  keepaliveEnabled: boolean
+  keepaliveIntervalSeconds: number
+  keepaliveCountMax: number
+  note: string
+}
+
+export type BookmarkArchiveSource = 'lunaMux' | 'lunaRemote' | 'legacy'
+
+export interface BookmarkArchivePreview {
+  previewId: string
+  path: string
+  source: BookmarkArchiveSource
+  exportedAt: string
+  groups: string[]
+  connections: BookmarkArchiveEntry[]
+  credentialsIncluded: false
+}
+
 export interface ConnectInput {
   bookmarkId: string
   newSession?: boolean
@@ -336,7 +365,8 @@ export interface AppApi {
     previewSshConfig(): Promise<SshConfigPreview | null>
     importSshConfig(path: string, aliases: string[]): Promise<Bookmark[]>
     exportArchive(): Promise<string | null>
-    importArchive(): Promise<{ importedConnections: number; importedGroups: number } | null>
+    previewArchive(): Promise<BookmarkArchivePreview | null>
+    importArchive(previewId: string, connectionIds: string[], groups: string[]): Promise<{ importedConnections: number; importedGroups: number }>
   }
   bookmarkGroups: {
     list(): Promise<string[]>

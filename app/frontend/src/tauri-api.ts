@@ -46,7 +46,8 @@ export async function createTauriApi(): Promise<AppApi> {
       previewSshConfig: () => call('bookmarks_preview_ssh_config'),
       importSshConfig: (path, aliases) => call('bookmarks_import_ssh_config', { path, aliases }),
       exportArchive: () => call('bookmarks_export_archive'),
-      importArchive: () => call('bookmarks_import_archive')
+      previewArchive: () => call('bookmarks_preview_archive'),
+      importArchive: (previewId, connectionIds, groups) => call('bookmarks_import_archive', { previewId, connectionIds, groups })
     },
     bookmarkGroups: {
       list: () => call('bookmark_groups_list'),

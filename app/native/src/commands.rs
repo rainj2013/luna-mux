@@ -30,6 +30,7 @@ pub struct AppState {
     pub tunnels: Arc<TunnelManager>,
     pub ai_diagnostics: ai::AiDiagnostics,
     pub allowed_imports: Mutex<HashSet<PathBuf>>,
+    pub pending_archive_imports: Mutex<HashMap<String, BookmarkArchive>>,
     pub exit_cleanup_started: AtomicBool,
 }
 
@@ -638,34 +639,14 @@ pub async fn bookmarks_export_archive(
     Ok(Some(path))
 }
 
-#[tauri::command]
-pub async fn bookmarks_import_archive(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<Option<BookmarkArchiveImportResult>, String> {
-    let (sender, receiver) = tokio::sync::oneshot::channel();
-    app.dialog()
-        .file()
-        .set_title("导入连接备份")
-        .add_filter(format!("{} 连接备份", product::DISPLAY_NAME), &["json"])
-        .pick_file(move |path| {
-            let _ = sender.send(path);
-        });
-    let Some(path) = selected_path(receiver.await.ok().flatten()) else {
-        return Ok(None);
+fn validate_bookmark_archive(archive: &BookmarkArchive) -> Result<BookmarkArchiveSource, String> {
+    let source = match archive.format.as_str() {
+        product::CONNECTION_ARCHIVE_FORMAT => BookmarkArchiveSource::LunaMux,
+        LUNA_REMOTE_CONNECTION_ARCHIVE_FORMAT => BookmarkArchiveSource::LunaRemote,
+        LEGACY_CONNECTION_ARCHIVE_FORMAT => BookmarkArchiveSource::Legacy,
+        _ => return Err("不支持此连接备份格式或版本".into()),
     };
-    let metadata = fs::metadata(&path).map_err(|e| e.to_string())?;
-    if !metadata.is_file() || metadata.len() > 10 * 1024 * 1024 {
-        return Err("连接备份必须是小于 10 MB 的普通 JSON 文件".into());
-    }
-    let archive: BookmarkArchive =
-        serde_json::from_str(&fs::read_to_string(&path).map_err(|e| e.to_string())?)
-            .map_err(|e| format!("连接备份格式无效：{e}"))?;
-    if (archive.format != product::CONNECTION_ARCHIVE_FORMAT
-        && archive.format != LUNA_REMOTE_CONNECTION_ARCHIVE_FORMAT
-        && archive.format != LEGACY_CONNECTION_ARCHIVE_FORMAT)
-        || archive.version != 1
-    {
+    if archive.version != 1 {
         return Err("不支持此连接备份格式或版本".into());
     }
     if archive.connections.len() > 10_000 || archive.groups.len() > 1_000 {
@@ -685,47 +666,142 @@ pub async fn bookmarks_import_archive(
             || item.host.trim().is_empty()
             || item.username.trim().is_empty()
             || item.port == 0
+            || item.jump_bookmark_id == item.id
             || (!item.jump_bookmark_id.is_empty()
                 && !archive_ids.contains(item.jump_bookmark_id.as_str()))
     }) {
         return Err("连接备份中存在无效的连接或跳板机引用".into());
     }
-    let mut groups = state.db.list_bookmark_groups()?;
-    let before_groups = groups.len();
-    for group in archive
-        .groups
-        .iter()
-        .chain(archive.connections.iter().map(|item| &item.group_name))
-    {
-        let group = group.trim();
-        if !groups.iter().any(|existing| existing == group) {
-            groups.push(group.to_string());
-        }
-    }
-    state.db.set_bookmark_groups(&groups)?;
-
-    let id_map = archive
+    let entries_by_id = archive
         .connections
         .iter()
-        .map(|item| (item.id.clone(), Uuid::new_v4().to_string()))
+        .map(|entry| (entry.id.as_str(), entry))
         .collect::<HashMap<_, _>>();
-    for item in &archive.connections {
-        state
-            .db
-            .save_bookmark(item.to_input(id_map.get(&item.id).cloned(), String::new()))?;
+    if archive.connections.iter().any(|entry| {
+        !entry.jump_bookmark_id.is_empty()
+            && entries_by_id
+                .get(entry.jump_bookmark_id.as_str())
+                .is_some_and(|jump| !jump.jump_bookmark_id.is_empty())
+    }) {
+        return Err("连接备份包含多层跳板机，当前仅支持一层跳板机".into());
     }
-    for item in &archive.connections {
-        let Some(jump_id) = id_map.get(&item.jump_bookmark_id) else {
-            continue;
-        };
-        state
-            .db
-            .save_bookmark(item.to_input(id_map.get(&item.id).cloned(), jump_id.clone()))?;
+    Ok(source)
+}
+
+#[tauri::command]
+pub async fn bookmarks_preview_archive(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<BookmarkArchivePreview>, String> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .set_title("导入连接备份")
+        .add_filter(format!("{} 连接备份", product::DISPLAY_NAME), &["json"])
+        .pick_file(move |path| {
+            let _ = sender.send(path);
+        });
+    let Some(path) = selected_path(receiver.await.ok().flatten()) else {
+        return Ok(None);
+    };
+    let metadata = fs::metadata(&path).map_err(|e| e.to_string())?;
+    if !metadata.is_file() || metadata.len() > 10 * 1024 * 1024 {
+        return Err("连接备份必须是小于 10 MB 的普通 JSON 文件".into());
     }
-    Ok(Some(BookmarkArchiveImportResult {
-        imported_connections: archive.connections.len(),
-        imported_groups: groups.len() - before_groups,
-    }))
+    let archive: BookmarkArchive =
+        serde_json::from_str(&fs::read_to_string(&path).map_err(|e| e.to_string())?)
+            .map_err(|e| format!("连接备份格式无效：{e}"))?;
+    let source = validate_bookmark_archive(&archive)?;
+    let preview_id = Uuid::new_v4().to_string();
+    let preview = BookmarkArchivePreview {
+        preview_id: preview_id.clone(),
+        path,
+        source,
+        exported_at: archive.exported_at.clone(),
+        groups: archive.groups.clone(),
+        connections: archive.connections.clone(),
+        credentials_included: false,
+    };
+    let mut pending = state
+        .pending_archive_imports
+        .lock()
+        .map_err(|_| "导入状态锁已损坏")?;
+    pending.clear();
+    pending.insert(preview_id, archive);
+    Ok(Some(preview))
+}
+
+#[tauri::command]
+pub fn bookmarks_import_archive(
+    state: State<AppState>,
+    preview_id: String,
+    connection_ids: Vec<String>,
+    groups: Vec<String>,
+) -> Result<BookmarkArchiveImportResult, String> {
+    let archive = state
+        .pending_archive_imports
+        .lock()
+        .map_err(|_| "导入状态锁已损坏")?
+        .get(&preview_id)
+        .cloned()
+        .ok_or_else(|| "导入预览已失效，请重新选择连接备份".to_string())?;
+    validate_bookmark_archive(&archive)?;
+    let selected_ids = connection_ids.into_iter().collect::<HashSet<_>>();
+    let archive_ids = archive
+        .connections
+        .iter()
+        .map(|entry| entry.id.as_str())
+        .collect::<HashSet<_>>();
+    if selected_ids.len() > archive.connections.len()
+        || selected_ids
+            .iter()
+            .any(|id| !archive_ids.contains(id.as_str()))
+    {
+        return Err("导入选择包含未知连接，请重新预览".into());
+    }
+    let entries = archive
+        .connections
+        .iter()
+        .filter(|entry| selected_ids.contains(&entry.id))
+        .cloned()
+        .collect::<Vec<_>>();
+    if let Some(entry) = entries.iter().find(|entry| {
+        !entry.jump_bookmark_id.is_empty() && !selected_ids.contains(&entry.jump_bookmark_id)
+    }) {
+        return Err(format!("连接“{}”依赖的跳板机未被选择", entry.name));
+    }
+    let allowed_groups = archive
+        .groups
+        .iter()
+        .chain(archive.connections.iter().map(|entry| &entry.group_name))
+        .map(|group| group.trim())
+        .filter(|group| !group.is_empty())
+        .collect::<HashSet<_>>();
+    let mut requested_groups = Vec::new();
+    for group in groups {
+        let group = group.trim().to_string();
+        if !group.is_empty() && !requested_groups.contains(&group) {
+            requested_groups.push(group);
+        }
+    }
+    if requested_groups
+        .iter()
+        .any(|group| !allowed_groups.contains(group.as_str()))
+    {
+        return Err("导入选择包含未知分组，请重新预览".into());
+    }
+    if entries.is_empty() && requested_groups.is_empty() {
+        return Err("请至少选择一个连接或空分组".into());
+    }
+    let result = state
+        .db
+        .import_bookmark_archive(&entries, &requested_groups)?;
+    state
+        .pending_archive_imports
+        .lock()
+        .map_err(|_| "导入状态锁已损坏")?
+        .remove(&preview_id);
+    Ok(result)
 }
 #[tauri::command]
 pub fn state_get_collapsed_bookmark_groups(state: State<AppState>) -> Vec<String> {

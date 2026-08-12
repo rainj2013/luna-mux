@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowRight, Bookmark as BookmarkIcon, Bot, Check, ChevronDown, ChevronRight, CircleHelp, CirclePlus, Copy, Download, Edit3, Eye, EyeOff, FileInput, FileJson2, Folder, FolderOpen, FolderPlus, GripVertical, History as HistoryIcon, Image as ImageIcon, KeyRound, Languages, Minus, Monitor, Moon, Network, Palette, PanelLeftClose, PanelLeftOpen, Play, Plug, Power, Rocket, RotateCcw, Search, Send, Server, Settings as SettingsIcon, ShieldAlert, Square, SquareTerminal, Star, Sun, Trash2, Upload, WandSparkles, X } from 'lucide-react'
-import { BUNDLED_TERMINAL_FONT, DEFAULT_AI_SETTINGS, DEFAULT_TERMINAL_SETTINGS, type AiCommandHistoryEntry, type AiCommandSuggestion, type AiProvider, type AiRawExchange, type AiRiskAssessment, type AiSettings, type AiSettingsInput, type AiShell, type AiThinkingMode, type AppEvent, type AppIconId, type AppIconSettings, type AppLanguage, type Bookmark, type BookmarkInput, type ConflictResolution, type ConnectInput, type DeploymentDiffEntry, type DeploymentProfile, type HostKeyPrompt, type PortForwardProfile, type SessionStatus, type SshConfigPreview, type TerminalSettings, type TransferTask, type TunnelSummary, type UiTheme } from './types'
+import { BUNDLED_TERMINAL_FONT, DEFAULT_AI_SETTINGS, DEFAULT_TERMINAL_SETTINGS, type AiCommandHistoryEntry, type AiCommandSuggestion, type AiProvider, type AiRawExchange, type AiRiskAssessment, type AiSettings, type AiSettingsInput, type AiShell, type AiThinkingMode, type AppEvent, type AppIconId, type AppIconSettings, type AppLanguage, type Bookmark, type BookmarkArchivePreview, type BookmarkArchiveSource, type BookmarkInput, type ConflictResolution, type ConnectInput, type DeploymentDiffEntry, type DeploymentProfile, type HostKeyPrompt, type PortForwardProfile, type SessionStatus, type SshConfigPreview, type TerminalSettings, type TransferTask, type TunnelSummary, type UiTheme } from './types'
 import { TerminalPane, type TerminalPaneHandle } from './components/TerminalPane'
 import { SftpPane } from './components/SftpPane'
 import { HelpDialog } from './components/HelpDialog'
@@ -83,6 +83,7 @@ export function App(): React.JSX.Element {
   const [deploymentDialog, setDeploymentDialog] = useState(false)
   const [tunnelDialog, setTunnelDialog] = useState(false)
   const [importPreview, setImportPreview] = useState<SshConfigPreview | null>(null)
+  const [archiveImportPreview, setArchiveImportPreview] = useState<BookmarkArchivePreview | null>(null)
   const [sidebarContextMenu, setSidebarContextMenu] = useState<SidebarContextMenu | null>(null)
   const [groupDialog, setGroupDialog] = useState<GroupDialogState | null>(null)
   const [confirmation, setConfirmation] = useState<PendingConfirmation | null>(null)
@@ -595,10 +596,8 @@ export function App(): React.JSX.Element {
   }
   const importConnectionArchive = async (): Promise<void> => {
     try {
-      const result = await window.api.bookmarks.importArchive()
-      if (!result) return
-      await reloadSidebarData()
-      showToast(t('app.importedValueConnectionsAndValueNewGroupsCredentials', { value0: result.importedConnections, value1: result.importedGroups }), 'success')
+      const preview = await window.api.bookmarks.previewArchive()
+      if (preview) setArchiveImportPreview(preview)
     } catch (error) { showError(errorMessage(error)) }
   }
 
@@ -705,6 +704,7 @@ export function App(): React.JSX.Element {
     {deploymentDialog && activeBookmark && activeTab?.sessionId && <DeploymentDialog bookmark={activeBookmark} sessionId={activeTab.sessionId} onClose={() => setDeploymentDialog(false)} onConfirm={confirmAction} onError={showError} />}
     {tunnelDialog && activeBookmark && activeTab?.sessionId && <TunnelDialog bookmark={activeBookmark} sessionId={activeTab.sessionId} onClose={() => setTunnelDialog(false)} onError={showError} />}
     {importPreview && <SshConfigImportDialog preview={importPreview} onClose={() => setImportPreview(null)} onImported={async () => { setImportPreview(null); await reloadSidebarData() }} onError={showError} />}
+    {archiveImportPreview && <BookmarkArchiveImportDialog preview={archiveImportPreview} onClose={() => setArchiveImportPreview(null)} onImported={async (result) => { setArchiveImportPreview(null); await reloadSidebarData(); showToast(t('app.importedValueConnectionsAndValueNewGroupsCredentials', { value0: result.importedConnections, value1: result.importedGroups }), 'success') }} onError={showError} />}
     {confirmation && <ConfirmationDialog confirmation={confirmation} onDecision={resolveConfirmation} />}
     {toast && <div className={`toast ${toastKind}`}>{toast}</div>}
   </div>
@@ -913,6 +913,65 @@ function SshConfigImportDialog({ preview, onClose, onImported, onError }: { prev
       <em>{entry.privateKeyPath ? t('common.privateKey') : 'Agent'}</em>
     </label>)}</div>
     <div className="dialog-actions"><button className="secondary-button" onClick={onClose}>{t('common.cancel')}</button><button className="primary-button" disabled={!selected.size || loading} onClick={() => void importSelected()}>{loading ? t('app.importing') : t('app.importValueConnections', { value0: selected.size })}</button></div>
+  </div></Modal>
+}
+
+function BookmarkArchiveImportDialog({ preview, onClose, onImported, onError }: { preview: BookmarkArchivePreview; onClose(): void; onImported(result: { importedConnections: number; importedGroups: number }): void; onError(message: string): void }): React.JSX.Element {
+  const { t } = useI18n()
+  const connectionGroups = useMemo(() => new Set(preview.connections.map((item) => item.groupName).filter(Boolean)), [preview])
+  const emptyGroups = useMemo(() => preview.groups.filter((group) => group && !connectionGroups.has(group)), [preview, connectionGroups])
+  const [selectedConnections, setSelectedConnections] = useState(() => new Set(preview.connections.map((item) => item.id)))
+  const [selectedGroups, setSelectedGroups] = useState(() => new Set(emptyGroups))
+  const [loading, setLoading] = useState(false)
+  const byId = useMemo(() => new Map(preview.connections.map((item) => [item.id, item])), [preview])
+  const sourceKeys: Record<BookmarkArchiveSource, MessageKey> = { lunaMux: 'app.archiveSourceLunaMux', lunaRemote: 'app.archiveSourceLunaRemote', legacy: 'app.archiveSourceLegacy' }
+  const toggleConnection = (id: string): void => setSelectedConnections((current) => {
+    const next = new Set(current)
+    if (next.has(id)) {
+      next.delete(id)
+      let changed = true
+      while (changed) {
+        changed = false
+        for (const entry of preview.connections) {
+          if (next.has(entry.id) && entry.jumpBookmarkId && !next.has(entry.jumpBookmarkId)) {
+            next.delete(entry.id)
+            changed = true
+          }
+        }
+      }
+    } else {
+      let currentId: string | undefined = id
+      while (currentId && !next.has(currentId)) {
+        next.add(currentId)
+        currentId = byId.get(currentId)?.jumpBookmarkId || undefined
+      }
+    }
+    return next
+  })
+  const toggleGroup = (group: string): void => setSelectedGroups((current) => {
+    const next = new Set(current)
+    if (next.has(group)) next.delete(group); else next.add(group)
+    return next
+  })
+  const importSelected = async (): Promise<void> => {
+    setLoading(true)
+    try {
+      const result = await window.api.bookmarks.importArchive(preview.previewId, [...selectedConnections], [...selectedGroups])
+      onImported(result)
+    } catch (error) { onError(errorMessage(error)) }
+    finally { setLoading(false) }
+  }
+  return <Modal title={t('app.importConnectionBackup')} onClose={onClose} wide><div className="ssh-import-dialog archive-import-dialog">
+    <div className="import-source" title={preview.path}>{preview.path}</div>
+    <div className="archive-import-meta"><span>{t('app.backupSourceValue', { value0: t(sourceKeys[preview.source]) })}</span><span>{t('app.exportedAtValue', { value0: new Date(preview.exportedAt).toLocaleString() })}</span></div>
+    <div className="archive-import-notice"><KeyRound size={15} /><span>{t('app.archiveCredentialsNotImported')}</span></div>
+    {emptyGroups.length > 0 && <fieldset className="archive-import-groups"><legend>{t('app.emptyGroups')}</legend><div>{emptyGroups.map((group) => <label key={group}><input type="checkbox" checked={selectedGroups.has(group)} onChange={() => toggleGroup(group)} /><span>{group}</span></label>)}</div></fieldset>}
+    <div className="import-list">{preview.connections.length === 0 ? <div className="import-empty">{t('app.noConnectionsInBackup')}</div> : preview.connections.map((entry) => <label key={entry.id}>
+      <input type="checkbox" checked={selectedConnections.has(entry.id)} onChange={() => toggleConnection(entry.id)} />
+      <span><strong>{entry.name}</strong><small>{entry.username}@{entry.host}:{entry.port}{entry.jumpBookmarkId ? t('common.viaValue', { value0: byId.get(entry.jumpBookmarkId)?.name ?? entry.jumpBookmarkId }) : ''}</small></span>
+      <em>{entry.groupName || t('common.ungrouped')}</em>
+    </label>)}</div>
+    <div className="dialog-actions"><button className="secondary-button" onClick={onClose}>{t('common.cancel')}</button><button className="primary-button" disabled={(!selectedConnections.size && !selectedGroups.size) || loading} onClick={() => void importSelected()}>{loading ? t('app.importing') : t('app.importSelectedBackupData', { value0: selectedConnections.size, value1: selectedGroups.size })}</button></div>
   </div></Modal>
 }
 

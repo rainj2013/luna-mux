@@ -5,6 +5,8 @@ mod database;
 mod desktop;
 mod models;
 mod product;
+mod session_backend;
+mod session_contract;
 mod sessions;
 mod ssh_config;
 mod transfers;
@@ -109,6 +111,7 @@ pub fn run() {
                 tunnels,
                 ai_diagnostics: ai::AiDiagnostics::default(),
                 allowed_imports: Mutex::new(HashSet::new()),
+                pending_archive_imports: Mutex::new(std::collections::HashMap::new()),
                 exit_cleanup_started: AtomicBool::new(false),
             });
             Ok(())
@@ -131,6 +134,7 @@ pub fn run() {
             bookmarks_preview_ssh_config,
             bookmarks_import_ssh_config,
             bookmarks_export_archive,
+            bookmarks_preview_archive,
             bookmarks_import_archive,
             sessions_connect,
             sessions_disconnect,

@@ -2,6 +2,8 @@ node_modules/
 .cargo/config.toml
 app/frontend/dist/
 app/native/target/
+contracts/rust-tests/target/
+tests/native-core/target/
 app/native/gen/schemas/
 .vite/
 *.log
