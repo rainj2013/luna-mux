@@ -29,7 +29,7 @@ This file is the ordered, durable work breakdown. Task IDs do not change after w
 
 | ID | Status | Task | Acceptance |
 | --- | --- | --- | --- |
-| M2.1 | TODO | Select and spike the PTY library on Windows and macOS | Unicode, resize, interrupt, exit code, sustained output, and runtime cleanup work on both platforms |
+| M2.1 | IN_PROGRESS | Select and spike the PTY library on Windows and macOS | `portable-pty` probe passes Unicode, resize, interrupt, and cleanup on Windows; the same probe must pass on macOS before completion |
 | M2.2 | TODO | Implement Windows PowerShell target | Same TerminalPane behavior as SSH; child tree is cleaned on close |
 | M2.3 | TODO | Implement Windows WSL discovery and targets | Installed distributions are selectable; cwd and command launch are predictable |
 | M2.4 | TODO | Implement macOS login-shell target | Shell is resolved without hardcoding zsh; process group cleanup works |

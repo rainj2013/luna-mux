@@ -5,6 +5,8 @@ mod control_contract;
 mod control_service;
 mod database;
 mod desktop;
+#[cfg(test)]
+mod local_pty_probe;
 mod models;
 mod product;
 mod sessions;

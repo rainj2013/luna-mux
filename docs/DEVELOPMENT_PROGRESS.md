@@ -5,10 +5,10 @@ This is the durable development checkpoint. Update it in every development sessi
 ## Current checkpoint
 
 - Date: 2026-08-12
-- Phase: M1 - Terminal runtime abstraction, with the M4.8 control boundary established
-- Active task: M1.2 - Wrap existing SSH manager in `InProcessSshTerminalBackend`
-- Task progress: 13 of 53 done (24.53%); 1 in progress
-- Overall state: M0 foundation and M1 terminal-runtime contract are complete; SSH runtime adaptation is in progress
+- Phase: M2 - Cross-platform local PTY spike, with the M4.8 control boundary established
+- Active task: M2.1 - Select and spike the PTY library on Windows and macOS
+- Task progress: 13 of 53 done (24.53%); 2 in progress (M1.2 and M2.1 are explicitly parallel platform-boundary tasks)
+- Overall state: M0 foundation and M1.1/M1.3-M1.5 runtime boundaries are complete; M1.2 SSH regression and M2.1 local PTY validation remain in progress
 - Baseline Luna Remote commit: `7ccc61f0bb1ea7ffb74556c1fe207e802bfbfd2f`
 - Luna Mux repository: `D:\code\luna-mux`
 - Luna Remote source repository: `D:\code\ssh_tools`
@@ -36,18 +36,21 @@ This is the durable development checkpoint. Update it in every development sessi
 - Made the shared React `TerminalPane` transport-independent. It now binds by `runtimeId`, consumes normalized runtime output events, uses runtime flow-control/resize/write APIs, and catches up from the bounded output cursor when a pane mounts.
 - Added a mock `TerminalBackend` contract suite covering target capabilities, runtime lifecycle, UTF-8 output cursors, writes, resize, flow control, interrupt, list, and close.
 - Documented the future daemon backend extension point as a transport-neutral runtime contract; no daemon process, persistence, or IPC wire protocol is implemented.
+- Selected `portable-pty` 0.9 as the local PTY implementation candidate and added a Windows ConPTY probe for Unicode output, resize, interrupt input, and cleanup.
 
 ## In progress
 
-- Existing SSH connections are not yet fully regression-validated through `InProcessSshTerminalBackend`; M1.2 is now active.
+- Existing SSH connections are not yet fully regression-validated through `InProcessSshTerminalBackend`; M1.2 remains a parallel active task.
+- The local PTY spike passes on Windows. macOS validation is still required; M2.1 remains in progress.
 - M4.8 is complete as a foundation task: only read-only terminal target/runtime discovery and event reads are implemented. No external Agent transport or mutating Agent operation is enabled yet.
 - The existing Luna Remote-derived `SessionManager` and non-terminal UI `sessionId` fields remain compatibility-bound implementation names for SFTP, tunnels, transfers, and Host Key prompts; they do not define the new Mux Session domain model.
 
 ## Next actions
 
-1. Wrap the existing SSH manager as `InProcessSshTerminalBackend` under M1.2 without changing current SSH behavior.
-2. Select and spike the cross-platform PTY library under M2.1 after the SSH runtime boundary is stable.
-3. Extend the control catalog and add an authenticated local Agent adapter before exposing write/control operations.
+1. Complete SSH/SFTP/tunnel regression validation for M1.2.
+2. Run the same `portable-pty` probe on macOS and record platform-specific process cleanup behavior.
+3. Implement Windows PowerShell local target under M2.2 after M2.1 passes on both platforms.
+4. Extend the control catalog and add an authenticated local Agent adapter before exposing write/control operations.
 
 ## Verification evidence
 
@@ -78,6 +81,9 @@ This is the durable development checkpoint. Update it in every development sessi
 | `npm run i18n:check` after runtime terminology update | Passed; 420 keys | 2026-08-12 |
 | `cargo test --manifest-path app/native/Cargo.toml terminal_backend` | Passed; mock backend lifecycle and UTF-8 cursor suite | 2026-08-12 |
 | `cargo test --manifest-path app/native/Cargo.toml` after TerminalPane/backend contract work | Passed (45 tests) | 2026-08-12 |
+| `cargo test --manifest-path app/native/Cargo.toml local_pty_probe` | Passed on Windows ConPTY; Unicode, resize, interrupt input, and cleanup | 2026-08-12 |
+| `cargo check --manifest-path app/native/Cargo.toml` after portable-pty selection | Passed; portable-pty 0.9 compiles in the native target | 2026-08-12 |
+| `cargo test --manifest-path app/native/Cargo.toml` after portable-pty selection | Passed (46 tests) | 2026-08-12 |
 
 ## Decision log
 
@@ -98,6 +104,7 @@ This is the durable development checkpoint. Update it in every development sessi
 | 2026-08-12 | Luna Mux application icons use editable SVG masters and one Tauri generation command; PNG/ICO are byte-checked, ICNS structure is validated, and old SSH-centric files are removed from the independent repository. |
 | 2026-08-12 | Agent operation of Luna Mux is a separate control-plane concern from agent-to-agent MCP. `LunaControlService` is the sole core entry point; future transports authenticate callers and inject scoped grants. |
 | 2026-08-12 | A mock terminal backend is the conformance fixture for local PTY and future daemon implementations; TerminalPane and Mux Session code must depend only on `TerminalBackend`, not on SSH internals. |
+| 2026-08-12 | `portable-pty` 0.9 is the local PTY candidate. The probe responds to ConPTY's initial `ESC[6n` cursor query; production xterm.js remains responsible for terminal protocol responses. |
 
 ## Development update protocol
 
