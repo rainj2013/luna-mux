@@ -82,6 +82,213 @@ pub struct BookmarkArchive {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct MuxSession {
+    pub id: String,
+    pub name: String,
+    pub root_path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<MuxSplitNode>,
+    pub sort_order: i64,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MuxSessionInput {
+    #[serde(default)]
+    pub id: Option<String>,
+    pub name: String,
+    #[serde(default)]
+    pub root_path: String,
+    #[serde(default)]
+    pub layout: Option<MuxSplitNode>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum MuxSplitNode {
+    Pane {
+        pane_id: String,
+    },
+    Split {
+        direction: MuxSplitDirection,
+        ratio: f64,
+        first: Box<MuxSplitNode>,
+        second: Box<MuxSplitNode>,
+    },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum MuxSplitDirection {
+    Horizontal,
+    Vertical,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum MuxPaneKind {
+    Terminal,
+    Browser,
+}
+
+impl MuxPaneKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Terminal => "terminal",
+            Self::Browser => "browser",
+        }
+    }
+
+    pub fn parse(value: &str) -> Self {
+        match value {
+            "browser" => Self::Browser,
+            _ => Self::Terminal,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MuxPane {
+    pub id: String,
+    pub mux_session_id: String,
+    pub kind: MuxPaneKind,
+    pub title: String,
+    pub target_id: String,
+    pub bookmark_id: String,
+    pub cwd: String,
+    pub command: String,
+    pub launch_profile_id: String,
+    pub sort_order: i64,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MuxPaneInput {
+    #[serde(default)]
+    pub id: Option<String>,
+    pub mux_session_id: String,
+    pub kind: MuxPaneKind,
+    pub title: String,
+    pub target_id: String,
+    #[serde(default)]
+    pub bookmark_id: String,
+    #[serde(default)]
+    pub cwd: String,
+    #[serde(default)]
+    pub command: String,
+    #[serde(default)]
+    pub launch_profile_id: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserResource {
+    pub id: String,
+    pub mux_session_id: String,
+    pub name: String,
+    pub source_pane_id: String,
+    pub bookmark_id: String,
+    pub url: String,
+    pub temporary_profile: bool,
+    pub sort_order: i64,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserResourceInput {
+    #[serde(default)]
+    pub id: Option<String>,
+    pub mux_session_id: String,
+    pub name: String,
+    #[serde(default)]
+    pub source_pane_id: String,
+    #[serde(default)]
+    pub bookmark_id: String,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub temporary_profile: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentControlGrantRecord {
+    pub id: String,
+    pub source_pane_id: String,
+    pub target_resource_kind: String,
+    pub target_resource_id: String,
+    pub access: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentControlGrantInput {
+    pub source_pane_id: String,
+    pub target_resource_kind: String,
+    pub target_resource_id: String,
+    pub access: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ControlAuditRecord {
+    pub id: String,
+    pub timestamp: String,
+    pub caller_id: String,
+    pub caller_kind: String,
+    pub operation: String,
+    pub resource_kind: String,
+    pub resource_id: String,
+    pub arguments: serde_json::Value,
+    pub result: String,
+    pub error_code: String,
+}
+
+#[cfg(test)]
+mod mux_model_tests {
+    use super::{MuxSplitDirection, MuxSplitNode};
+    use serde_json::json;
+
+    #[test]
+    fn split_node_matches_the_typescript_camel_case_shape() {
+        let layout = MuxSplitNode::Split {
+            direction: MuxSplitDirection::Horizontal,
+            ratio: 0.4,
+            first: Box::new(MuxSplitNode::Pane {
+                pane_id: "pane-a".into(),
+            }),
+            second: Box::new(MuxSplitNode::Pane {
+                pane_id: "pane-b".into(),
+            }),
+        };
+        assert_eq!(
+            serde_json::to_value(layout).expect("serialize split layout"),
+            json!({
+                "type": "split",
+                "direction": "horizontal",
+                "ratio": 0.4,
+                "first": { "type": "pane", "paneId": "pane-a" },
+                "second": { "type": "pane", "paneId": "pane-b" }
+            })
+        );
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub enum BookmarkArchiveSource {
     LunaMux,
     LunaRemote,
@@ -735,6 +942,13 @@ pub struct TunnelSummary {
     pub error: Option<String>,
     #[serde(default)]
     pub removed: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserTunnel {
+    pub tunnel: TunnelSummary,
+    pub local_url: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

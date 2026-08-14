@@ -2,6 +2,9 @@ node_modules/
 .cargo/config.toml
 app/frontend/dist/
 app/native/target/
+app/native/target-*/
+/target/
+app/native/binaries/agent-browser-*
 contracts/rust-tests/target/
 tests/native-core/target/
 app/native/gen/schemas/

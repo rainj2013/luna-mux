@@ -1,5 +1,5 @@
 {
-  "contractVersion": 1,
+  "contractVersion": 2,
   "purpose": "Transport-neutral control boundary for AI Agents, CLI, and local automation",
   "callerIdentity": "Injected by an authenticated adapter; never accepted from request JSON",
   "accessLevels": ["read", "write", "control"],
@@ -21,7 +21,8 @@
       "operation",
       "resource",
       "arguments",
-      "idempotencyKey"
+      "idempotencyKey",
+      "approvalId"
     ],
     "response": ["requestId", "result"],
     "errors": [
@@ -30,6 +31,8 @@
       "invalidArguments",
       "notFound",
       "unauthorized",
+      "approvalRequired",
+      "approvalDenied",
       "conflict",
       "unavailable",
       "internal"
@@ -37,12 +40,67 @@
   },
   "initialOperations": [
     {
+      "name": "agents.list",
+      "version": 1,
+      "access": "read",
+      "resourceKind": "agent",
+      "mutating": false,
+      "supportsIdempotency": true,
+      "approval": "none"
+    },
+    {
+      "name": "agents.get_status",
+      "version": 1,
+      "access": "read",
+      "resourceKind": "agent",
+      "mutating": false,
+      "supportsIdempotency": true,
+      "approval": "none"
+    },
+    {
+      "name": "agents.send_task",
+      "version": 1,
+      "access": "write",
+      "resourceKind": "agent",
+      "mutating": true,
+      "supportsIdempotency": true,
+      "approval": "user"
+    },
+    {
+      "name": "agents.interrupt",
+      "version": 1,
+      "access": "control",
+      "resourceKind": "agent",
+      "mutating": true,
+      "supportsIdempotency": true,
+      "approval": "user"
+    },
+    {
+      "name": "mux.sessions.list",
+      "version": 1,
+      "access": "read",
+      "resourceKind": "muxSession",
+      "mutating": false,
+      "supportsIdempotency": true,
+      "approval": "none"
+    },
+    {
+      "name": "mux.panes.list",
+      "version": 1,
+      "access": "read",
+      "resourceKind": "pane",
+      "mutating": false,
+      "supportsIdempotency": true,
+      "approval": "none"
+    },
+    {
       "name": "terminal.targets.list",
       "version": 1,
       "access": "read",
       "resourceKind": "terminalTarget",
       "mutating": false,
-      "supportsIdempotency": true
+      "supportsIdempotency": true,
+      "approval": "none"
     },
     {
       "name": "terminal.runtimes.list",
@@ -50,12 +108,218 @@
       "access": "read",
       "resourceKind": "terminalRuntime",
       "mutating": false,
-      "supportsIdempotency": true
+      "supportsIdempotency": true,
+      "approval": "none"
+    },
+    {
+      "name": "terminal.runtime.output.read",
+      "version": 1,
+      "access": "read",
+      "resourceKind": "terminalRuntime",
+      "mutating": false,
+      "supportsIdempotency": true,
+      "approval": "none"
+    },
+    {
+      "name": "terminal.runtime.write",
+      "version": 1,
+      "access": "write",
+      "resourceKind": "terminalRuntime",
+      "mutating": true,
+      "supportsIdempotency": true,
+      "approval": "user"
+    },
+    {
+      "name": "terminal.runtime.resize",
+      "version": 1,
+      "access": "write",
+      "resourceKind": "terminalRuntime",
+      "mutating": true,
+      "supportsIdempotency": true,
+      "approval": "none"
+    },
+    {
+      "name": "terminal.runtime.flow.set",
+      "version": 1,
+      "access": "write",
+      "resourceKind": "terminalRuntime",
+      "mutating": true,
+      "supportsIdempotency": true,
+      "approval": "none"
+    },
+    {
+      "name": "terminal.runtime.interrupt",
+      "version": 1,
+      "access": "control",
+      "resourceKind": "terminalRuntime",
+      "mutating": true,
+      "supportsIdempotency": true,
+      "approval": "user"
+    },
+    {
+      "name": "terminal.runtime.close",
+      "version": 1,
+      "access": "control",
+      "resourceKind": "terminalRuntime",
+      "mutating": true,
+      "supportsIdempotency": true,
+      "approval": "user"
+    },
+    {
+      "name": "transfer.enqueue",
+      "version": 1,
+      "access": "control",
+      "resourceKind": "terminalRuntime",
+      "mutating": true,
+      "supportsIdempotency": true,
+      "approval": "user"
+    },
+    {
+      "name": "transfer.cancel",
+      "version": 1,
+      "access": "control",
+      "resourceKind": "transfer",
+      "mutating": true,
+      "supportsIdempotency": true,
+      "approval": "user"
+    },
+    {
+      "name": "tunnel.start",
+      "version": 1,
+      "access": "control",
+      "resourceKind": "terminalRuntime",
+      "mutating": true,
+      "supportsIdempotency": true,
+      "approval": "user"
+    },
+    {
+      "name": "tunnel.stop",
+      "version": 1,
+      "access": "control",
+      "resourceKind": "tunnel",
+      "mutating": true,
+      "supportsIdempotency": true,
+      "approval": "user"
+    },
+    {
+      "name": "browser.runtimes.list",
+      "version": 1,
+      "access": "read",
+      "resourceKind": "browserRuntime",
+      "mutating": false,
+      "supportsIdempotency": true,
+      "approval": "none"
+    },
+    {
+      "name": "browser.navigate",
+      "version": 1,
+      "access": "write",
+      "resourceKind": "browserRuntime",
+      "mutating": true,
+      "supportsIdempotency": true,
+      "approval": "user"
+    },
+    {
+      "name": "browser.snapshot",
+      "version": 1,
+      "access": "read",
+      "resourceKind": "browserRuntime",
+      "mutating": false,
+      "supportsIdempotency": true,
+      "approval": "none"
+    },
+    {
+      "name": "browser.screenshot",
+      "version": 1,
+      "access": "read",
+      "resourceKind": "browserRuntime",
+      "mutating": false,
+      "supportsIdempotency": true,
+      "approval": "none"
+    },
+    {
+      "name": "browser.click",
+      "version": 1,
+      "access": "write",
+      "resourceKind": "browserRuntime",
+      "mutating": true,
+      "supportsIdempotency": true,
+      "approval": "user"
+    },
+    {
+      "name": "browser.type",
+      "version": 1,
+      "access": "write",
+      "resourceKind": "browserRuntime",
+      "mutating": true,
+      "supportsIdempotency": true,
+      "approval": "user"
+    },
+    {
+      "name": "browser.press",
+      "version": 1,
+      "access": "write",
+      "resourceKind": "browserRuntime",
+      "mutating": true,
+      "supportsIdempotency": true,
+      "approval": "user"
+    },
+    {
+      "name": "browser.scroll",
+      "version": 1,
+      "access": "write",
+      "resourceKind": "browserRuntime",
+      "mutating": true,
+      "supportsIdempotency": true,
+      "approval": "user"
+    },
+    {
+      "name": "browser.evaluate",
+      "version": 1,
+      "access": "write",
+      "resourceKind": "browserRuntime",
+      "mutating": true,
+      "supportsIdempotency": true,
+      "approval": "user"
+    },
+    {
+      "name": "browser.wait",
+      "version": 1,
+      "access": "read",
+      "resourceKind": "browserRuntime",
+      "mutating": false,
+      "supportsIdempotency": true,
+      "approval": "none"
+    },
+    {
+      "name": "browser.resize",
+      "version": 1,
+      "access": "write",
+      "resourceKind": "browserRuntime",
+      "mutating": true,
+      "supportsIdempotency": true,
+      "approval": "none"
+    },
+    {
+      "name": "browser.close",
+      "version": 1,
+      "access": "control",
+      "resourceKind": "browserRuntime",
+      "mutating": true,
+      "supportsIdempotency": true,
+      "approval": "user"
     }
   ],
+  "approvalPolicy": {
+    "trustedResolver": "desktopUiOnly",
+    "ticket": "singleUse",
+    "binding": ["callerId", "operation", "resource", "arguments"],
+    "expiresAfterSeconds": 300
+  },
   "eventStream": {
     "bounded": true,
     "cursor": "monotonicSequence",
+    "timestamp": "rfc3339",
     "truncation": "requestedSequenceBeforeEarliestSequenceReturnsTruncated"
   }
 }

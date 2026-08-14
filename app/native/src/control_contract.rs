@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub const CONTROL_CONTRACT_VERSION: u32 = 1;
+pub const CONTROL_CONTRACT_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -18,6 +18,13 @@ pub enum ControlAccess {
     Read,
     Write,
     Control,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ControlApprovalRequirement {
+    None,
+    User,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -106,6 +113,7 @@ pub struct ControlOperationDescriptor {
     pub resource_kind: ControlResourceKind,
     pub mutating: bool,
     pub supports_idempotency: bool,
+    pub approval: ControlApprovalRequirement,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -124,6 +132,7 @@ pub struct ControlRequest {
     pub resource: Option<ControlResourceRef>,
     pub arguments: Value,
     pub idempotency_key: Option<String>,
+    pub approval_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -141,6 +150,8 @@ pub enum ControlErrorCode {
     InvalidArguments,
     NotFound,
     Unauthorized,
+    ApprovalRequired,
+    ApprovalDenied,
     Conflict,
     Unavailable,
     Internal,
@@ -152,14 +163,41 @@ pub struct ControlError {
     pub code: ControlErrorCode,
     pub message: String,
     pub retryable: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub details: Option<Value>,
 }
 
 pub type ControlResult<T> = Result<T, ControlError>;
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ControlApprovalStatus {
+    Pending,
+    Approved,
+    Denied,
+    Consumed,
+    Expired,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ControlApproval {
+    pub approval_id: String,
+    pub caller_id: String,
+    pub caller_kind: ControlCallerKind,
+    pub operation: String,
+    pub resource: Option<ControlResourceRef>,
+    pub requested_at: String,
+    pub expires_at: String,
+    pub status: ControlApprovalStatus,
+    pub resolved_at: Option<String>,
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ControlEvent {
     pub sequence: u64,
+    pub timestamp: String,
     pub event_type: String,
     pub resource: Option<ControlResourceRef>,
     pub payload: Value,
@@ -189,9 +227,10 @@ mod tests {
             resource: None,
             arguments: json!({}),
             idempotency_key: None,
+            approval_id: None,
         };
         let value = serde_json::to_value(request).unwrap();
-        assert_eq!(value["contractVersion"], 1);
+        assert_eq!(value["contractVersion"], 2);
         assert!(value.get("caller").is_none());
         assert!(value.get("callerId").is_none());
     }

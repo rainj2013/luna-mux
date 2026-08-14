@@ -3,7 +3,8 @@ import { listen } from '@tauri-apps/api/event'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { readText, writeText } from '@tauri-apps/plugin-clipboard-manager'
-import type { AiSettingsInput, AiShell, AppApi, AppEvent, AppIconId, AppLanguage, BookmarkInput, ConnectInput, ConflictResolution, DeploymentProfile, LunaRemoteImportSelection, NativeMenuLabels, Platform, PortForwardProfile, TerminalSettings, TransferRequest, UiTheme } from './types'
+import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification'
+import type { AgentAdapterInstallAction, AgentControlGrantInput, AiSettingsInput, AiShell, AppApi, AppEvent, AppIconId, AppLanguage, BookmarkInput, BrowserRuntimeEvent, ConnectInput, ConflictResolution, DeploymentProfile, LunaRemoteImportSelection, ManagedAgentEvent, NativeMenuLabels, Platform, PortForwardProfile, TerminalSettings, TransferRequest, UiTheme } from './types'
 import type { TerminalRuntimeEvent } from './terminal-runtime-contract'
 
 const call = <T>(command: string, args?: Record<string, unknown>): Promise<T> => invoke<T>(command, args).catch((error) => {
@@ -34,7 +35,13 @@ export async function createTauriApi(): Promise<AppApi> {
       writeClipboard: (text) => writeText(text.slice(0, 4 * 1024 * 1024)),
       minimizeWindow: () => currentWindow.minimize(),
       toggleMaximizeWindow: () => currentWindow.toggleMaximize(),
-      closeWindow: () => currentWindow.close()
+      closeWindow: () => currentWindow.close(),
+      isWindowFocused: () => currentWindow.isFocused(),
+      notify: async (title, body) => {
+        let granted = await isPermissionGranted()
+        if (!granted) granted = await requestPermission() === 'granted'
+        if (granted) sendNotification({ title, body })
+      }
     },
     bookmarks: {
       list: () => call('bookmarks_list'),
@@ -53,6 +60,32 @@ export async function createTauriApi(): Promise<AppApi> {
       previewLunaRemote: (path) => call('bookmarks_preview_luna_remote', { path }),
       chooseLunaRemoteDatabase: () => call('bookmarks_choose_luna_remote_database'),
       importLunaRemote: (selection: LunaRemoteImportSelection) => call('bookmarks_import_luna_remote', { selection })
+    },
+    muxSessions: {
+      list: () => call('mux_sessions_list'),
+      save: (input) => call('mux_sessions_save', { input }),
+      remove: (id) => call('mux_sessions_remove', { id })
+    },
+    muxPanes: {
+      list: (muxSessionId) => call('mux_panes_list', { muxSessionId }),
+      save: (input) => call('mux_panes_save', { input }),
+      remove: (id) => call('mux_panes_remove', { id })
+    },
+    browserResources: {
+      list: (muxSessionId) => call('browser_resources_list', { muxSessionId }),
+      save: (input) => call('browser_resources_save', { input }),
+      remove: (id) => call('browser_resources_remove', { id })
+    },
+    browserRuntimes: {
+      discoverChrome: () => call('browser_chrome_discover'),
+      create: (request) => call('browser_runtime_create', { request }),
+      list: () => call('browser_runtimes_list'),
+      close: (runtimeId) => call('browser_runtime_close', { runtimeId }),
+      navigate: (runtimeId, url) => call('browser_runtime_navigate', { runtimeId, url }),
+      focusExternal: (runtimeId) => call('browser_runtime_focus_external', { runtimeId }),
+      resize: (runtimeId, width, height) => call('browser_runtime_resize', { runtimeId, width, height }),
+      mouse: (runtimeId, event) => call('browser_runtime_mouse', { runtimeId, event }),
+      key: (runtimeId, event) => call('browser_runtime_key', { runtimeId, event })
     },
     bookmarkGroups: {
       list: () => call('bookmark_groups_list'),
@@ -80,6 +113,21 @@ export async function createTauriApi(): Promise<AppApi> {
       flow: (runtimeId, paused) => call('terminal_runtime_flow', { runtimeId, paused }),
       interrupt: (runtimeId) => call('terminal_runtime_interrupt', { runtimeId }),
       close: (runtimeId) => call('terminal_runtime_close', { runtimeId })
+    },
+    managedAgents: {
+      profiles: () => call('managed_agent_profiles_list'),
+      availability: (profileId, targetId) => call('managed_agent_profile_availability', { profileId, targetId }),
+      events: () => call('managed_agents_events'),
+      listGrants: (sourcePaneId) => call('managed_agent_grants_list', { sourcePaneId }),
+      saveGrant: (input: AgentControlGrantInput) => call('managed_agent_grants_save', { input }),
+      removeGrant: (id) => call('managed_agent_grants_remove', { id }),
+      adapterStatus: () => call('managed_agent_adapter_status'),
+      previewAdapter: (action: AgentAdapterInstallAction) => call('managed_agent_adapter_preview', { action }),
+      applyAdapter: (action: AgentAdapterInstallAction) => call('managed_agent_adapter_apply', { action })
+    },
+    controlAudit: {
+      list: (limit) => call('control_audit_list', { limit }),
+      clear: () => call('control_audit_clear')
     },
     files: {
       home: () => call('files_home'),
@@ -117,6 +165,7 @@ export async function createTauriApi(): Promise<AppApi> {
       removeProfile: (id) => call('tunnels_remove_profile', { id }),
       list: (sessionId) => call('tunnels_list', { sessionId }),
       start: (sessionId, profileId) => call('tunnels_start', { sessionId, profileId }),
+      startBrowser: (sessionId, browserResourceId, sourcePaneId, remoteUrl) => call('browser_tunnel_start', { sessionId, browserResourceId, sourcePaneId, remoteUrl }),
       stop: (sessionId, tunnelId) => call('tunnels_stop', { sessionId, tunnelId })
     },
     diagnostics: { export: () => call('diagnostics_export') },
@@ -168,6 +217,22 @@ export async function createTauriApi(): Promise<AppApi> {
       void listen<TerminalRuntimeEvent>('terminal-runtime:event', (event) => { if (!stopped) listener(event.payload) }).then((stop) => {
         if (stopped) stop(); else unlisten = stop
       }).catch((error) => console.error('Failed to register terminal runtime event listener', error))
+      return () => { stopped = true; unlisten?.() }
+    },
+    onManagedAgentEvent: (listener: (event: ManagedAgentEvent) => void) => {
+      let stopped = false
+      let unlisten: (() => void) | undefined
+      void listen<ManagedAgentEvent>('managed-agent:event', (event) => { if (!stopped) listener(event.payload) }).then((stop) => {
+        if (stopped) stop(); else unlisten = stop
+      }).catch((error) => console.error('Failed to register managed agent event listener', error))
+      return () => { stopped = true; unlisten?.() }
+    },
+    onBrowserRuntimeEvent: (listener) => {
+      let stopped = false
+      let unlisten: (() => void) | undefined
+      void listen<BrowserRuntimeEvent>('browser-runtime:event', (event) => { if (!stopped) listener(event.payload) }).then((stop) => {
+        if (stopped) stop(); else unlisten = stop
+      }).catch((error) => console.error('Failed to register browser runtime event listener', error))
       return () => { stopped = true; unlisten?.() }
     }
   }

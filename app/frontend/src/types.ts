@@ -6,6 +6,128 @@ import type {
   TerminalTarget
 } from './terminal-runtime-contract'
 
+export interface MuxSession {
+  id: string
+  name: string
+  rootPath: string
+  layout?: MuxSplitNode
+  sortOrder: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface MuxSessionInput {
+  id?: string
+  name: string
+  rootPath?: string
+  layout?: MuxSplitNode
+}
+
+export type MuxSplitNode =
+  | { type: 'pane'; paneId: string }
+  | { type: 'split'; direction: 'horizontal' | 'vertical'; ratio: number; first: MuxSplitNode; second: MuxSplitNode }
+
+export type MuxPaneKind = 'terminal'
+
+export interface ChromeInstallation {
+  executablePath: string
+  version: string
+}
+
+export type BrowserRuntimeStatus = 'starting' | 'running' | 'stopped' | 'error'
+
+export interface BrowserRuntime {
+  id: string
+  muxSessionId: string
+  browserResourceId: string
+  url: string
+  cdpPort: number
+  profilePath: string
+  processId: number
+  status: BrowserRuntimeStatus
+  error?: string
+}
+
+export interface BrowserRuntimeCreateRequest {
+  muxSessionId: string
+  browserResourceId: string
+  url?: string
+  temporaryProfile?: boolean
+}
+
+export type BrowserRuntimeEvent =
+  | { type: 'started'; runtime: BrowserRuntime }
+  | { type: 'status'; runtimeId: string; status: BrowserRuntimeStatus; error?: string }
+
+export interface BrowserMouseEvent {
+  eventType: 'mousePressed' | 'mouseReleased' | 'mouseMoved' | 'mouseWheel'
+  x: number
+  y: number
+  button?: 'none' | 'left' | 'middle' | 'right'
+  buttons?: number
+  deltaX?: number
+  deltaY?: number
+  modifiers?: number
+}
+
+export interface BrowserKeyEvent {
+  eventType: 'keyDown' | 'keyUp' | 'char'
+  key: string
+  code: string
+  text?: string
+  modifiers?: number
+}
+
+export interface MuxPane {
+  id: string
+  muxSessionId: string
+  kind: MuxPaneKind
+  title: string
+  targetId: string
+  bookmarkId: string
+  cwd: string
+  command: string
+  launchProfileId: string
+  sortOrder: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface MuxPaneInput {
+  id?: string
+  muxSessionId: string
+  kind: MuxPaneKind
+  title: string
+  targetId: string
+  bookmarkId?: string
+  cwd?: string
+  command?: string
+  launchProfileId?: string
+}
+
+export interface BrowserResource {
+  id: string
+  muxSessionId: string
+  name: string
+  sourcePaneId: string
+  bookmarkId: string
+  url: string
+  temporaryProfile: boolean
+  sortOrder: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface BrowserResourceInput {
+  id?: string
+  muxSessionId: string
+  name: string
+  sourcePaneId?: string
+  bookmarkId?: string
+  url?: string
+  temporaryProfile?: boolean
+}
+
 export type {
   TerminalRuntime,
   TerminalRuntimeCreateRequest,
@@ -16,6 +138,104 @@ export type {
 
 export type AuthType = 'password' | 'privateKey' | 'agent'
 export type Platform = 'darwin' | 'win32' | 'linux'
+
+export type ManagedAgentStatus = 'working' | 'waiting' | 'completed' | 'error'
+export type ManagedAgentWaitingReason = 'input' | 'permission' | 'external' | 'unknown'
+export type ManagedAgentEvidence = 'structuredHook' | 'terminalHeuristic'
+
+export interface AgentLaunchProfile {
+  id: string
+  label: string
+  adapter: string
+  command: string
+  builtIn: boolean
+}
+
+export interface AgentProfileAvailability {
+  profileId: string
+  targetId: string
+  available: boolean
+  detail: string
+}
+
+export interface ManagedAgentEvent {
+  sequence: number
+  timestamp: string
+  context: {
+    muxSessionId: string
+    paneId: string
+    runtimeId: string
+    agentId: string
+    launchProfileId: string
+  }
+  adapterId: string
+  agentSessionId?: string
+  agentTurnId?: string
+  hookEventName: string
+  status: ManagedAgentStatus
+  waitingReason?: ManagedAgentWaitingReason
+  evidence: ManagedAgentEvidence
+}
+
+export type AgentControlAccess = 'read' | 'write' | 'control'
+
+export interface AgentControlGrant {
+  id: string
+  sourcePaneId: string
+  targetResourceKind: 'pane' | 'browser'
+  targetResourceId: string
+  access: AgentControlAccess
+  createdAt: string
+  updatedAt: string
+}
+
+export interface AgentControlGrantInput {
+  sourcePaneId: string
+  targetResourceKind: 'pane' | 'browser'
+  targetResourceId: string
+  access: AgentControlAccess
+}
+
+export interface ControlAuditRecord {
+  id: string
+  timestamp: string
+  callerId: string
+  callerKind: string
+  operation: string
+  resourceKind: string
+  resourceId: string
+  arguments: Record<string, unknown>
+  result: string
+  errorCode: string
+}
+
+export type AgentAdapterInstallAction = 'install' | 'uninstall'
+
+export interface AgentAdapterInstallStatus {
+  installed: boolean
+  current: boolean
+  hooksPath: string
+  configPath: string
+  inlineHooksDetected: boolean
+  hooksDisabled: boolean
+  trustReviewRequired: boolean
+  warnings: string[]
+}
+
+export interface AgentAdapterInstallPreview {
+  action: AgentAdapterInstallAction
+  status: AgentAdapterInstallStatus
+  changed: boolean
+  backupWillBeCreated: boolean
+  beforeContents: string
+  afterContents: string
+  changes: { event: string; operation: string }[]
+}
+
+export interface AgentAdapterInstallResult {
+  status: AgentAdapterInstallStatus
+  backupPath?: string
+}
 
 export interface Bookmark {
   id: string
@@ -178,6 +398,11 @@ export interface TunnelSummary {
   targetPort: number
   status: TunnelStatus
   error?: string
+}
+
+export interface BrowserTunnel {
+  tunnel: TunnelSummary
+  localUrl: string
 }
 
 export interface HostKeyPrompt {
@@ -411,7 +636,9 @@ export interface AppApi {
     writeClipboard(text: string): Promise<void>
     minimizeWindow(): Promise<void>
     toggleMaximizeWindow(): Promise<void>
-    closeWindow(): Promise<void>
+      closeWindow(): Promise<void>
+      isWindowFocused(): Promise<boolean>
+      notify(title: string, body: string): Promise<void>
   }
   bookmarks: {
     list(): Promise<Bookmark[]>
@@ -447,6 +674,32 @@ export interface AppApi {
     flow(id: string, paused: boolean): void
     hostKeyDecision(id: string, accept: boolean): void
   }
+  muxSessions: {
+    list(): Promise<MuxSession[]>
+    save(input: MuxSessionInput): Promise<MuxSession>
+    remove(id: string): Promise<void>
+  }
+  muxPanes: {
+    list(muxSessionId?: string): Promise<MuxPane[]>
+    save(input: MuxPaneInput): Promise<MuxPane>
+    remove(id: string): Promise<void>
+  }
+  browserResources: {
+    list(muxSessionId?: string): Promise<BrowserResource[]>
+    save(input: BrowserResourceInput): Promise<BrowserResource>
+    remove(id: string): Promise<void>
+  }
+  browserRuntimes: {
+    discoverChrome(): Promise<ChromeInstallation | null>
+    create(request: BrowserRuntimeCreateRequest): Promise<BrowserRuntime>
+    list(): Promise<BrowserRuntime[]>
+    close(runtimeId: string): Promise<void>
+    navigate(runtimeId: string, url: string): Promise<void>
+    focusExternal(runtimeId: string): Promise<void>
+    resize(runtimeId: string, width: number, height: number): Promise<void>
+    mouse(runtimeId: string, event: BrowserMouseEvent): Promise<void>
+    key(runtimeId: string, event: BrowserKeyEvent): Promise<void>
+  }
   terminalRuntimes: {
     targets(): Promise<TerminalTarget[]>
     list(): Promise<TerminalRuntime[]>
@@ -457,6 +710,21 @@ export interface AppApi {
     flow(runtimeId: string, paused: boolean): Promise<void>
     interrupt(runtimeId: string): Promise<void>
     close(runtimeId: string): Promise<void>
+  }
+  managedAgents: {
+    profiles(): Promise<AgentLaunchProfile[]>
+    availability(profileId: string, targetId: string): Promise<AgentProfileAvailability>
+    events(): Promise<ManagedAgentEvent[]>
+    listGrants(sourcePaneId?: string): Promise<AgentControlGrant[]>
+    saveGrant(input: AgentControlGrantInput): Promise<AgentControlGrant>
+    removeGrant(id: string): Promise<boolean>
+    adapterStatus(): Promise<AgentAdapterInstallStatus>
+    previewAdapter(action: AgentAdapterInstallAction): Promise<AgentAdapterInstallPreview>
+    applyAdapter(action: AgentAdapterInstallAction): Promise<AgentAdapterInstallResult>
+  }
+  controlAudit: {
+    list(limit: number): Promise<ControlAuditRecord[]>
+    clear(): Promise<number>
   }
   files: {
     home(): Promise<string>
@@ -494,6 +762,7 @@ export interface AppApi {
     removeProfile(id: string): Promise<void>
     list(sessionId: string): Promise<TunnelSummary[]>
     start(sessionId: string, profileId: string): Promise<TunnelSummary>
+    startBrowser(sessionId: string, browserResourceId: string, sourcePaneId: string, remoteUrl: string): Promise<BrowserTunnel>
     stop(sessionId: string, tunnelId: string): Promise<void>
   }
   diagnostics: {
@@ -535,4 +804,6 @@ export interface AppApi {
   }
   onEvent(listener: (event: AppEvent) => void): () => void
   onTerminalRuntimeEvent(listener: (event: TerminalRuntimeEvent) => void): () => void
+  onManagedAgentEvent(listener: (event: ManagedAgentEvent) => void): () => void
+  onBrowserRuntimeEvent(listener: (event: BrowserRuntimeEvent) => void): () => void
 }

@@ -3,9 +3,10 @@ import { Terminal, type IBufferLine } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
-import { ChevronDown, ChevronUp, ClipboardPaste, Copy, Palette, Plug, Search, X } from 'lucide-react'
+import { ChevronDown, ChevronUp, ClipboardPaste, Copy, Palette, Play, Search, X } from 'lucide-react'
 import type { TerminalRuntimeEvent, TerminalSettings } from '../types'
 import { colorWithOpacity, terminalBackgroundStyle } from '../terminal-style'
+import { createTerminalOutputWriter, type TerminalOutputWriter } from '../terminal-output-writer'
 import { useI18n } from '../i18n'
 
 const terminalHighWaterMark = 1024 * 1024
@@ -16,6 +17,9 @@ const terminalSelectionTheme = {
   selectionForeground: '#16181b'
 }
 interface TerminalSearchMatch { row: number; col: number; length: number }
+interface PendingImePunctuation { text: string; createdAt: number; timer: number }
+
+const fullWidthPunctuationPattern = /^[\u00b7\u2014\u2018\u2019\u201c\u201d\u2026\u3000-\u303f\uff01-\uff0f\uff1a-\uff20\uff3b-\uff40\uff5b-\uff65\uffe5]+$/u
 
 function stringOffsetToBufferColumn(line: IBufferLine, offset: number): number {
   let stringOffset = 0
@@ -74,11 +78,16 @@ interface TerminalPaneProps {
   visible: boolean
   settings: TerminalSettings
   backgroundImage: string
-  onConnect?: () => void
+  stoppedState: {
+    title: string
+    description: string
+    actionLabel: string
+  }
+  onStart?: () => void
   onOpenSettings?: () => void
 }
 
-export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function TerminalPane({ runtimeId, connected, visible, settings, backgroundImage, onConnect, onOpenSettings }, ref): React.JSX.Element {
+export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function TerminalPane({ runtimeId, connected, visible, settings, backgroundImage, stoppedState, onStart, onOpenSettings }, ref): React.JSX.Element {
   const { t } = useI18n()
   const container = useRef<HTMLDivElement>(null)
   const terminal = useRef<Terminal | null>(null)
@@ -87,6 +96,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
   const searchMatches = useRef<TerminalSearchMatch[]>([])
   const activeSearchIndex = useRef(-1)
   const webglAddon = useRef<WebglAddon | null>(null)
+  const outputWriter = useRef<TerminalOutputWriter | null>(null)
   const runtimeIdRef = useRef(runtimeId)
   const connectedRef = useRef(connected)
   const boundRuntimeId = useRef<string | undefined>(undefined)
@@ -150,10 +160,27 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     term.open(container.current)
     fit.fit()
     terminal.current = term
+    const writer = createTerminalOutputWriter(term)
+    outputWriter.current = writer
     boundRuntimeId.current = runtimeIdRef.current
     let pendingOutput = 0
     let paused = false
     let disposed = false
+    let lastTerminalInput = { data: '', timestamp: 0 }
+    const pendingImePunctuation = new Set<PendingImePunctuation>()
+
+    const writeTerminalInput = (data: string): void => {
+      lastTerminalInput = { data, timestamp: performance.now() }
+      for (const pending of pendingImePunctuation) {
+        if (!data.includes(pending.text)) continue
+        window.clearTimeout(pending.timer)
+        pendingImePunctuation.delete(pending)
+        break
+      }
+      if (connectedRef.current && runtimeIdRef.current) {
+        void window.api.terminalRuntimes.write(runtimeIdRef.current, data)
+      }
+    }
 
     term.attachCustomKeyEventHandler((event) => {
       const commandKey = window.api.platform === 'darwin' ? event.metaKey : event.ctrlKey
@@ -172,12 +199,65 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
       if (commandKey && event.key.toLowerCase() === 'v' && event.type === 'keydown') {
         event.preventDefault()
         event.stopPropagation()
-        void window.api.system.readClipboard().then((text) => term.paste(text)).catch((error) => console.warn('Failed to paste into terminal', error))
+        void window.api.system.readClipboard().then((text) => { writer.markInteractive(); term.paste(text) }).catch((error) => console.warn('Failed to paste into terminal', error))
         return false
       }
+      if (event.type === 'keydown') writer.markInteractive(event.key === 'Enter')
       return true
     })
-    const input = term.onData((data) => { if (connectedRef.current && runtimeIdRef.current) void window.api.terminalRuntimes.write(runtimeIdRef.current, data) })
+    const input = term.onData(writeTerminalInput)
+    const textarea = term.textarea
+    let textareaValueBeforeInput: string | undefined
+    let lastTextareaValue = textarea?.value ?? ''
+    const insertedText = (before: string, after: string): string => {
+      let prefix = 0
+      while (prefix < before.length && prefix < after.length && before[prefix] === after[prefix]) prefix += 1
+      let beforeSuffix = before.length
+      let afterSuffix = after.length
+      while (beforeSuffix > prefix && afterSuffix > prefix && before[beforeSuffix - 1] === after[afterSuffix - 1]) {
+        beforeSuffix -= 1
+        afterSuffix -= 1
+      }
+      return after.slice(prefix, afterSuffix)
+    }
+    const queueDroppedImePunctuation = (text: string | null): void => {
+      if (window.api.platform !== 'win32' || !text || !fullWidthPunctuationPattern.test(text)) return
+      const now = performance.now()
+      if (lastTerminalInput.data.includes(text) && now - lastTerminalInput.timestamp < 16) return
+      if ([...pendingImePunctuation].some((pending) => pending.text === text && now - pending.createdAt < 8)) return
+      const pending: PendingImePunctuation = {
+        text,
+        createdAt: now,
+        timer: window.setTimeout(() => {
+          pendingImePunctuation.delete(pending)
+          if (disposed || !connectedRef.current || !runtimeIdRef.current) return
+          writer.markInteractive()
+          void window.api.terminalRuntimes.write(runtimeIdRef.current, text)
+        }, 32)
+      }
+      pendingImePunctuation.add(pending)
+    }
+    const rememberImeTextareaBeforeInput = (rawEvent: Event): void => {
+      const event = rawEvent as InputEvent
+      textareaValueBeforeInput = textarea?.value ?? lastTextareaValue
+      if (!['insertText', 'insertCompositionText', 'insertFromComposition'].includes(event.inputType)) return
+      queueDroppedImePunctuation(event.data)
+    }
+    const recoverDroppedImePunctuationFromInput = (rawEvent: Event): void => {
+      const event = rawEvent as InputEvent
+      const currentValue = textarea?.value ?? ''
+      if (['insertText', 'insertCompositionText', 'insertFromComposition'].includes(event.inputType)) {
+        queueDroppedImePunctuation(event.data || insertedText(textareaValueBeforeInput ?? lastTextareaValue, currentValue))
+      }
+      lastTextareaValue = currentValue
+      textareaValueBeforeInput = undefined
+    }
+    const recoverDroppedImePunctuationFromComposition = (rawEvent: Event): void => {
+      queueDroppedImePunctuation((rawEvent as CompositionEvent).data)
+    }
+    textarea?.addEventListener('beforeinput', rememberImeTextareaBeforeInput)
+    textarea?.addEventListener('input', recoverDroppedImePunctuationFromInput)
+    textarea?.addEventListener('compositionend', recoverDroppedImePunctuationFromComposition, true)
     const resize = term.onResize(({ cols, rows }) => { if (runtimeIdRef.current) void window.api.terminalRuntimes.resize(runtimeIdRef.current, cols, rows) })
     const stop = window.api.onTerminalRuntimeEvent((event: TerminalRuntimeEvent) => {
       if (event.type !== 'output' || event.payload.runtimeId !== runtimeIdRef.current) return
@@ -189,7 +269,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
         paused = true
         void window.api.terminalRuntimes.flow(event.payload.runtimeId, true)
       }
-      term.write(event.payload.data, () => {
+      writer.write(event.payload.data, () => {
         pendingOutput = Math.max(0, pendingOutput - length)
         if (paused && pendingOutput <= terminalLowWaterMark && runtimeIdRef.current) {
           paused = false
@@ -202,7 +282,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
           .then((result) => {
             if (disposed || result.runtimeId !== runtimeIdRef.current || !result.data || result.nextCursor <= outputCursor.current) return
             outputCursor.current = result.nextCursor
-            term.write(result.data)
+            writer.write(result.data)
           })
           .catch(() => undefined)
       : Promise.resolve()
@@ -217,9 +297,14 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     return () => {
       disposed = true
       if (paused && runtimeIdRef.current) void window.api.terminalRuntimes.flow(runtimeIdRef.current, false)
-      stop(); observer.disconnect(); input.dispose(); resize.dispose(); webglAddon.current?.dispose(); term.dispose()
+      for (const pending of pendingImePunctuation) window.clearTimeout(pending.timer)
+      pendingImePunctuation.clear()
+      textarea?.removeEventListener('beforeinput', rememberImeTextareaBeforeInput)
+      textarea?.removeEventListener('input', recoverDroppedImePunctuationFromInput)
+      textarea?.removeEventListener('compositionend', recoverDroppedImePunctuationFromComposition, true)
+      stop(); observer.disconnect(); input.dispose(); resize.dispose(); writer.dispose(); webglAddon.current?.dispose(); term.dispose()
       void catchUp
-      webglAddon.current = null; terminal.current = null; fitAddon.current = null
+      webglAddon.current = null; outputWriter.current = null; terminal.current = null; fitAddon.current = null
     }
   }, [shouldRenderTerminal])
 
@@ -240,6 +325,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
       webglAddon.current?.dispose()
       webglAddon.current = null
       element.dataset.renderer = 'dom'
+      outputWriter.current?.wrapRenderer()
       return
     }
     if (!webglAddon.current) {
@@ -253,6 +339,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
         term.loadAddon(webgl)
         webglAddon.current = webgl
         element.dataset.renderer = 'webgl'
+        outputWriter.current?.wrapRenderer()
       } catch {
         webglAddon.current?.dispose()
         webglAddon.current = null
@@ -332,7 +419,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     setSearchResult({ index: activeSearchIndex.current, count })
   }
 
-  if (!shouldRenderTerminal) return <div className="terminal-empty"><div className="terminal-mark">&gt;_</div><strong>{t('terminal.notConnected')}</strong><span>{t('terminal.connectToStartAnSshSession')}</span>{onConnect && <button className="terminal-connect-button" onClick={onConnect}><Plug size={15} />{t('common.connect')}</button>}</div>
+  if (!shouldRenderTerminal) return <div className="terminal-empty"><div className="terminal-mark">&gt;_</div><strong>{stoppedState.title}</strong><span>{stoppedState.description}</span>{onStart && <button className="terminal-connect-button" onClick={onStart}><Play size={15} />{stoppedState.actionLabel}</button>}</div>
   return <div className="terminal-shell" style={terminalBackgroundStyle(settings, backgroundImage)} onContextMenu={(event) => { event.preventDefault(); setContextMenu({ x: Math.max(4, Math.min(event.clientX, window.innerWidth - 210)), y: Math.max(4, Math.min(event.clientY, window.innerHeight - 210)), hasSelection: Boolean(terminal.current?.hasSelection()) }) }}>
     {searchOpen && <form className="terminal-search" onSubmit={(event) => { event.preventDefault(); search() }}>
       <Search size={14} /><input ref={searchInput} value={query} aria-label={t('terminal.searchTerminal')} onChange={(event) => { setQuery(event.target.value); search(event.target.value, false, true) }} onKeyDown={(event) => { if (event.key === 'Escape') setSearchOpen(false) }} />
@@ -344,7 +431,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     <div className="terminal" ref={container} />
     {contextMenu && <div className="sidebar-context-menu terminal-context-menu" role="menu" style={{ left: contextMenu.x, top: contextMenu.y }} onPointerDown={(event) => event.stopPropagation()}>
       <button role="menuitem" disabled={!contextMenu.hasSelection} onClick={() => { const text = terminal.current?.getSelection(); setContextMenu(null); if (text) void window.api.system.writeClipboard(text).catch((error) => console.warn('Failed to copy terminal selection', error)) }}><Copy size={15} />{t('common.copy')}</button>
-      <button role="menuitem" onClick={() => { setContextMenu(null); void window.api.system.readClipboard().then((text) => { terminal.current?.paste(text); terminal.current?.focus() }).catch((error) => console.warn('Failed to paste into terminal', error)) }}><ClipboardPaste size={15} />{t('terminal.paste')}</button>
+      <button role="menuitem" onClick={() => { setContextMenu(null); void window.api.system.readClipboard().then((text) => { outputWriter.current?.markInteractive(); terminal.current?.paste(text); terminal.current?.focus() }).catch((error) => console.warn('Failed to paste into terminal', error)) }}><ClipboardPaste size={15} />{t('terminal.paste')}</button>
       <button role="menuitem" onClick={() => { setContextMenu(null); setSearchOpen(true) }}><Search size={15} />{t('terminal.search')}</button>
       <div className="context-menu-separator" />
       <button role="menuitem" onClick={() => { setContextMenu(null); onOpenSettings?.() }}><Palette size={15} />{t('terminal.appearanceSettings')}</button>

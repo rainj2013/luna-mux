@@ -16,10 +16,27 @@ use tauri_plugin_opener::OpenerExt;
 use uuid::Uuid;
 
 use crate::{
+    agent_adapter_install::{
+        self, AgentAdapterInstallAction, AgentAdapterInstallPreview, AgentAdapterInstallResult,
+        AgentAdapterInstallStatus,
+    },
+    agent_adapters::{self, ManagedAgentLaunch},
+    agent_hooks::{AgentHookService, ManagedAgentEvent},
+    agent_profiles::{self, AgentLaunchProfile, AgentProfileAvailability},
     ai, app_icon,
-    control_contract::{ControlCatalog, ControlEventReadResult, ControlRequest, ControlResponse},
+    browser_runtime::{
+        BrowserKeyEvent, BrowserMouseEvent, BrowserRuntime, BrowserRuntimeCreateRequest,
+        BrowserRuntimeManager, ChromeInstallation,
+    },
+    composite_terminal_backend::CompositeTerminalBackend,
+    control_adapter::AuthenticatedControlAdapter,
+    control_contract::{
+        ControlApproval, ControlCatalog, ControlEventReadResult, ControlRequest, ControlResponse,
+    },
     control_service::{self, InProcessControlService, LunaControlService},
     database::Database,
+    local_pty_backend::InProcessLocalPtyTerminalBackend,
+    luna_mcp::{LunaMcpService, MCP_AUTHORIZATION_ENV},
     models::*,
     product,
     sessions::SessionManager,
@@ -27,8 +44,8 @@ use crate::{
     ssh_terminal_backend::InProcessSshTerminalBackend,
     terminal_backend::TerminalBackend,
     terminal_runtime_contract::{
-        TerminalRuntime, TerminalRuntimeAuthentication, TerminalRuntimeCreateRequest,
-        TerminalRuntimeOutputReadResult, TerminalTarget,
+        TerminalRuntime, TerminalRuntimeAuthentication, TerminalRuntimeContext,
+        TerminalRuntimeCreateRequest, TerminalRuntimeOutputReadResult, TerminalTarget,
     },
     transfers::TransferManager,
     tunnels::TunnelManager,
@@ -45,9 +62,15 @@ pub struct AppState {
     pub db: Arc<Database>,
     pub sessions: Arc<SessionManager>,
     pub ssh_terminal_backend: Arc<InProcessSshTerminalBackend>,
+    pub local_pty_backend: Arc<InProcessLocalPtyTerminalBackend>,
+    pub terminal_backend: Arc<CompositeTerminalBackend>,
     pub control: Arc<InProcessControlService>,
+    pub control_adapter: Arc<AuthenticatedControlAdapter>,
+    pub luna_mcp: Arc<LunaMcpService>,
+    pub agent_hooks: Arc<AgentHookService>,
     pub transfers: Arc<TransferManager>,
     pub tunnels: Arc<TunnelManager>,
+    pub browser_runtimes: Arc<BrowserRuntimeManager>,
     pub ai_diagnostics: ai::AiDiagnostics,
     pub allowed_imports: Mutex<HashSet<PathBuf>>,
     pub pending_archive_imports: Mutex<HashMap<String, BookmarkArchive>>,
@@ -55,10 +78,115 @@ pub struct AppState {
     pub exit_cleanup_started: AtomicBool,
 }
 
+#[tauri::command]
+pub fn browser_chrome_discover(state: State<AppState>) -> Option<ChromeInstallation> {
+    state.browser_runtimes.discover_chrome()
+}
+
+#[tauri::command]
+pub async fn browser_runtime_create(
+    state: State<'_, AppState>,
+    request: BrowserRuntimeCreateRequest,
+) -> Result<BrowserRuntime, String> {
+    let browser_resource_id = request.browser_resource_id.clone();
+    let resource = state
+        .db
+        .list_browser_resources(None)?
+        .into_iter()
+        .find(|resource| resource.id == browser_resource_id)
+        .ok_or_else(|| "浏览器资源不存在".to_string())?;
+    if resource.mux_session_id != request.mux_session_id {
+        return Err("浏览器资源与会话不匹配".into());
+    }
+    let runtime = state.browser_runtimes.create(request).await?;
+    if let Err(error) = state
+        .luna_mcp
+        .refresh_target_resource("browser", &browser_resource_id)
+    {
+        let _ = state.browser_runtimes.close(&runtime.id).await;
+        return Err(error);
+    }
+    Ok(runtime)
+}
+
+#[tauri::command]
+pub fn browser_runtimes_list(state: State<AppState>) -> Result<Vec<BrowserRuntime>, String> {
+    state.browser_runtimes.list()
+}
+
+#[tauri::command]
+pub async fn browser_runtime_close(
+    state: State<'_, AppState>,
+    runtime_id: String,
+) -> Result<(), String> {
+    let browser_resource_id = state
+        .browser_runtimes
+        .list()?
+        .into_iter()
+        .find(|runtime| runtime.id == runtime_id)
+        .map(|runtime| runtime.browser_resource_id);
+    state.browser_runtimes.close(&runtime_id).await?;
+    if let Some(browser_resource_id) = browser_resource_id {
+        if let Err(error) = state
+            .luna_mcp
+            .refresh_target_resource("browser", &browser_resource_id)
+        {
+            eprintln!("failed to refresh Browser resource grants after close: {error}");
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn browser_runtime_navigate(
+    state: State<AppState>,
+    runtime_id: String,
+    url: String,
+) -> Result<(), String> {
+    state.browser_runtimes.navigate(&runtime_id, &url)
+}
+
+#[tauri::command]
+pub fn browser_runtime_focus_external(
+    state: State<AppState>,
+    runtime_id: String,
+) -> Result<(), String> {
+    state.browser_runtimes.focus_external_window(&runtime_id)
+}
+
+#[tauri::command]
+pub fn browser_runtime_resize(
+    state: State<AppState>,
+    runtime_id: String,
+    width: u32,
+    height: u32,
+) -> Result<(), String> {
+    state.browser_runtimes.resize(&runtime_id, width, height)
+}
+
+#[tauri::command]
+pub fn browser_runtime_mouse(
+    state: State<AppState>,
+    runtime_id: String,
+    event: BrowserMouseEvent,
+) -> Result<(), String> {
+    state.browser_runtimes.mouse(&runtime_id, event)
+}
+
+#[tauri::command]
+pub fn browser_runtime_key(
+    state: State<AppState>,
+    runtime_id: String,
+    event: BrowserKeyEvent,
+) -> Result<(), String> {
+    state.browser_runtimes.key(&runtime_id, event)
+}
+
 /// Tauri is the trusted local UI adapter. External Agent/CLI adapters must
 /// authenticate independently and inject their own caller identity.
 #[tauri::command]
 pub fn control_catalog(state: State<AppState>) -> ControlCatalog {
+    let _adapter = &state.control_adapter;
     state.control.catalog(&control_service::ui_caller())
 }
 
@@ -84,6 +212,20 @@ pub fn control_read_events(
         .control
         .read_events(&control_service::ui_caller(), from_sequence, limit)
         .map_err(|error| serde_json::to_value(error).unwrap_or_else(|_| serde_json::json!({"code":"internal","message":"事件读取失败","retryable":false})))
+}
+
+/// Only the trusted desktop UI can resolve an approval. External transports
+/// receive approval IDs through the event stream but cannot call this IPC API.
+#[tauri::command]
+pub fn control_approval_resolve(
+    state: State<AppState>,
+    approval_id: String,
+    approved: bool,
+) -> Result<ControlApproval, serde_json::Value> {
+    state
+        .control
+        .resolve_approval(&approval_id, approved)
+        .map_err(|error| serde_json::to_value(error).unwrap_or_else(|_| serde_json::json!({"code":"internal","message":"审批处理失败","retryable":false})))
 }
 
 fn selected_path(value: Option<FilePath>) -> Option<String> {
@@ -133,6 +275,8 @@ pub async fn sessions_connect(
     let runtime = state
         .ssh_terminal_backend
         .create(TerminalRuntimeCreateRequest {
+            runtime_id: None,
+            context: None,
             target_id,
             title: None,
             cwd: None,
@@ -143,6 +287,8 @@ pub async fn sessions_connect(
                 jump_credential: input.jump_credential,
                 remember_jump_credential: input.remember_jump_credential,
             }),
+            managed_agent: None,
+            launch_environment: Default::default(),
             cols: 100,
             rows: 30,
         })
@@ -153,19 +299,664 @@ pub async fn sessions_connect(
 #[tauri::command]
 pub async fn terminal_runtime_create(
     state: State<'_, AppState>,
-    request: TerminalRuntimeCreateRequest,
+    mut request: TerminalRuntimeCreateRequest,
 ) -> Result<TerminalRuntime, String> {
-    state.ssh_terminal_backend.create(request).await
+    let mut issued_hook_token = None;
+    let mut issued_mcp_token = None;
+    let mut remote_agent_launch = None;
+    if let Some(context) = request.context.clone() {
+        validate_runtime_context(&request, &context)?;
+        request
+            .launch_environment
+            .insert("LUNA_MUX_SESSION_ID".into(), context.mux_session_id.clone());
+        request
+            .launch_environment
+            .insert("LUNA_MUX_PANE_ID".into(), context.pane_id.clone());
+        request
+            .launch_environment
+            .insert("LUNA_MUX_RUNTIME_ID".into(), context.runtime_id.clone());
+        request.launch_environment.insert(
+            "LUNA_MUX_BROWSER_REGISTRY_PATH".into(),
+            state.browser_runtimes.registry_path(),
+        );
+        request.launch_environment.insert(
+            "LUNA_MUX_BROWSER_CDP_PORT".into(),
+            state
+                .browser_runtimes
+                .session_cdp_port(&context.mux_session_id)?
+                .to_string(),
+        );
+        if request.managed_agent.is_none() && !request.target_id.starts_with("ssh-bookmark:") {
+            let endpoint = state.agent_hooks.endpoint()?;
+            let token = state.agent_hooks.issue_bootstrap_token(context)?;
+            let mcp_endpoint = state.luna_mcp.endpoint()?;
+            let mcp_token = state
+                .luna_mcp
+                .issue_runtime_context_token(request.context.as_ref().expect("terminal context"))?;
+            request
+                .launch_environment
+                .insert("LUNA_MUX_HOOK_ENDPOINT".into(), endpoint);
+            request
+                .launch_environment
+                .insert("LUNA_MUX_HOOK_AUTHORIZATION".into(), token.clone());
+            request
+                .launch_environment
+                .insert("LUNA_MUX_MCP_ENDPOINT".into(), mcp_endpoint);
+            request
+                .launch_environment
+                .insert(MCP_AUTHORIZATION_ENV.into(), mcp_token.clone());
+            issued_hook_token = Some(token);
+            issued_mcp_token = Some(mcp_token);
+        }
+    }
+    if let Some(agent) = request.managed_agent.clone() {
+        validate_managed_agent_context(&request, &agent)?;
+        let agent_process_id = agent.agent_id.clone();
+        let profile = agent_profiles::resolve(&agent.launch_profile_id)?;
+        let endpoint = state.agent_hooks.endpoint()?;
+        let mcp_endpoint = state.luna_mcp.endpoint()?;
+        let local_user_config_target =
+            request.target_id == "local:powershell" || request.target_id == "local:macos-shell";
+        let persistent_hook_active =
+            agent_adapters::supports_persistent_user_hooks(&profile.adapter)
+                && local_user_config_target
+                && agent_adapter_install::persistent_hook_is_active();
+        let token = state.agent_hooks.issue_token(agent)?;
+        issued_hook_token = Some(token.clone());
+        let mcp_token = match state.luna_mcp.issue_runtime_token(
+            request
+                .managed_agent
+                .as_ref()
+                .expect("managed agent context"),
+        ) {
+            Ok(token) => token,
+            Err(error) => {
+                state.agent_hooks.revoke_token(&token);
+                return Err(error);
+            }
+        };
+        issued_mcp_token = Some(mcp_token.clone());
+        request
+            .launch_environment
+            .insert("LUNA_MUX_AGENT_ADAPTER".into(), profile.adapter.clone());
+        request
+            .launch_environment
+            .insert("LUNA_MUX_AGENT_PROCESS_ID".into(), agent_process_id);
+        if request.target_id.starts_with("ssh-bookmark:") {
+            let context = request
+                .managed_agent
+                .clone()
+                .expect("managed agent context");
+            request.command = None;
+            remote_agent_launch =
+                Some((endpoint, token, mcp_endpoint, mcp_token, profile, context));
+        } else {
+            let launch_command = match agent_adapters::managed_command(&ManagedAgentLaunch {
+                profile: &profile,
+                target_id: &request.target_id,
+                hook_endpoint: &endpoint,
+                mcp_endpoint: &mcp_endpoint,
+                context: request
+                    .managed_agent
+                    .as_ref()
+                    .expect("managed agent context"),
+                inject_inline_hooks: !persistent_hook_active,
+                hook_command: None,
+            }) {
+                Ok(command) => command,
+                Err(error) => {
+                    if let Some(token) = issued_hook_token.take() {
+                        state.agent_hooks.revoke_token(&token);
+                    }
+                    if let Some(token) = issued_mcp_token.take() {
+                        state.luna_mcp.revoke_token(&token);
+                    }
+                    return Err(error);
+                }
+            };
+            request
+                .launch_environment
+                .insert("LUNA_MUX_HOOK_ENDPOINT".into(), endpoint);
+            request
+                .launch_environment
+                .insert("LUNA_MUX_HOOK_AUTHORIZATION".into(), token);
+            request
+                .launch_environment
+                .insert(MCP_AUTHORIZATION_ENV.into(), mcp_token);
+            request.command = Some(launch_command);
+        }
+    }
+    match state.terminal_backend.create(request).await {
+        Ok(runtime) => {
+            if let Some((local_endpoint, token, local_mcp_endpoint, mcp_token, profile, context)) =
+                remote_agent_launch
+            {
+                let setup = async {
+                    wait_for_runtime(&*state.terminal_backend, &runtime.runtime_id).await?;
+                    let requires_hook_forwarder =
+                        agent_adapters::requires_remote_hook_forwarder(&profile.adapter)?;
+                    state
+                        .sessions
+                        .verify_remote_agent_requirements(
+                            &runtime.runtime_id,
+                            &profile.command,
+                            requires_hook_forwarder,
+                        )
+                        .await?;
+                    let local_port = hook_endpoint_port(&local_endpoint)?;
+                    let local_mcp_port = mcp_endpoint_port(&local_mcp_endpoint)?;
+                    let remote_port = state
+                        .sessions
+                        .start_loopback_reverse_forward(&runtime.runtime_id, local_port)
+                        .await?;
+                    let remote_mcp_port = state
+                        .sessions
+                        .start_loopback_reverse_forward(&runtime.runtime_id, local_mcp_port)
+                        .await?;
+                    let remote_endpoint = format!("http://127.0.0.1:{remote_port}/v1/hooks");
+                    let remote_mcp_endpoint = format!("http://127.0.0.1:{remote_mcp_port}/mcp");
+                    let environment_file = state
+                        .sessions
+                        .write_agent_environment_file(
+                            &runtime.runtime_id,
+                            &remote_endpoint,
+                            &token,
+                            &mcp_token,
+                        )
+                        .await?;
+                    let remote_hook_command = if requires_hook_forwarder {
+                        let forwarder = state
+                            .sessions
+                            .install_agent_hook_forwarder(&runtime.runtime_id)
+                            .await?;
+                        Some(format!("python3 {}", posix_shell_quote(&forwarder)))
+                    } else {
+                        None
+                    };
+                    let launch_command = agent_adapters::managed_command(&ManagedAgentLaunch {
+                        profile: &profile,
+                        target_id: &runtime.target_id,
+                        hook_endpoint: &remote_endpoint,
+                        mcp_endpoint: &remote_mcp_endpoint,
+                        context: &context,
+                        inject_inline_hooks: true,
+                        hook_command: remote_hook_command.as_deref(),
+                    })?;
+                    let command = remote_managed_agent_command(
+                        &context,
+                        &profile.adapter,
+                        &environment_file,
+                        &launch_command,
+                    );
+                    let write_result = state
+                        .terminal_backend
+                        .write(&runtime.runtime_id, &format!("{command}\r"))
+                        .await;
+                    if write_result.is_err() {
+                        state
+                            .sessions
+                            .remove_remote_file(&runtime.runtime_id, &environment_file)
+                            .await;
+                    }
+                    write_result
+                }
+                .await;
+                if let Err(error) = setup {
+                    state.agent_hooks.revoke_token(&token);
+                    state.luna_mcp.revoke_token(&mcp_token);
+                    let _ = state.terminal_backend.close(&runtime.runtime_id).await;
+                    return Err(format!("远端 Agent 集成初始化失败：{error}"));
+                }
+            }
+            Ok(state
+                .terminal_backend
+                .list()?
+                .into_iter()
+                .find(|current| current.runtime_id == runtime.runtime_id)
+                .unwrap_or(runtime))
+        }
+        Err(error) => {
+            if let Some(token) = issued_hook_token {
+                state.agent_hooks.revoke_token(&token);
+            }
+            if let Some(token) = issued_mcp_token {
+                state.luna_mcp.revoke_token(&token);
+            }
+            Err(error)
+        }
+    }
+}
+
+async fn wait_for_runtime(backend: &dyn TerminalBackend, runtime_id: &str) -> Result<(), String> {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
+        let runtime = backend
+            .list()?
+            .into_iter()
+            .find(|runtime| runtime.runtime_id == runtime_id)
+            .ok_or_else(|| "SSH Runtime 在启动期间消失".to_string())?;
+        match runtime.status {
+            crate::terminal_runtime_contract::TerminalRuntimeStatus::Running => return Ok(()),
+            crate::terminal_runtime_contract::TerminalRuntimeStatus::Error
+            | crate::terminal_runtime_contract::TerminalRuntimeStatus::Exited => {
+                return Err(runtime
+                    .error
+                    .unwrap_or_else(|| "SSH Runtime 启动失败".into()));
+            }
+            _ => {}
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err("等待 SSH Runtime 就绪超时".into());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+fn hook_endpoint_port(endpoint: &str) -> Result<u16, String> {
+    loopback_endpoint_port(endpoint, "/v1/hooks", "Hook 接收器")
+}
+
+fn mcp_endpoint_port(endpoint: &str) -> Result<u16, String> {
+    loopback_endpoint_port(endpoint, "/mcp", "MCP 服务")
+}
+
+fn loopback_endpoint_port(endpoint: &str, path: &str, label: &str) -> Result<u16, String> {
+    let url = url::Url::parse(endpoint).map_err(|error| error.to_string())?;
+    if url.scheme() != "http" || url.host_str() != Some("127.0.0.1") || url.path() != path {
+        return Err(format!("{label}必须是 127.0.0.1 上的 HTTP {path}"));
+    }
+    url.port().ok_or_else(|| format!("{label}缺少本地端口"))
+}
+
+fn remote_managed_agent_command(
+    agent: &crate::terminal_runtime_contract::TerminalManagedAgentContext,
+    adapter_id: &str,
+    environment_file: &str,
+    command: &str,
+) -> String {
+    let identity = [
+        ("LUNA_MUX_SESSION_ID", agent.mux_session_id.as_str()),
+        ("LUNA_MUX_PANE_ID", agent.pane_id.as_str()),
+        ("LUNA_MUX_RUNTIME_ID", agent.runtime_id.as_str()),
+        ("LUNA_MUX_AGENT_ID", agent.agent_id.as_str()),
+        ("LUNA_MUX_AGENT_ADAPTER", adapter_id),
+        ("LUNA_MUX_AGENT_PROCESS_ID", agent.agent_id.as_str()),
+        (
+            "LUNA_MUX_LAUNCH_PROFILE_ID",
+            agent.launch_profile_id.as_str(),
+        ),
+    ]
+    .into_iter()
+    .map(|(key, value)| format!("{key}={}", posix_shell_quote(value)))
+    .collect::<Vec<_>>()
+    .join(" ");
+    let environment_file = posix_shell_quote(environment_file);
+    format!(
+        "(set -a; . {environment_file}; rm -f -- {environment_file}; set +a; {identity} {command})"
+    )
+}
+
+fn validate_managed_agent_context(
+    request: &TerminalRuntimeCreateRequest,
+    agent: &crate::terminal_runtime_contract::TerminalManagedAgentContext,
+) -> Result<(), String> {
+    let runtime_id = request
+        .runtime_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "受管 Agent 必须预分配 runtimeId".to_string())?;
+    if runtime_id != agent.runtime_id {
+        return Err("受管 Agent runtimeId 与启动请求不一致".into());
+    }
+    if [
+        agent.mux_session_id.as_str(),
+        agent.pane_id.as_str(),
+        agent.agent_id.as_str(),
+        agent.launch_profile_id.as_str(),
+    ]
+    .into_iter()
+    .any(|value| value.trim().is_empty())
+    {
+        return Err("受管 Agent 的 Session、Pane、Agent 和 Launch Profile 标识不能为空".into());
+    }
+    Ok(())
+}
+
+fn validate_runtime_context(
+    request: &TerminalRuntimeCreateRequest,
+    context: &TerminalRuntimeContext,
+) -> Result<(), String> {
+    let runtime_id = request
+        .runtime_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "终端上下文必须预分配 runtimeId".to_string())?;
+    if runtime_id != context.runtime_id {
+        return Err("终端上下文 runtimeId 与启动请求不一致".into());
+    }
+    if [context.mux_session_id.as_str(), context.pane_id.as_str()]
+        .into_iter()
+        .any(|value| value.trim().is_empty())
+    {
+        return Err("终端上下文的 Session 和 Pane 标识不能为空".into());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+fn codex_command_with_hook(command: &str, target_id: &str) -> Result<String, String> {
+    codex_managed_command(command, target_id, true, "http://127.0.0.1:43128/mcp")
+}
+
+#[cfg(test)]
+fn codex_managed_command(
+    command: &str,
+    target_id: &str,
+    inject_inline_hooks: bool,
+    mcp_endpoint: &str,
+) -> Result<String, String> {
+    codex_managed_command_with_hook(command, target_id, inject_inline_hooks, None, mcp_endpoint)
+}
+
+#[cfg(test)]
+fn codex_managed_command_with_hook(
+    command: &str,
+    target_id: &str,
+    inject_inline_hooks: bool,
+    hook_command: Option<&str>,
+    mcp_endpoint: &str,
+) -> Result<String, String> {
+    crate::codex_shim::managed_command(
+        command,
+        target_id,
+        inject_inline_hooks,
+        hook_command,
+        mcp_endpoint,
+    )
+}
+
+#[cfg(test)]
+fn hook_executable_for_target(executable: &Path, target_id: &str) -> Result<String, String> {
+    crate::codex_shim::hook_executable_for_target(executable, target_id)
+}
+
+fn posix_shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+#[cfg(test)]
+mod managed_agent_launch_tests {
+    use super::{
+        codex_command_with_hook, codex_managed_command, codex_managed_command_with_hook,
+        hook_endpoint_port, hook_executable_for_target, mcp_endpoint_port,
+        remote_managed_agent_command, validate_managed_agent_context,
+    };
+    use crate::terminal_runtime_contract::{
+        TerminalManagedAgentContext, TerminalRuntimeCreateRequest,
+    };
+    use std::path::Path;
+
+    #[test]
+    fn codex_hook_configuration_covers_lifecycle_without_embedding_credentials() {
+        let command = codex_command_with_hook("codex", "local:powershell").unwrap();
+        for event in [
+            "SessionStart",
+            "PermissionRequest",
+            "PostToolUse",
+            "Stop",
+            "SessionEnd",
+        ] {
+            assert!(command.contains(&format!("hooks.{event}=")));
+        }
+        assert!(command.contains(" hook"));
+        assert!(!command.contains("LUNA_MUX_HOOK_AUTHORIZATION"));
+        assert!(!command.contains("lmxh_"));
+        assert!(!command.contains("lmx_"));
+        assert!(command.contains("features.network_proxy=true"));
+        assert!(command.contains("127.0.0.1"));
+        assert!(!command.contains("mcp_servers.chrome_devtools.command"));
+        assert!(!command.contains("mcp_servers.chrome_devtools.args"));
+        assert!(!command.contains("features.plugins=false"));
+        assert!(!command.contains("mcp_servers.node_repl.enabled=false"));
+    }
+
+    #[test]
+    fn persistent_hook_launch_keeps_scoped_loopback_network_access() {
+        let command = codex_managed_command(
+            "codex",
+            "local:powershell",
+            false,
+            "http://127.0.0.1:43128/mcp",
+        )
+        .unwrap();
+        assert!(command.contains("features.network_proxy=true"));
+        assert!(command.contains("127.0.0.1"));
+        assert!(command.contains("mcp_servers.luna_mux.url"));
+        assert!(command.contains("LUNA_MUX_MCP_AUTHORIZATION"));
+        assert!(!command.contains("mcp_servers.chrome_devtools.command"));
+        assert!(!command.contains("features.plugins=false"));
+        assert!(!command.contains("mcp_servers.node_repl.enabled=false"));
+        assert!(!command.contains("hooks.SessionStart"));
+    }
+
+    #[test]
+    fn wsl_hook_path_uses_the_mounted_windows_drive() {
+        if !cfg!(windows) {
+            return;
+        }
+        let path = hook_executable_for_target(
+            Path::new(r"D:\Program Files\Luna Mux\luna-mux.exe"),
+            "local:wsl:Ubuntu",
+        )
+        .unwrap();
+        assert_eq!(path, "/mnt/d/Program Files/Luna Mux/luna-mux.exe");
+    }
+
+    #[test]
+    fn remote_hook_uses_posix_command_and_loopback_reverse_endpoint() {
+        let command = codex_managed_command_with_hook(
+            "codex",
+            "ssh-bookmark:server-1",
+            true,
+            Some("python3 '/home/user/.luna-mux/bin/hook_forwarder.py'"),
+            "http://127.0.0.1:43128/mcp",
+        )
+        .unwrap();
+        assert!(command.contains("hook_forwarder.py"));
+        assert!(command.contains("python3"));
+        assert!(command.contains("hooks.SessionStart="));
+        assert!(!command.contains("commandWindows"));
+        assert_eq!(
+            hook_endpoint_port("http://127.0.0.1:43127/v1/hooks").unwrap(),
+            43127
+        );
+        assert!(hook_endpoint_port("http://localhost:43127/v1/hooks").is_err());
+        assert_eq!(
+            mcp_endpoint_port("http://127.0.0.1:43128/mcp").unwrap(),
+            43128
+        );
+        assert!(!command.contains("lmx_"));
+    }
+
+    #[test]
+    fn remote_agent_environment_file_is_consumed_without_echoing_secrets() {
+        let context = TerminalManagedAgentContext {
+            mux_session_id: "session-1".into(),
+            pane_id: "pane-1".into(),
+            runtime_id: "runtime-1".into(),
+            agent_id: "agent-1".into(),
+            launch_profile_id: "codex.default".into(),
+        };
+        let command = remote_managed_agent_command(
+            &context,
+            "codex",
+            "/home/user/.luna-mux/runtime/agent-secret.env",
+            "codex",
+        );
+        assert!(command.contains(". '/home/user/.luna-mux/runtime/agent-secret.env'"));
+        assert!(command.contains("rm -f -- '/home/user/.luna-mux/runtime/agent-secret.env'"));
+        assert!(!command.contains("LUNA_MUX_HOOK_AUTHORIZATION"));
+        assert!(!command.contains("lmxh_"));
+        assert!(!command.contains("lmx_control-secret"));
+        assert!(command.contains("LUNA_MUX_AGENT_ADAPTER='codex'"));
+        assert!(command.contains("LUNA_MUX_AGENT_PROCESS_ID='agent-1'"));
+        assert!(command.ends_with(" codex)"));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn installed_codex_accepts_generated_hook_configuration() {
+        if !std::process::Command::new("where.exe")
+            .arg("codex.cmd")
+            .status()
+            .is_ok_and(|status| status.success())
+        {
+            return;
+        }
+        let command = format!(
+            "{} --version",
+            codex_command_with_hook("codex.cmd", "local:powershell").unwrap()
+        );
+        let output = std::process::Command::new("powershell.exe")
+            .args(["-NoLogo", "-NoProfile", "-Command", &command])
+            .output()
+            .expect("run installed Codex CLI");
+        assert!(
+            output.status.success(),
+            "Codex rejected generated hooks: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("codex-cli"));
+    }
+
+    #[test]
+    fn managed_agent_identity_must_be_complete_and_match_the_runtime() {
+        let mut request = TerminalRuntimeCreateRequest {
+            runtime_id: Some("runtime-1".into()),
+            context: None,
+            target_id: "local:powershell".into(),
+            title: None,
+            cwd: None,
+            command: None,
+            authentication: None,
+            managed_agent: None,
+            launch_environment: Default::default(),
+            cols: 100,
+            rows: 30,
+        };
+        let mut agent = TerminalManagedAgentContext {
+            mux_session_id: "session-1".into(),
+            pane_id: "pane-1".into(),
+            runtime_id: "runtime-1".into(),
+            agent_id: "agent-1".into(),
+            launch_profile_id: "codex.default".into(),
+        };
+        validate_managed_agent_context(&request, &agent).unwrap();
+        agent.runtime_id = "runtime-2".into();
+        assert!(validate_managed_agent_context(&request, &agent).is_err());
+        agent.runtime_id = "runtime-1".into();
+        agent.pane_id.clear();
+        assert!(validate_managed_agent_context(&request, &agent).is_err());
+        request.runtime_id = None;
+        assert!(validate_managed_agent_context(&request, &agent).is_err());
+    }
+}
+
+#[tauri::command]
+pub fn managed_agent_profiles_list() -> Vec<AgentLaunchProfile> {
+    agent_profiles::profiles()
+}
+
+#[tauri::command]
+pub async fn managed_agent_profile_availability(
+    profile_id: String,
+    target_id: String,
+) -> Result<AgentProfileAvailability, String> {
+    agent_profiles::availability(&profile_id, &target_id).await
+}
+
+#[tauri::command]
+pub fn managed_agents_events(state: State<AppState>) -> Vec<ManagedAgentEvent> {
+    state.agent_hooks.events()
+}
+
+#[tauri::command]
+pub fn managed_agent_grants_list(
+    state: State<AppState>,
+    source_pane_id: Option<String>,
+) -> Result<Vec<AgentControlGrantRecord>, String> {
+    state
+        .db
+        .list_agent_control_grants(source_pane_id.as_deref())
+}
+
+#[tauri::command]
+pub fn managed_agent_grants_save(
+    state: State<AppState>,
+    input: AgentControlGrantInput,
+) -> Result<AgentControlGrantRecord, String> {
+    let source_pane_id = input.source_pane_id.clone();
+    let grant = state.db.save_agent_control_grant(input)?;
+    state.luna_mcp.refresh_source_pane(&source_pane_id)?;
+    Ok(grant)
+}
+
+#[tauri::command]
+pub fn managed_agent_grants_remove(state: State<AppState>, id: String) -> Result<bool, String> {
+    let source_pane_id = state
+        .db
+        .list_agent_control_grants(None)?
+        .into_iter()
+        .find(|grant| grant.id == id)
+        .map(|grant| grant.source_pane_id);
+    let removed = state.db.delete_agent_control_grant(&id)?;
+    if removed && let Some(source_pane_id) = source_pane_id {
+        state.luna_mcp.refresh_source_pane(&source_pane_id)?;
+    }
+    Ok(removed)
+}
+
+#[tauri::command]
+pub fn control_audit_list(
+    state: State<AppState>,
+    limit: usize,
+) -> Result<Vec<ControlAuditRecord>, String> {
+    state.db.list_control_audit(limit)
+}
+
+#[tauri::command]
+pub fn control_audit_clear(state: State<AppState>) -> Result<usize, String> {
+    state.db.clear_control_audit()
+}
+
+#[tauri::command]
+pub fn managed_agent_adapter_status() -> Result<AgentAdapterInstallStatus, String> {
+    agent_adapter_install::status()
+}
+
+#[tauri::command]
+pub fn managed_agent_adapter_preview(
+    action: AgentAdapterInstallAction,
+) -> Result<AgentAdapterInstallPreview, String> {
+    agent_adapter_install::preview(action)
+}
+
+#[tauri::command]
+pub fn managed_agent_adapter_apply(
+    action: AgentAdapterInstallAction,
+) -> Result<AgentAdapterInstallResult, String> {
+    agent_adapter_install::apply(action)
 }
 
 #[tauri::command]
 pub fn terminal_targets_list(state: State<AppState>) -> Result<Vec<TerminalTarget>, String> {
-    state.ssh_terminal_backend.targets()
+    state.terminal_backend.targets()
 }
 
 #[tauri::command]
 pub fn terminal_runtimes_list(state: State<AppState>) -> Result<Vec<TerminalRuntime>, String> {
-    state.ssh_terminal_backend.list()
+    state.terminal_backend.list()
 }
 
 #[tauri::command]
@@ -176,7 +967,7 @@ pub fn terminal_runtime_read_output(
     max_bytes: usize,
 ) -> Result<TerminalRuntimeOutputReadResult, String> {
     state
-        .ssh_terminal_backend
+        .terminal_backend
         .read_output(&runtime_id, from_cursor, max_bytes)
 }
 
@@ -186,7 +977,7 @@ pub async fn terminal_runtime_write(
     runtime_id: String,
     data: String,
 ) -> Result<(), String> {
-    state.ssh_terminal_backend.write(&runtime_id, &data).await
+    state.terminal_backend.write(&runtime_id, &data).await
 }
 
 #[tauri::command]
@@ -196,10 +987,7 @@ pub async fn terminal_runtime_resize(
     cols: u32,
     rows: u32,
 ) -> Result<(), String> {
-    state
-        .ssh_terminal_backend
-        .resize(&runtime_id, cols, rows)
-        .await
+    state.terminal_backend.resize(&runtime_id, cols, rows).await
 }
 
 #[tauri::command]
@@ -209,7 +997,7 @@ pub fn terminal_runtime_flow(
     paused: bool,
 ) -> Result<(), String> {
     state
-        .ssh_terminal_backend
+        .terminal_backend
         .set_output_paused(&runtime_id, paused)
 }
 
@@ -218,7 +1006,7 @@ pub async fn terminal_runtime_interrupt(
     state: State<'_, AppState>,
     runtime_id: String,
 ) -> Result<(), String> {
-    state.ssh_terminal_backend.interrupt(&runtime_id).await
+    state.terminal_backend.interrupt(&runtime_id).await
 }
 
 #[tauri::command]
@@ -226,7 +1014,7 @@ pub async fn terminal_runtime_close(
     state: State<'_, AppState>,
     runtime_id: String,
 ) -> Result<(), String> {
-    state.ssh_terminal_backend.close(&runtime_id).await
+    state.terminal_backend.close(&runtime_id).await
 }
 #[tauri::command]
 pub async fn sessions_disconnect(state: State<'_, AppState>, id: String) -> Result<(), String> {
@@ -262,6 +1050,77 @@ pub fn sessions_host_key_decision(state: State<AppState>, id: String, accept: bo
 #[tauri::command]
 pub fn bookmarks_list(state: State<AppState>) -> Result<Vec<Bookmark>, String> {
     state.db.list_bookmarks()
+}
+
+#[tauri::command]
+pub fn mux_sessions_list(state: State<AppState>) -> Result<Vec<MuxSession>, String> {
+    state.db.list_mux_sessions()
+}
+
+#[tauri::command]
+pub fn mux_sessions_save(
+    state: State<AppState>,
+    input: MuxSessionInput,
+) -> Result<MuxSession, String> {
+    state.db.save_mux_session(input)
+}
+
+#[tauri::command]
+pub fn mux_sessions_remove(state: State<AppState>, id: String) -> Result<(), String> {
+    state.db.delete_mux_session(&id)
+}
+
+#[tauri::command]
+pub fn mux_panes_list(
+    state: State<AppState>,
+    mux_session_id: Option<String>,
+) -> Result<Vec<MuxPane>, String> {
+    state.db.list_mux_panes(mux_session_id.as_deref())
+}
+
+#[tauri::command]
+pub fn mux_panes_save(state: State<AppState>, input: MuxPaneInput) -> Result<MuxPane, String> {
+    state.db.save_mux_pane(input)
+}
+
+#[tauri::command]
+pub fn mux_panes_remove(state: State<AppState>, id: String) -> Result<(), String> {
+    state.db.delete_mux_pane(&id)
+}
+
+#[tauri::command]
+pub fn browser_resources_list(
+    state: State<AppState>,
+    mux_session_id: Option<String>,
+) -> Result<Vec<BrowserResource>, String> {
+    state.db.list_browser_resources(mux_session_id.as_deref())
+}
+
+#[tauri::command]
+pub fn browser_resources_save(
+    state: State<AppState>,
+    input: BrowserResourceInput,
+) -> Result<BrowserResource, String> {
+    state.db.save_browser_resource(input)
+}
+
+#[tauri::command]
+pub async fn browser_resources_remove(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
+    let runtime_ids = state
+        .browser_runtimes
+        .list()?
+        .into_iter()
+        .filter(|runtime| runtime.browser_resource_id == id)
+        .map(|runtime| runtime.id)
+        .collect::<Vec<_>>();
+    for runtime_id in runtime_ids {
+        state.browser_runtimes.close(&runtime_id).await?;
+    }
+    state.db.delete_browser_resource(&id)?;
+    state.luna_mcp.refresh_target_resource("browser", &id)
 }
 #[tauri::command]
 pub fn bookmarks_save(state: State<AppState>, input: BookmarkInput) -> Result<Bookmark, String> {
@@ -1684,6 +2543,91 @@ pub async fn tunnels_start(
         .ok_or_else(|| "端口转发配置不存在".to_string())?;
     state.tunnels.start(session_id, profile).await
 }
+
+fn browser_tunnel_route(
+    remote_url: &str,
+    local_port: u16,
+) -> Result<(String, String, u16), String> {
+    let value = remote_url.trim();
+    let value = if value.contains("://") {
+        value.to_string()
+    } else {
+        format!("http://{value}")
+    };
+    let mut url = url::Url::parse(&value).map_err(|error| format!("远端服务 URL 无效: {error}"))?;
+    if url.scheme() != "http" {
+        return Err("首版 SSH Browser 转发只支持 http URL".into());
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("远端服务 URL 不能包含用户名或密码".into());
+    }
+    let target_host = url
+        .host_str()
+        .filter(|host| !host.is_empty())
+        .ok_or_else(|| "远端服务 URL 缺少主机名".to_string())?
+        .to_string();
+    let target_port = url
+        .port_or_known_default()
+        .ok_or_else(|| "远端服务 URL 缺少有效端口".to_string())?;
+    url.set_host(Some("127.0.0.1"))
+        .map_err(|_| "无法生成 Browser 本地转发 URL".to_string())?;
+    url.set_port(Some(local_port))
+        .map_err(|_| "无法设置 Browser 本地转发端口".to_string())?;
+    Ok((url.to_string(), target_host, target_port))
+}
+
+#[tauri::command]
+pub async fn browser_tunnel_start(
+    state: State<'_, AppState>,
+    session_id: String,
+    browser_resource_id: String,
+    source_pane_id: String,
+    remote_url: String,
+) -> Result<BrowserTunnel, String> {
+    let browser_resource_id = browser_resource_id.trim();
+    let source_pane_id = source_pane_id.trim();
+    if browser_resource_id.is_empty() || browser_resource_id.len() > 128 {
+        return Err("浏览器资源 ID 无效".into());
+    }
+    if source_pane_id.is_empty() || source_pane_id.len() > 128 {
+        return Err("来源 SSH Pane ID 无效".into());
+    }
+    let (_, target_host, target_port) = browser_tunnel_route(&remote_url, 1)?;
+    let bookmark_id = state.sessions.bookmark_id(&session_id)?;
+    let panes = state.db.list_mux_panes(None)?;
+    let source_pane = panes
+        .iter()
+        .find(|pane| pane.id == source_pane_id)
+        .ok_or_else(|| "来源 SSH Pane 不存在".to_string())?;
+    if source_pane.kind != MuxPaneKind::Terminal || source_pane.bookmark_id != bookmark_id {
+        return Err("来源 Pane 与当前 SSH Runtime 不匹配".into());
+    }
+    let browser_resource = state
+        .db
+        .list_browser_resources(None)?
+        .iter()
+        .find(|resource| resource.id == browser_resource_id)
+        .cloned()
+        .ok_or_else(|| "浏览器资源不存在".to_string())?;
+    if browser_resource.mux_session_id != source_pane.mux_session_id
+        || browser_resource.source_pane_id != source_pane.id
+    {
+        return Err("浏览器资源与来源 SSH Pane 不匹配".into());
+    }
+    let profile = PortForwardProfile {
+        id: format!("browser-resource:{browser_resource_id}"),
+        bookmark_id,
+        name: browser_resource.name,
+        forward_type: PortForwardType::Local,
+        bind_address: "127.0.0.1".into(),
+        bind_port: 0,
+        target_host,
+        target_port,
+    };
+    let tunnel = state.tunnels.start(session_id, profile).await?;
+    let (local_url, _, _) = browser_tunnel_route(&remote_url, tunnel.bind_port)?;
+    Ok(BrowserTunnel { tunnel, local_url })
+}
 #[tauri::command]
 pub async fn tunnels_stop(
     state: State<'_, AppState>,
@@ -1691,6 +2635,26 @@ pub async fn tunnels_stop(
     tunnel_id: String,
 ) -> Result<(), String> {
     state.tunnels.stop(&session_id, &tunnel_id).await
+}
+
+#[cfg(test)]
+mod browser_tunnel_tests {
+    use super::browser_tunnel_route;
+
+    #[test]
+    fn rewrites_remote_http_url_to_an_assigned_loopback_port() {
+        let (local, host, port) =
+            browser_tunnel_route("http://127.0.0.1:3000/app?q=1#view", 49152).unwrap();
+        assert_eq!(local, "http://127.0.0.1:49152/app?q=1#view");
+        assert_eq!(host, "127.0.0.1");
+        assert_eq!(port, 3000);
+    }
+
+    #[test]
+    fn rejects_unsupported_or_credential_bearing_remote_urls() {
+        assert!(browser_tunnel_route("https://localhost:3000", 49152).is_err());
+        assert!(browser_tunnel_route("http://user:secret@localhost:3000", 49152).is_err());
+    }
 }
 
 #[tauri::command]

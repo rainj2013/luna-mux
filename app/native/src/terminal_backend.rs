@@ -9,6 +9,23 @@ use crate::terminal_runtime_contract::{
 pub type TerminalBackendResult<T> = Result<T, String>;
 pub type TerminalRuntimeEventSink = Arc<dyn Fn(TerminalRuntimeEvent) + Send + Sync>;
 
+/// Every terminal transport exposes the same interactive controls. Remote
+/// file and forwarding tools are additive SSH capabilities, not a different
+/// terminal UI contract.
+pub fn standard_terminal_capabilities(
+    remote_tools: bool,
+) -> crate::terminal_runtime_contract::TerminalCapabilities {
+    crate::terminal_runtime_contract::TerminalCapabilities {
+        terminal: true,
+        resize: true,
+        flow_control: true,
+        interrupt: true,
+        output_cursor: true,
+        remote_files: remote_tools,
+        port_forwarding: remote_tools,
+    }
+}
+
 #[async_trait]
 pub trait TerminalBackend: Send + Sync {
     fn set_event_sink(&self, sink: TerminalRuntimeEventSink);
@@ -117,11 +134,14 @@ mod tests {
             request: TerminalRuntimeCreateRequest,
         ) -> TerminalBackendResult<TerminalRuntime> {
             let runtime = TerminalRuntime {
-                runtime_id: Uuid::new_v4().to_string(),
+                runtime_id: request
+                    .runtime_id
+                    .unwrap_or_else(|| Uuid::new_v4().to_string()),
                 target_id: request.target_id,
                 title: request.title.unwrap_or_else(|| "Mock terminal".into()),
                 status: TerminalRuntimeStatus::Running,
                 capabilities: Self::capabilities(),
+                managed_agent: request.managed_agent,
                 error: None,
             };
             self.runtimes
@@ -231,11 +251,15 @@ mod tests {
         let backend = MockBackend::new();
         let runtime = backend
             .create(TerminalRuntimeCreateRequest {
+                runtime_id: None,
+                context: None,
                 target_id: "mock-target".into(),
                 title: None,
                 cwd: None,
                 command: None,
                 authentication: None,
+                managed_agent: None,
+                launch_environment: Default::default(),
                 cols: 80,
                 rows: 24,
             })
@@ -268,16 +292,33 @@ mod tests {
         assert!(!target.capabilities.port_forwarding);
     }
 
+    #[test]
+    fn local_and_ssh_terminal_capabilities_differ_only_by_remote_tools() {
+        let local = standard_terminal_capabilities(false);
+        let ssh = standard_terminal_capabilities(true);
+        assert_eq!(local.terminal, ssh.terminal);
+        assert_eq!(local.resize, ssh.resize);
+        assert_eq!(local.flow_control, ssh.flow_control);
+        assert_eq!(local.interrupt, ssh.interrupt);
+        assert_eq!(local.output_cursor, ssh.output_cursor);
+        assert!(!local.remote_files && ssh.remote_files);
+        assert!(!local.port_forwarding && ssh.port_forwarding);
+    }
+
     #[tokio::test]
     async fn mock_backend_preserves_utf8_output_cursor_reads() {
         let backend = MockBackend::new();
         let runtime = backend
             .create(TerminalRuntimeCreateRequest {
+                runtime_id: None,
+                context: None,
                 target_id: "mock-target".into(),
                 title: None,
                 cwd: None,
                 command: None,
                 authentication: None,
+                managed_agent: None,
+                launch_environment: Default::default(),
                 cols: 80,
                 rows: 24,
             })

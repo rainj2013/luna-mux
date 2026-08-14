@@ -27,6 +27,35 @@ const PORTABLE_SETTING_KEYS: &[&str] = &[
     "uiTheme",
 ];
 
+fn prune_mux_layout(
+    node: MuxSplitNode,
+    removed_pane_ids: &HashSet<String>,
+) -> Option<MuxSplitNode> {
+    match node {
+        MuxSplitNode::Pane { pane_id } => {
+            (!removed_pane_ids.contains(&pane_id)).then_some(MuxSplitNode::Pane { pane_id })
+        }
+        MuxSplitNode::Split {
+            direction,
+            ratio,
+            first,
+            second,
+        } => match (
+            prune_mux_layout(*first, removed_pane_ids),
+            prune_mux_layout(*second, removed_pane_ids),
+        ) {
+            (Some(first), Some(second)) => Some(MuxSplitNode::Split {
+                direction,
+                ratio,
+                first: Box::new(first),
+                second: Box::new(second),
+            }),
+            (Some(remaining), None) | (None, Some(remaining)) => Some(remaining),
+            (None, None) => None,
+        },
+    }
+}
+
 pub struct Database {
     connection: Mutex<Connection>,
     credential_service: String,
@@ -284,6 +313,7 @@ impl Database {
     fn initialize(&self) -> Result<(), String> {
         self.with_conn(|db| db.execute_batch(r#"
             PRAGMA journal_mode = WAL;
+            PRAGMA foreign_keys = ON;
             CREATE TABLE IF NOT EXISTS bookmarks (
               id TEXT PRIMARY KEY, name TEXT NOT NULL, host TEXT NOT NULL, port INTEGER NOT NULL,
               username TEXT NOT NULL, authType TEXT NOT NULL, privateKeyPath TEXT NOT NULL DEFAULT '',
@@ -296,14 +326,156 @@ impl Database {
             CREATE TABLE IF NOT EXISTS credential_refs (bookmarkId TEXT PRIMARY KEY, account TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS known_hosts (host TEXT NOT NULL, port INTEGER NOT NULL, fingerprint TEXT NOT NULL, PRIMARY KEY(host, port));
             CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS mux_sessions (
+              id TEXT PRIMARY KEY, name TEXT NOT NULL, rootPath TEXT NOT NULL DEFAULT '',
+              layoutJson TEXT NOT NULL DEFAULT '', sortOrder INTEGER NOT NULL DEFAULT 0,
+              createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS transfers (
               id TEXT PRIMARY KEY, sessionId TEXT NOT NULL, bookmarkId TEXT NOT NULL DEFAULT '', direction TEXT NOT NULL,
               sourcePath TEXT NOT NULL, destinationPath TEXT NOT NULL, displayName TEXT NOT NULL, status TEXT NOT NULL,
               bytesTotal INTEGER NOT NULL, bytesTransferred INTEGER NOT NULL, speed REAL NOT NULL, error TEXT,
               createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL
             );
-            PRAGMA user_version = 6;
+            CREATE TABLE IF NOT EXISTS agent_control_grants (
+              id TEXT PRIMARY KEY, sourcePaneId TEXT NOT NULL,
+              targetResourceKind TEXT NOT NULL, targetResourceId TEXT NOT NULL,
+              access TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL,
+              UNIQUE(sourcePaneId, targetResourceKind, targetResourceId),
+              FOREIGN KEY(sourcePaneId) REFERENCES mux_panes(id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS control_audit (
+              id TEXT PRIMARY KEY, timestamp TEXT NOT NULL, callerId TEXT NOT NULL,
+              callerKind TEXT NOT NULL, operation TEXT NOT NULL, resourceKind TEXT NOT NULL DEFAULT '',
+              resourceId TEXT NOT NULL DEFAULT '', argumentsJson TEXT NOT NULL,
+              result TEXT NOT NULL, errorCode TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS control_audit_timestamp ON control_audit(timestamp);
         "#))?;
+        let has_layout_json = self.with_conn(|db| {
+            let mut statement = db.prepare("PRAGMA table_info(mux_sessions)")?;
+            let columns = statement
+                .query_map([], |row| row.get::<_, String>(1))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(columns.iter().any(|column| column == "layoutJson"))
+        })?;
+        let has_launch_profile_id = self.with_conn(|db| {
+            let mut statement = db.prepare("PRAGMA table_info(mux_panes)")?;
+            let columns = statement
+                .query_map([], |row| row.get::<_, String>(1))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(columns.iter().any(|column| column == "launchProfileId"))
+        })?;
+        let has_resource_grants = self.with_conn(|db| {
+            let mut statement = db.prepare("PRAGMA table_info(agent_control_grants)")?;
+            let columns = statement
+                .query_map([], |row| row.get::<_, String>(1))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(columns.iter().any(|column| column == "targetResourceKind"))
+        })?;
+        self.with_conn(|db| {
+            let transaction = db.transaction()?;
+            if !has_layout_json {
+                transaction.execute(
+                    "ALTER TABLE mux_sessions ADD COLUMN layoutJson TEXT NOT NULL DEFAULT ''",
+                    [],
+                )?;
+            }
+            transaction.execute_batch(
+                r#"
+                CREATE TABLE IF NOT EXISTS mux_panes (
+                  id TEXT PRIMARY KEY, muxSessionId TEXT NOT NULL, kind TEXT NOT NULL,
+                  title TEXT NOT NULL, targetId TEXT NOT NULL DEFAULT '', bookmarkId TEXT NOT NULL DEFAULT '',
+                  cwd TEXT NOT NULL DEFAULT '', command TEXT NOT NULL DEFAULT '', sortOrder INTEGER NOT NULL DEFAULT 0,
+                  createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL,
+                  FOREIGN KEY(muxSessionId) REFERENCES mux_sessions(id) ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS browser_resources (
+                  id TEXT PRIMARY KEY, muxSessionId TEXT NOT NULL, name TEXT NOT NULL,
+                  sourcePaneId TEXT NOT NULL DEFAULT '', bookmarkId TEXT NOT NULL DEFAULT '',
+                  url TEXT NOT NULL DEFAULT 'about:blank', temporaryProfile INTEGER NOT NULL DEFAULT 0,
+                  sortOrder INTEGER NOT NULL DEFAULT 0, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL,
+                  FOREIGN KEY(muxSessionId) REFERENCES mux_sessions(id) ON DELETE CASCADE
+                );
+                "#,
+            )?;
+            if !has_launch_profile_id {
+                transaction.execute(
+                    "ALTER TABLE mux_panes ADD COLUMN launchProfileId TEXT NOT NULL DEFAULT ''",
+                    [],
+                )?;
+            }
+            if !has_resource_grants {
+                let browser_pane_ids = {
+                    let mut statement = transaction
+                        .prepare("SELECT id FROM mux_panes WHERE kind='browser'")?;
+                    statement
+                        .query_map([], |row| row.get::<_, String>(0))?
+                        .collect::<rusqlite::Result<HashSet<_>>>()?
+                };
+                transaction.execute_batch(
+                    r#"
+                    INSERT OR IGNORE INTO browser_resources(
+                      id,muxSessionId,name,sourcePaneId,bookmarkId,url,temporaryProfile,
+                      sortOrder,createdAt,updatedAt
+                    )
+                    SELECT id,muxSessionId,title,targetId,bookmarkId,
+                      CASE WHEN trim(command)='' THEN 'about:blank' ELSE command END,
+                      0,sortOrder,createdAt,updatedAt
+                    FROM mux_panes WHERE kind='browser';
+                    CREATE TABLE agent_control_grants_v10 (
+                      id TEXT PRIMARY KEY, sourcePaneId TEXT NOT NULL,
+                      targetResourceKind TEXT NOT NULL, targetResourceId TEXT NOT NULL,
+                      access TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL,
+                      UNIQUE(sourcePaneId, targetResourceKind, targetResourceId),
+                      FOREIGN KEY(sourcePaneId) REFERENCES mux_panes(id) ON DELETE CASCADE
+                    );
+                    INSERT INTO agent_control_grants_v10(
+                      id,sourcePaneId,targetResourceKind,targetResourceId,access,createdAt,updatedAt
+                    )
+                    SELECT id,sourcePaneId,
+                      CASE WHEN targetPaneId IN (SELECT id FROM mux_panes WHERE kind='browser')
+                        THEN 'browser' ELSE 'pane' END,
+                      targetPaneId,access,createdAt,updatedAt
+                    FROM agent_control_grants;
+                    DROP TABLE agent_control_grants;
+                    ALTER TABLE agent_control_grants_v10 RENAME TO agent_control_grants;
+                    "#,
+                )?;
+                if !browser_pane_ids.is_empty() {
+                    let sessions = {
+                        let mut statement = transaction
+                            .prepare("SELECT id,layoutJson FROM mux_sessions")?;
+                        statement
+                            .query_map([], |row| {
+                                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                            })?
+                            .collect::<rusqlite::Result<Vec<_>>>()?
+                    };
+                    for (session_id, layout_json) in sessions {
+                        let layout = serde_json::from_str::<MuxSplitNode>(&layout_json).ok();
+                        let pruned = layout.and_then(|node| {
+                            prune_mux_layout(node, &browser_pane_ids)
+                        });
+                        let next_json = pruned
+                            .as_ref()
+                            .map(serde_json::to_string)
+                            .transpose()
+                            .map_err(|error| {
+                                rusqlite::Error::ToSqlConversionFailure(Box::new(error))
+                            })?
+                            .unwrap_or_default();
+                        transaction.execute(
+                            "UPDATE mux_sessions SET layoutJson=? WHERE id=?",
+                            params![next_json, session_id],
+                        )?;
+                    }
+                    transaction.execute("DELETE FROM mux_panes WHERE kind='browser'", [])?;
+                }
+            }
+            transaction.execute_batch("PRAGMA user_version = 10;")?;
+            transaction.commit()
+        })?;
         let has_sort_order = self.with_conn(|db| {
             let mut statement = db.prepare("PRAGMA table_info(bookmarks)")?;
             let columns = statement
@@ -335,7 +507,9 @@ impl Database {
                 transaction.commit()
             })?;
         }
-        self.with_conn(|db| db.execute("UPDATE transfers SET status='interrupted', error='应用上次退出时传输未完成', updatedAt=? WHERE status IN ('queued','scanning','running','conflict')", [Utc::now().to_rfc3339()]).map(|_| ()))
+        self.with_conn(|db| db.execute("UPDATE transfers SET status='interrupted', error='应用上次退出时传输未完成', updatedAt=? WHERE status IN ('queued','scanning','running','conflict')", [Utc::now().to_rfc3339()]).map(|_| ()))?;
+        self.prune_control_audit(30)?;
+        Ok(())
     }
 
     fn with_conn<T>(
@@ -362,6 +536,464 @@ impl Database {
                 keepalive_enabled: row.get::<_, i64>(11)? != 0, keepalive_interval_seconds: row.get(12)?, keepalive_count_max: row.get(13)?,
                 note: row.get(14)?, has_saved_credential: row.get::<_, i64>(15)? != 0, sort_order: row.get(16)?, created_at: row.get(17)?, updated_at: row.get(18)?,
             }))?.collect()
+        })
+    }
+
+    pub fn list_mux_sessions(&self) -> Result<Vec<MuxSession>, String> {
+        self.with_conn(|db| {
+            let mut statement = db.prepare("SELECT id,name,rootPath,layoutJson,sortOrder,createdAt,updatedAt FROM mux_sessions ORDER BY sortOrder ASC, createdAt ASC")?;
+            statement.query_map([], |row| {
+                let layout_json = row.get::<_, String>(3)?;
+                Ok(MuxSession {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    root_path: row.get(2)?,
+                    layout: if layout_json.trim().is_empty() {
+                        None
+                    } else {
+                        Some(serde_json::from_str(&layout_json).map_err(|error| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                3,
+                                rusqlite::types::Type::Text,
+                                Box::new(error),
+                            )
+                        })?)
+                    },
+                    sort_order: row.get(4)?,
+                    created_at: row.get(5)?,
+                    updated_at: row.get(6)?,
+                })
+            })?.collect()
+        })
+    }
+
+    pub fn save_mux_session(&self, input: MuxSessionInput) -> Result<MuxSession, String> {
+        let name = input.name.trim();
+        if name.is_empty() {
+            return Err("Session 名称不能为空".into());
+        }
+        let now = Utc::now().to_rfc3339();
+        let id = input
+            .id
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
+        let existing = self
+            .list_mux_sessions()?
+            .into_iter()
+            .find(|item| item.id == id);
+        let sort_order = if let Some(existing) = &existing {
+            existing.sort_order
+        } else {
+            self.with_conn(|db| {
+                db.query_row(
+                    "SELECT COALESCE(MAX(sortOrder), -1) + 1 FROM mux_sessions",
+                    [],
+                    |row| row.get(0),
+                )
+            })?
+        };
+        let created_at = existing
+            .as_ref()
+            .map(|item| item.created_at.clone())
+            .unwrap_or_else(|| now.clone());
+        let session = MuxSession {
+            id,
+            name: name.into(),
+            root_path: input.root_path.trim().into(),
+            layout: input.layout,
+            sort_order,
+            created_at,
+            updated_at: now,
+        };
+        let layout_json = session
+            .layout
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|error| error.to_string())?
+            .unwrap_or_default();
+        self.with_conn(|db| db.execute("INSERT INTO mux_sessions(id,name,rootPath,layoutJson,sortOrder,createdAt,updatedAt) VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,rootPath=excluded.rootPath,layoutJson=excluded.layoutJson,updatedAt=excluded.updatedAt", params![session.id,session.name,session.root_path,layout_json,session.sort_order,session.created_at,session.updated_at]).map(|_| ()))?;
+        Ok(session)
+    }
+
+    pub fn delete_mux_session(&self, id: &str) -> Result<(), String> {
+        self.with_conn(|db| {
+            let transaction = db.transaction()?;
+            transaction.execute(
+                "DELETE FROM agent_control_grants WHERE targetResourceKind='pane' AND targetResourceId IN (SELECT id FROM mux_panes WHERE muxSessionId=?)",
+                [id],
+            )?;
+            transaction.execute(
+                "DELETE FROM agent_control_grants WHERE targetResourceKind='browser' AND targetResourceId IN (SELECT id FROM browser_resources WHERE muxSessionId=?)",
+                [id],
+            )?;
+            transaction.execute("DELETE FROM mux_panes WHERE muxSessionId=?", [id])?;
+            transaction.execute("DELETE FROM mux_sessions WHERE id=?", [id])?;
+            transaction.commit()
+        })
+    }
+
+    pub fn list_mux_panes(&self, mux_session_id: Option<&str>) -> Result<Vec<MuxPane>, String> {
+        self.with_conn(|db| {
+            let sql = if mux_session_id.is_some() {
+                "SELECT id,muxSessionId,kind,title,targetId,bookmarkId,cwd,command,launchProfileId,sortOrder,createdAt,updatedAt FROM mux_panes WHERE muxSessionId=? ORDER BY sortOrder ASC, createdAt ASC"
+            } else {
+                "SELECT id,muxSessionId,kind,title,targetId,bookmarkId,cwd,command,launchProfileId,sortOrder,createdAt,updatedAt FROM mux_panes ORDER BY muxSessionId ASC, sortOrder ASC, createdAt ASC"
+            };
+            let mut statement = db.prepare(sql)?;
+            let read = |row: &rusqlite::Row<'_>| Ok(MuxPane {
+                id: row.get(0)?, mux_session_id: row.get(1)?, kind: MuxPaneKind::parse(&row.get::<_, String>(2)?),
+                title: row.get(3)?, target_id: row.get(4)?, bookmark_id: row.get(5)?, cwd: row.get(6)?,
+                command: row.get(7)?, launch_profile_id: row.get(8)?, sort_order: row.get(9)?, created_at: row.get(10)?, updated_at: row.get(11)?,
+            });
+            if let Some(id) = mux_session_id {
+                statement.query_map([id], read)?.collect()
+            } else {
+                statement.query_map([], read)?.collect()
+            }
+        })
+    }
+
+    pub fn list_browser_resources(
+        &self,
+        mux_session_id: Option<&str>,
+    ) -> Result<Vec<BrowserResource>, String> {
+        self.with_conn(|db| {
+            let sql = if mux_session_id.is_some() {
+                "SELECT id,muxSessionId,name,sourcePaneId,bookmarkId,url,temporaryProfile,sortOrder,createdAt,updatedAt FROM browser_resources WHERE muxSessionId=? ORDER BY sortOrder ASC,createdAt ASC"
+            } else {
+                "SELECT id,muxSessionId,name,sourcePaneId,bookmarkId,url,temporaryProfile,sortOrder,createdAt,updatedAt FROM browser_resources ORDER BY muxSessionId ASC,sortOrder ASC,createdAt ASC"
+            };
+            let mut statement = db.prepare(sql)?;
+            let read = |row: &rusqlite::Row<'_>| {
+                Ok(BrowserResource {
+                    id: row.get(0)?,
+                    mux_session_id: row.get(1)?,
+                    name: row.get(2)?,
+                    source_pane_id: row.get(3)?,
+                    bookmark_id: row.get(4)?,
+                    url: row.get(5)?,
+                    temporary_profile: row.get::<_, i64>(6)? != 0,
+                    sort_order: row.get(7)?,
+                    created_at: row.get(8)?,
+                    updated_at: row.get(9)?,
+                })
+            };
+            if let Some(id) = mux_session_id {
+                statement.query_map([id], read)?.collect()
+            } else {
+                statement.query_map([], read)?.collect()
+            }
+        })
+    }
+
+    pub fn save_browser_resource(
+        &self,
+        input: BrowserResourceInput,
+    ) -> Result<BrowserResource, String> {
+        let mux_session_id = input.mux_session_id.trim();
+        let name = input.name.trim();
+        let url = input.url.trim();
+        if mux_session_id.is_empty() || name.is_empty() {
+            return Err("浏览器资源必须属于一个会话，且名称不能为空".into());
+        }
+        let session_exists = self.with_conn(|db| {
+            db.query_row(
+                "SELECT EXISTS(SELECT 1 FROM mux_sessions WHERE id=?)",
+                [mux_session_id],
+                |row| row.get::<_, bool>(0),
+            )
+        })?;
+        if !session_exists {
+            return Err("Mux Session 不存在".into());
+        }
+        let source_pane_id = input.source_pane_id.trim();
+        let bookmark_id = input.bookmark_id.trim();
+        if !source_pane_id.is_empty() {
+            let valid_source = self
+                .list_mux_panes(Some(mux_session_id))?
+                .into_iter()
+                .any(|pane| {
+                    pane.id == source_pane_id
+                        && !pane.bookmark_id.is_empty()
+                        && pane.bookmark_id == bookmark_id
+                });
+            if !valid_source {
+                return Err("浏览器资源引用的 SSH 窗格与当前会话或目标不匹配".into());
+            }
+        }
+        let id = input
+            .id
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
+        let existing = self
+            .list_browser_resources(None)?
+            .into_iter()
+            .find(|resource| resource.id == id);
+        let sort_order = if let Some(existing) = &existing {
+            existing.sort_order
+        } else {
+            self.with_conn(|db| {
+                db.query_row(
+                    "SELECT COALESCE(MAX(sortOrder),-1)+1 FROM browser_resources WHERE muxSessionId=?",
+                    [mux_session_id],
+                    |row| row.get(0),
+                )
+            })?
+        };
+        let now = Utc::now().to_rfc3339();
+        let resource = BrowserResource {
+            id,
+            mux_session_id: mux_session_id.into(),
+            name: name.into(),
+            source_pane_id: source_pane_id.into(),
+            bookmark_id: bookmark_id.into(),
+            url: url.into(),
+            temporary_profile: input.temporary_profile,
+            sort_order,
+            created_at: existing
+                .as_ref()
+                .map(|resource| resource.created_at.clone())
+                .unwrap_or_else(|| now.clone()),
+            updated_at: now,
+        };
+        self.with_conn(|db| db.execute(
+            "INSERT INTO browser_resources(id,muxSessionId,name,sourcePaneId,bookmarkId,url,temporaryProfile,sortOrder,createdAt,updatedAt) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET muxSessionId=excluded.muxSessionId,name=excluded.name,sourcePaneId=excluded.sourcePaneId,bookmarkId=excluded.bookmarkId,url=excluded.url,temporaryProfile=excluded.temporaryProfile,updatedAt=excluded.updatedAt",
+            params![resource.id,resource.mux_session_id,resource.name,resource.source_pane_id,resource.bookmark_id,resource.url,resource.temporary_profile as i64,resource.sort_order,resource.created_at,resource.updated_at],
+        ).map(|_| ()))?;
+        Ok(resource)
+    }
+
+    pub fn delete_browser_resource(&self, id: &str) -> Result<(), String> {
+        self.with_conn(|db| {
+            let transaction = db.transaction()?;
+            transaction.execute(
+                "DELETE FROM agent_control_grants WHERE targetResourceKind='browser' AND targetResourceId=?",
+                [id],
+            )?;
+            transaction.execute("DELETE FROM browser_resources WHERE id=?", [id])?;
+            transaction.commit()
+        })
+    }
+
+    pub fn list_agent_control_grants(
+        &self,
+        source_pane_id: Option<&str>,
+    ) -> Result<Vec<AgentControlGrantRecord>, String> {
+        self.with_conn(|db| {
+            let sql = if source_pane_id.is_some() {
+                "SELECT id,sourcePaneId,targetResourceKind,targetResourceId,access,createdAt,updatedAt FROM agent_control_grants WHERE sourcePaneId=? ORDER BY targetResourceKind,targetResourceId"
+            } else {
+                "SELECT id,sourcePaneId,targetResourceKind,targetResourceId,access,createdAt,updatedAt FROM agent_control_grants ORDER BY sourcePaneId,targetResourceKind,targetResourceId"
+            };
+            let mut statement = db.prepare(sql)?;
+            let read = |row: &rusqlite::Row<'_>| Ok(AgentControlGrantRecord {
+                id: row.get(0)?,
+                source_pane_id: row.get(1)?,
+                target_resource_kind: row.get(2)?,
+                target_resource_id: row.get(3)?,
+                access: row.get(4)?,
+                created_at: row.get(5)?,
+                updated_at: row.get(6)?,
+            });
+            if let Some(id) = source_pane_id {
+                statement.query_map([id], read)?.collect()
+            } else {
+                statement.query_map([], read)?.collect()
+            }
+        })
+    }
+
+    pub fn save_agent_control_grant(
+        &self,
+        input: AgentControlGrantInput,
+    ) -> Result<AgentControlGrantRecord, String> {
+        if input.source_pane_id.trim().is_empty() || input.target_resource_id.trim().is_empty() {
+            return Err("Agent 授权的来源和目标资源不能为空".into());
+        }
+        if !matches!(input.target_resource_kind.as_str(), "pane" | "browser") {
+            return Err("Agent 授权目标类型必须是 pane 或 browser".into());
+        }
+        if input.target_resource_kind == "pane" && input.source_pane_id == input.target_resource_id
+        {
+            return Err("Agent 不需要向自身授权".into());
+        }
+        if !matches!(input.access.as_str(), "read" | "write" | "control") {
+            return Err("Agent 授权级别必须是 read、write 或 control".into());
+        }
+        let panes = self.list_mux_panes(None)?;
+        let Some(source) = panes.iter().find(|pane| pane.id == input.source_pane_id) else {
+            return Err("Agent 授权引用的来源 Pane 不存在".into());
+        };
+        if source.kind != MuxPaneKind::Terminal {
+            return Err("Agent 授权来源必须是终端窗格".into());
+        }
+        if input.target_resource_kind == "pane" {
+            let Some(target) = panes
+                .iter()
+                .find(|pane| pane.id == input.target_resource_id)
+            else {
+                return Err("Agent 授权的 Pane 目标必须是 Coding Agent".into());
+            };
+            if target.kind != MuxPaneKind::Terminal {
+                return Err("Agent 授权的窗格目标必须是终端窗格".into());
+            }
+            if target.mux_session_id != source.mux_session_id {
+                return Err("Agent 只能控制同一 Session 中的资源".into());
+            }
+        } else {
+            let resources = self.list_browser_resources(None)?;
+            let Some(target) = resources
+                .iter()
+                .find(|resource| resource.id == input.target_resource_id)
+            else {
+                return Err("Agent 授权引用的浏览器资源不存在".into());
+            };
+            if target.mux_session_id != source.mux_session_id {
+                return Err("Agent 只能控制同一 Session 中的资源".into());
+            }
+        }
+        let existing = self
+            .list_agent_control_grants(Some(&input.source_pane_id))?
+            .into_iter()
+            .find(|grant| {
+                grant.target_resource_kind == input.target_resource_kind
+                    && grant.target_resource_id == input.target_resource_id
+            });
+        let now = Utc::now().to_rfc3339();
+        let grant = AgentControlGrantRecord {
+            id: existing
+                .as_ref()
+                .map(|grant| grant.id.clone())
+                .unwrap_or_else(|| Uuid::new_v4().to_string()),
+            source_pane_id: input.source_pane_id,
+            target_resource_kind: input.target_resource_kind,
+            target_resource_id: input.target_resource_id,
+            access: input.access,
+            created_at: existing
+                .map(|grant| grant.created_at)
+                .unwrap_or_else(|| now.clone()),
+            updated_at: now,
+        };
+        self.with_conn(|db| db.execute(
+            "INSERT INTO agent_control_grants(id,sourcePaneId,targetResourceKind,targetResourceId,access,createdAt,updatedAt) VALUES(?,?,?,?,?,?,?) ON CONFLICT(sourcePaneId,targetResourceKind,targetResourceId) DO UPDATE SET access=excluded.access,updatedAt=excluded.updatedAt",
+            params![grant.id,grant.source_pane_id,grant.target_resource_kind,grant.target_resource_id,grant.access,grant.created_at,grant.updated_at],
+        ).map(|_| ()))?;
+        Ok(grant)
+    }
+
+    pub fn delete_agent_control_grant(&self, id: &str) -> Result<bool, String> {
+        self.with_conn(|db| {
+            db.execute("DELETE FROM agent_control_grants WHERE id=?", [id])
+                .map(|changed| changed > 0)
+        })
+    }
+
+    pub fn append_control_audit(&self, record: &ControlAuditRecord) -> Result<(), String> {
+        let arguments_json =
+            serde_json::to_string(&record.arguments).map_err(|error| error.to_string())?;
+        self.with_conn(|db| db.execute(
+            "INSERT INTO control_audit(id,timestamp,callerId,callerKind,operation,resourceKind,resourceId,argumentsJson,result,errorCode) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            params![record.id,record.timestamp,record.caller_id,record.caller_kind,record.operation,record.resource_kind,record.resource_id,arguments_json,record.result,record.error_code],
+        ).map(|_| ()))
+    }
+
+    pub fn list_control_audit(&self, limit: usize) -> Result<Vec<ControlAuditRecord>, String> {
+        self.with_conn(|db| {
+            let mut statement = db.prepare("SELECT id,timestamp,callerId,callerKind,operation,resourceKind,resourceId,argumentsJson,result,errorCode FROM control_audit ORDER BY timestamp DESC LIMIT ?")?;
+            statement.query_map([limit.clamp(1, 10_000) as i64], |row| {
+                let arguments_json = row.get::<_, String>(7)?;
+                Ok(ControlAuditRecord {
+                    id: row.get(0)?, timestamp: row.get(1)?, caller_id: row.get(2)?, caller_kind: row.get(3)?,
+                    operation: row.get(4)?, resource_kind: row.get(5)?, resource_id: row.get(6)?,
+                    arguments: serde_json::from_str(&arguments_json).unwrap_or_else(|_| serde_json::json!({})),
+                    result: row.get(8)?, error_code: row.get(9)?,
+                })
+            })?.collect()
+        })
+    }
+
+    pub fn clear_control_audit(&self) -> Result<usize, String> {
+        self.with_conn(|db| db.execute("DELETE FROM control_audit", []))
+    }
+
+    pub fn prune_control_audit(&self, retention_days: i64) -> Result<usize, String> {
+        let cutoff = (Utc::now() - chrono::Duration::days(retention_days.max(1))).to_rfc3339();
+        self.with_conn(|db| db.execute("DELETE FROM control_audit WHERE timestamp < ?", [cutoff]))
+    }
+
+    pub fn save_mux_pane(&self, input: MuxPaneInput) -> Result<MuxPane, String> {
+        let mux_session_id = input.mux_session_id.trim();
+        let title = input.title.trim();
+        if mux_session_id.is_empty() || title.is_empty() {
+            return Err("Pane 必须属于一个 Session，且名称不能为空".into());
+        }
+        if input.kind == MuxPaneKind::Browser {
+            return Err("浏览器是会话级资源，不能保存为 Pane".into());
+        }
+        if input.kind == MuxPaneKind::Terminal && input.target_id.trim().is_empty() {
+            return Err("Terminal Pane 必须指定 targetId".into());
+        }
+        let session_exists = self.with_conn(|db| {
+            db.query_row(
+                "SELECT EXISTS(SELECT 1 FROM mux_sessions WHERE id=?)",
+                [mux_session_id],
+                |row| row.get::<_, bool>(0),
+            )
+        })?;
+        if !session_exists {
+            return Err("Mux Session 不存在".into());
+        }
+        let now = Utc::now().to_rfc3339();
+        let id = input
+            .id
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
+        let existing = self
+            .list_mux_panes(None)?
+            .into_iter()
+            .find(|pane| pane.id == id);
+        let sort_order = if let Some(existing) = &existing {
+            existing.sort_order
+        } else {
+            self.with_conn(|db| {
+                db.query_row(
+                    "SELECT COALESCE(MAX(sortOrder), -1) + 1 FROM mux_panes WHERE muxSessionId=?",
+                    [mux_session_id],
+                    |row| row.get(0),
+                )
+            })?
+        };
+        let pane = MuxPane {
+            id,
+            mux_session_id: mux_session_id.into(),
+            kind: input.kind,
+            title: title.into(),
+            target_id: input.target_id.trim().into(),
+            bookmark_id: input.bookmark_id.trim().into(),
+            cwd: input.cwd.trim().into(),
+            command: input.command.trim().into(),
+            launch_profile_id: input.launch_profile_id.trim().into(),
+            sort_order,
+            created_at: existing
+                .as_ref()
+                .map(|pane| pane.created_at.clone())
+                .unwrap_or_else(|| now.clone()),
+            updated_at: now,
+        };
+        self.with_conn(|db| db.execute("INSERT INTO mux_panes(id,muxSessionId,kind,title,targetId,bookmarkId,cwd,command,launchProfileId,sortOrder,createdAt,updatedAt) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET muxSessionId=excluded.muxSessionId,kind=excluded.kind,title=excluded.title,targetId=excluded.targetId,bookmarkId=excluded.bookmarkId,cwd=excluded.cwd,command=excluded.command,launchProfileId=excluded.launchProfileId,updatedAt=excluded.updatedAt", params![pane.id,pane.mux_session_id,pane.kind.as_str(),pane.title,pane.target_id,pane.bookmark_id,pane.cwd,pane.command,pane.launch_profile_id,pane.sort_order,pane.created_at,pane.updated_at]).map(|_| ()))?;
+        Ok(pane)
+    }
+
+    pub fn delete_mux_pane(&self, id: &str) -> Result<(), String> {
+        self.with_conn(|db| {
+            let transaction = db.transaction()?;
+            transaction.execute(
+                "DELETE FROM agent_control_grants WHERE targetResourceKind='pane' AND targetResourceId=?",
+                [id],
+            )?;
+            transaction.execute("DELETE FROM mux_panes WHERE id=?", [id])?;
+            transaction.commit()
         })
     }
 
@@ -1152,9 +1784,12 @@ impl Database {
 mod tests {
     use super::Database;
     use crate::models::{
-        AiCommandHistoryEntry, AiRiskLevel, AiShell, AuthType, BookmarkArchiveEntry, BookmarkInput,
+        AgentControlGrantInput, AiCommandHistoryEntry, AiRiskLevel, AiShell, AuthType,
+        BookmarkArchiveEntry, BookmarkInput, BrowserResourceInput, ControlAuditRecord,
+        MuxPaneInput, MuxPaneKind, MuxSessionInput, MuxSplitDirection, MuxSplitNode,
         PortForwardProfile,
     };
+    use chrono::Utc;
     use uuid::Uuid;
 
     fn input(name: &str, group_name: &str) -> BookmarkInput {
@@ -1174,6 +1809,271 @@ mod tests {
             keepalive_count_max: 3,
             note: String::new(),
         }
+    }
+
+    #[test]
+    fn persists_mux_sessions_panes_and_layout() {
+        let path = std::env::temp_dir().join(format!(
+            "{}-mux-session-{}.db",
+            crate::product::PRODUCT_KEY,
+            Uuid::new_v4()
+        ));
+        let credential_service = format!("{}.mux-session-test", crate::product::CREDENTIAL_SERVICE);
+        let db = Database::open(&path, &credential_service).expect("open test database");
+        let mut session = db
+            .save_mux_session(MuxSessionInput {
+                id: None,
+                name: "Project Alpha".into(),
+                root_path: "D:/code/alpha".into(),
+                layout: None,
+            })
+            .expect("save mux session");
+        let local = db
+            .save_mux_pane(MuxPaneInput {
+                id: None,
+                mux_session_id: session.id.clone(),
+                kind: MuxPaneKind::Terminal,
+                title: "PowerShell".into(),
+                target_id: "local:powershell".into(),
+                bookmark_id: String::new(),
+                cwd: session.root_path.clone(),
+                command: String::new(),
+                launch_profile_id: String::new(),
+            })
+            .expect("save local pane");
+        let ssh = db
+            .save_mux_pane(MuxPaneInput {
+                id: None,
+                mux_session_id: session.id.clone(),
+                kind: MuxPaneKind::Terminal,
+                title: "Build host".into(),
+                target_id: "ssh:bookmark-1".into(),
+                bookmark_id: "bookmark-1".into(),
+                cwd: String::new(),
+                command: "codex".into(),
+                launch_profile_id: "codex.default".into(),
+            })
+            .expect("save ssh pane");
+        session.layout = Some(MuxSplitNode::Split {
+            direction: MuxSplitDirection::Horizontal,
+            ratio: 0.5,
+            first: Box::new(MuxSplitNode::Pane {
+                pane_id: local.id.clone(),
+            }),
+            second: Box::new(MuxSplitNode::Pane {
+                pane_id: ssh.id.clone(),
+            }),
+        });
+        db.save_mux_session(MuxSessionInput {
+            id: Some(session.id.clone()),
+            name: session.name.clone(),
+            root_path: session.root_path.clone(),
+            layout: session.layout.clone(),
+        })
+        .expect("save session layout");
+
+        drop(db);
+        let db = Database::open(&path, &credential_service).expect("reopen test database");
+        let sessions = db.list_mux_sessions().expect("list mux sessions");
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].layout, session.layout);
+        let panes = db
+            .list_mux_panes(Some(&session.id))
+            .expect("list mux panes");
+        assert_eq!(panes.len(), 2);
+        assert_eq!(panes[0].id, local.id);
+        assert_eq!(panes[1].id, ssh.id);
+
+        db.delete_mux_session(&session.id)
+            .expect("delete mux session");
+        assert!(db.list_mux_panes(None).expect("list panes").is_empty());
+
+        drop(db);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("db-wal"));
+        let _ = std::fs::remove_file(path.with_extension("db-shm"));
+    }
+
+    #[test]
+    fn persists_updates_and_cascades_directional_agent_grants() {
+        let path = std::env::temp_dir().join(format!(
+            "{}-agent-grants-{}.db",
+            crate::product::PRODUCT_KEY,
+            Uuid::new_v4()
+        ));
+        let database = Database::open(
+            &path,
+            &format!("{}.agent-grant-test", crate::product::CREDENTIAL_SERVICE),
+        )
+        .unwrap();
+        let session = database
+            .save_mux_session(MuxSessionInput {
+                id: None,
+                name: "Grant Session".into(),
+                root_path: String::new(),
+                layout: None,
+            })
+            .unwrap();
+        let pane = |title: &str| MuxPaneInput {
+            id: None,
+            mux_session_id: session.id.clone(),
+            kind: MuxPaneKind::Terminal,
+            title: title.into(),
+            target_id: "local:powershell".into(),
+            bookmark_id: String::new(),
+            cwd: String::new(),
+            command: String::new(),
+            launch_profile_id: "codex.default".into(),
+        };
+        let source = database.save_mux_pane(pane("Source")).unwrap();
+        let target = database.save_mux_pane(pane("Target")).unwrap();
+        let browser = database
+            .save_browser_resource(BrowserResourceInput {
+                id: None,
+                mux_session_id: session.id.clone(),
+                name: "Browser".into(),
+                source_pane_id: String::new(),
+                bookmark_id: String::new(),
+                url: String::new(),
+                temporary_profile: false,
+            })
+            .unwrap();
+        assert!(browser.url.is_empty());
+        let read = database
+            .save_agent_control_grant(AgentControlGrantInput {
+                source_pane_id: source.id.clone(),
+                target_resource_kind: "pane".into(),
+                target_resource_id: target.id.clone(),
+                access: "read".into(),
+            })
+            .unwrap();
+        let control = database
+            .save_agent_control_grant(AgentControlGrantInput {
+                source_pane_id: source.id.clone(),
+                target_resource_kind: "pane".into(),
+                target_resource_id: target.id.clone(),
+                access: "control".into(),
+            })
+            .unwrap();
+        assert_eq!(read.id, control.id);
+        database
+            .save_agent_control_grant(AgentControlGrantInput {
+                source_pane_id: source.id.clone(),
+                target_resource_kind: "browser".into(),
+                target_resource_id: browser.id.clone(),
+                access: "write".into(),
+            })
+            .unwrap();
+        assert_eq!(
+            database
+                .list_agent_control_grants(Some(&source.id))
+                .unwrap()
+                .len(),
+            2
+        );
+        let grants = database
+            .list_agent_control_grants(Some(&source.id))
+            .unwrap();
+        assert_eq!(
+            grants
+                .iter()
+                .find(|grant| {
+                    grant.target_resource_kind == "pane" && grant.target_resource_id == target.id
+                })
+                .unwrap()
+                .access,
+            "control"
+        );
+        database.delete_mux_pane(&target.id).unwrap();
+        let remaining = database
+            .list_agent_control_grants(Some(&source.id))
+            .unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].target_resource_kind, "browser");
+        assert_eq!(remaining[0].target_resource_id, browser.id);
+
+        let other_session = database
+            .save_mux_session(MuxSessionInput {
+                id: None,
+                name: "Other Session".into(),
+                root_path: String::new(),
+                layout: None,
+            })
+            .unwrap();
+        let other_target = database
+            .save_mux_pane(MuxPaneInput {
+                mux_session_id: other_session.id.clone(),
+                ..pane("Other Agent")
+            })
+            .unwrap();
+        let other_browser = database
+            .save_browser_resource(BrowserResourceInput {
+                id: None,
+                mux_session_id: other_session.id,
+                name: "Other Browser".into(),
+                source_pane_id: String::new(),
+                bookmark_id: String::new(),
+                url: "http://localhost:4173".into(),
+                temporary_profile: false,
+            })
+            .unwrap();
+        for (kind, id) in [
+            ("pane", other_target.id.as_str()),
+            ("browser", other_browser.id.as_str()),
+        ] {
+            assert_eq!(
+                database
+                    .save_agent_control_grant(AgentControlGrantInput {
+                        source_pane_id: source.id.clone(),
+                        target_resource_kind: kind.into(),
+                        target_resource_id: id.into(),
+                        access: "read".into(),
+                    })
+                    .unwrap_err(),
+                "Agent 只能控制同一 Session 中的资源"
+            );
+        }
+        drop(database);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn prunes_control_audit_older_than_retention_window() {
+        let path = std::env::temp_dir().join(format!(
+            "{}-audit-retention-{}.db",
+            crate::product::PRODUCT_KEY,
+            Uuid::new_v4()
+        ));
+        let database = Database::open(
+            &path,
+            &format!("{}.audit-test", crate::product::CREDENTIAL_SERVICE),
+        )
+        .unwrap();
+        let record = |id: &str, timestamp: String| ControlAuditRecord {
+            id: id.into(),
+            timestamp,
+            caller_id: "agent".into(),
+            caller_kind: "agent".into(),
+            operation: "agents.list".into(),
+            resource_kind: "agent".into(),
+            resource_id: String::new(),
+            arguments: serde_json::json!({}),
+            result: "success".into(),
+            error_code: String::new(),
+        };
+        database
+            .append_control_audit(&record(
+                "old",
+                (Utc::now() - chrono::Duration::days(31)).to_rfc3339(),
+            ))
+            .unwrap();
+        database
+            .append_control_audit(&record("current", Utc::now().to_rfc3339()))
+            .unwrap();
+        assert_eq!(database.prune_control_audit(30).unwrap(), 1);
+        assert_eq!(database.list_control_audit(10).unwrap()[0].id, "current");
+        drop(database);
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]
@@ -1541,6 +2441,121 @@ mod tests {
             let _ = std::fs::remove_file(path.with_extension("db-wal"));
             let _ = std::fs::remove_file(path.with_extension("db-shm"));
         }
+    }
+
+    #[test]
+    fn migrates_version_nine_browser_panes_to_session_resources() {
+        let path = std::env::temp_dir().join(format!(
+            "{}-v9-browser-resource-{}.db",
+            crate::product::PRODUCT_KEY,
+            Uuid::new_v4()
+        ));
+        let connection = rusqlite::Connection::open(&path).expect("create version nine database");
+        connection
+            .execute_batch(
+                r#"
+                CREATE TABLE mux_sessions (
+                  id TEXT PRIMARY KEY, name TEXT NOT NULL, rootPath TEXT NOT NULL DEFAULT '',
+                  layoutJson TEXT NOT NULL DEFAULT '', sortOrder INTEGER NOT NULL DEFAULT 0,
+                  createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL
+                );
+                CREATE TABLE mux_panes (
+                  id TEXT PRIMARY KEY, muxSessionId TEXT NOT NULL, kind TEXT NOT NULL,
+                  title TEXT NOT NULL, targetId TEXT NOT NULL DEFAULT '', bookmarkId TEXT NOT NULL DEFAULT '',
+                  cwd TEXT NOT NULL DEFAULT '', command TEXT NOT NULL DEFAULT '',
+                  launchProfileId TEXT NOT NULL DEFAULT '', sortOrder INTEGER NOT NULL DEFAULT 0,
+                  createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL,
+                  FOREIGN KEY(muxSessionId) REFERENCES mux_sessions(id) ON DELETE CASCADE
+                );
+                CREATE TABLE agent_control_grants (
+                  id TEXT PRIMARY KEY, sourcePaneId TEXT NOT NULL, targetPaneId TEXT NOT NULL,
+                  access TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL,
+                  UNIQUE(sourcePaneId, targetPaneId),
+                  FOREIGN KEY(sourcePaneId) REFERENCES mux_panes(id) ON DELETE CASCADE,
+                  FOREIGN KEY(targetPaneId) REFERENCES mux_panes(id) ON DELETE CASCADE
+                );
+                INSERT INTO mux_sessions VALUES (
+                  'session-v9','Legacy project','D:/code/legacy',
+                  '{"type":"split","direction":"horizontal","ratio":0.4,"first":{"type":"pane","paneId":"agent-pane"},"second":{"type":"split","direction":"vertical","ratio":0.5,"first":{"type":"pane","paneId":"browser-pane"},"second":{"type":"pane","paneId":"terminal-pane"}}}',
+                  0,'2026-08-01T00:00:00Z','2026-08-02T00:00:00Z'
+                );
+                INSERT INTO mux_panes VALUES
+                  ('agent-pane','session-v9','terminal','Codex','local:powershell','','D:/code/legacy','codex','codex.default',0,'2026-08-01T00:00:00Z','2026-08-02T00:00:00Z'),
+                  ('browser-pane','session-v9','browser','Preview','ssh-runtime','bookmark-1','','http://localhost:4173','',1,'2026-08-01T01:00:00Z','2026-08-02T01:00:00Z'),
+                  ('terminal-pane','session-v9','terminal','Shell','local:powershell','','D:/code/legacy','','',2,'2026-08-01T02:00:00Z','2026-08-02T02:00:00Z');
+                INSERT INTO agent_control_grants VALUES
+                  ('grant-browser','agent-pane','browser-pane','write','2026-08-02T00:00:00Z','2026-08-02T00:00:00Z'),
+                  ('grant-pane','agent-pane','terminal-pane','read','2026-08-02T00:00:00Z','2026-08-02T00:00:00Z');
+                PRAGMA user_version = 9;
+                "#,
+            )
+            .expect("create version nine schema");
+        drop(connection);
+
+        let credential_service =
+            format!("{}.v9-migration-test", crate::product::CREDENTIAL_SERVICE);
+        let database =
+            Database::open(&path, &credential_service).expect("migrate version nine database");
+
+        let panes = database
+            .list_mux_panes(Some("session-v9"))
+            .expect("list migrated panes");
+        assert_eq!(
+            panes
+                .iter()
+                .map(|pane| pane.id.as_str())
+                .collect::<Vec<_>>(),
+            ["agent-pane", "terminal-pane"]
+        );
+        let resources = database
+            .list_browser_resources(Some("session-v9"))
+            .expect("list migrated browser resources");
+        assert_eq!(resources.len(), 1);
+        assert_eq!(resources[0].id, "browser-pane");
+        assert_eq!(resources[0].name, "Preview");
+        assert_eq!(resources[0].source_pane_id, "ssh-runtime");
+        assert_eq!(resources[0].bookmark_id, "bookmark-1");
+        assert_eq!(resources[0].url, "http://localhost:4173");
+        assert_eq!(resources[0].created_at, "2026-08-01T01:00:00Z");
+
+        let session = database
+            .list_mux_sessions()
+            .expect("list migrated sessions")
+            .into_iter()
+            .find(|session| session.id == "session-v9")
+            .expect("migrated session");
+        assert_eq!(
+            session.layout,
+            Some(MuxSplitNode::Split {
+                direction: MuxSplitDirection::Horizontal,
+                ratio: 0.4,
+                first: Box::new(MuxSplitNode::Pane {
+                    pane_id: "agent-pane".into(),
+                }),
+                second: Box::new(MuxSplitNode::Pane {
+                    pane_id: "terminal-pane".into(),
+                }),
+            })
+        );
+
+        let grants = database
+            .list_agent_control_grants(Some("agent-pane"))
+            .expect("list migrated grants");
+        assert!(grants.iter().any(|grant| {
+            grant.id == "grant-browser"
+                && grant.target_resource_kind == "browser"
+                && grant.target_resource_id == "browser-pane"
+        }));
+        assert!(grants.iter().any(|grant| {
+            grant.id == "grant-pane"
+                && grant.target_resource_kind == "pane"
+                && grant.target_resource_id == "terminal-pane"
+        }));
+
+        drop(database);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("db-wal"));
+        let _ = std::fs::remove_file(path.with_extension("db-shm"));
     }
 
     #[test]

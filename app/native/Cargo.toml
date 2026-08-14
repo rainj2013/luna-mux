@@ -16,6 +16,7 @@ tauri-build = { version = "2", features = [] }
 anyhow = "1"
 async-trait = "0.1"
 async-recursion = "1"
+axum = "0.8"
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "6"
@@ -25,6 +26,7 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 regex = "1"
+rmcp = { version = "3.1.2", features = ["transport-streamable-http-server"] }
 rusqlite = { version = "0.37", features = ["bundled"] }
 russh = "0.54"
 russh-sftp = "2.1"
@@ -36,9 +38,12 @@ tauri = { version = "2", features = ["macos-private-api", "image-png", "image-ic
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
+tauri-plugin-notification = "2"
 thiserror = "2"
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["io"] }
+tokio-tungstenite = { version = "0.27", features = ["rustls-tls-native-roots"] }
+toml = "0.9"
 uuid = { version = "1", features = ["v4", "serde"] }
 url = "2"
 walkdir = "2"
@@ -46,6 +51,7 @@ zeroize = "1"
 fontdb = { version = "0.23.0", default-features = false, features = ["std", "fs"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSImage", "NSResponder"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSData", "NSThread"] }

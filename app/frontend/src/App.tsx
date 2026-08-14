@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowRight, Bookmark as BookmarkIcon, Bot, Check, ChevronDown, ChevronRight, CircleHelp, CirclePlus, Copy, Database as DatabaseIcon, Download, Edit3, Eye, EyeOff, FileInput, FileJson2, Folder, FolderOpen, FolderPlus, GripVertical, History as HistoryIcon, Image as ImageIcon, KeyRound, Languages, Minus, Monitor, Moon, Network, Palette, PanelLeftClose, PanelLeftOpen, Play, Plug, Power, Rocket, RotateCcw, Search, Send, Server, Settings as SettingsIcon, ShieldAlert, Square, SquareTerminal, Star, Sun, Trash2, Upload, WandSparkles, X } from 'lucide-react'
-import { BUNDLED_TERMINAL_FONT, DEFAULT_AI_SETTINGS, DEFAULT_TERMINAL_SETTINGS, type AiCommandHistoryEntry, type AiCommandSuggestion, type AiProvider, type AiRawExchange, type AiRiskAssessment, type AiSettings, type AiSettingsInput, type AiShell, type AiThinkingMode, type AppEvent, type AppIconId, type AppIconSettings, type AppLanguage, type Bookmark, type BookmarkArchivePreview, type BookmarkArchiveSource, type BookmarkInput, type ConflictResolution, type ConnectInput, type DeploymentDiffEntry, type DeploymentProfile, type HostKeyPrompt, type LunaRemoteImportPreview, type LunaRemoteImportResult, type LunaRemoteSource, type PortForwardProfile, type SessionStatus, type SshConfigPreview, type TerminalSettings, type TransferTask, type TunnelSummary, type UiTheme } from './types'
+import { ArrowRight, Bookmark as BookmarkIcon, Bot, Check, ChevronDown, ChevronRight, CircleHelp, CirclePlus, Columns2, Columns3, Copy, Database as DatabaseIcon, Download, Edit3, ExternalLink, Eye, EyeOff, FileInput, FileJson2, Folder, FolderOpen, FolderPlus, Globe2, Grid2x2, GripVertical, History as HistoryIcon, Image as ImageIcon, KeyRound, Languages, LayoutGrid, Maximize2, Minimize, Minus, Monitor, Moon, Network, Palette, PanelLeftClose, PanelLeftOpen, Pause, Play, Plus, Power, Rocket, RotateCcw, Rows2, Rows3, Search, Send, Server, Settings as SettingsIcon, ShieldAlert, Sparkles, Square, SquareTerminal, Star, Sun, Trash2, Upload, WandSparkles, X } from 'lucide-react'
+import { BUNDLED_TERMINAL_FONT, DEFAULT_AI_SETTINGS, DEFAULT_TERMINAL_SETTINGS, type AgentAdapterInstallAction, type AgentAdapterInstallPreview, type AgentAdapterInstallStatus, type AgentControlAccess, type AgentControlGrant, type AgentLaunchProfile, type AiCommandHistoryEntry, type AiCommandSuggestion, type AiProvider, type AiRawExchange, type AiRiskAssessment, type AiSettings, type AiSettingsInput, type AiShell, type AiThinkingMode, type AppEvent, type AppIconId, type AppIconSettings, type AppLanguage, type Bookmark, type BookmarkArchivePreview, type BookmarkArchiveSource, type BookmarkInput, type BrowserResource, type BrowserRuntime, type BrowserRuntimeStatus, type BrowserTunnel, type ChromeInstallation, type ConflictResolution, type ConnectInput, type ControlAuditRecord, type DeploymentDiffEntry, type DeploymentProfile, type HostKeyPrompt, type LunaRemoteImportPreview, type LunaRemoteImportResult, type LunaRemoteSource, type ManagedAgentEvent, type ManagedAgentStatus, type MuxPane, type MuxSession, type MuxSplitNode, type PortForwardProfile, type SessionStatus, type SshConfigPreview, type TerminalRuntimeEvent, type TerminalSettings, type TerminalTarget, type TransferTask, type TunnelSummary, type UiTheme } from './types'
 import { TerminalPane, type TerminalPaneHandle } from './components/TerminalPane'
 import { SftpPane } from './components/SftpPane'
 import { HelpDialog } from './components/HelpDialog'
@@ -8,16 +8,20 @@ import { colorWithOpacity, terminalBackgroundStyle } from './terminal-style'
 import { availableLanguages, getNativeMenuLabels, useI18n, type MessageKey } from './i18n'
 import { PRODUCT_INFO } from './product-info'
 
-interface WorkspaceTab { key: string; bookmarkId: string; sessionId?: string; runtimeId?: string; status: SessionStatus; error?: string }
-interface ConnectionTarget { newSession?: boolean; tabKey?: string }
+interface WorkspaceTab extends MuxPane { key: string; sessionId?: string; runtimeId?: string; agentId?: string; status: SessionStatus; error?: string }
+interface BrowserResourceState extends BrowserResource { runtime?: BrowserRuntime; tunnel?: BrowserTunnel; status: BrowserRuntimeStatus | 'stopped'; error?: string }
+interface ManagedAgentSummary { agentId: string; paneId: string; runtimeId: string; status: ManagedAgentStatus | 'starting' | 'stopped'; waitingReason?: string; timestamp?: string; eventCount: number; unread: boolean; latest?: ManagedAgentEvent }
+interface ConnectionTarget { newSession?: boolean; tabKey?: string; launchAgentProfileId?: string; launchAgentLabel?: string; paneTitle?: string }
 interface SidebarContextMenu { x: number; y: number; group?: string; bookmark?: Bookmark }
 interface GroupDialogState { mode: 'create' | 'rename'; group?: string }
-type SettingsSection = 'appearance' | 'terminal' | 'ai'
+interface MuxSessionDialogState { mode: 'create' | 'rename'; session?: MuxSession }
+type SettingsSection = 'appearance' | 'terminal' | 'agents' | 'ai'
 type SidebarPointerDrag = { pointerId: number; type: 'bookmark' | 'group'; value: string; startX: number; startY: number; active: boolean }
 type SidebarPointerDrop = { type: 'bookmark'; id: string; group: string; position: 'before' | 'after' } | { type: 'group'; group: string; position: 'before' | 'after' | 'inside' }
 type ConfirmationOptions = { title: string; message: string; detail?: string; kind: 'warning' | 'danger'; confirmLabel: string }
 type ConfirmAction = (options: ConfirmationOptions) => Promise<boolean>
 type PendingConfirmation = ConfirmationOptions & { resolve(value: boolean): void }
+type LayoutPreset = 'horizontal' | 'vertical' | 'twoColumns'
 
 const emptyBookmark: BookmarkInput = { name: '', host: '', port: 22, username: '', authType: 'password', privateKeyPath: '', jumpBookmarkId: '', groupName: '', favorite: false, keepaliveEnabled: true, keepaliveIntervalSeconds: 15, keepaliveCountMax: 3, note: '' }
 type ConnectionCredentials = Omit<ConnectInput, 'bookmarkId' | 'newSession'>
@@ -46,11 +50,23 @@ function errorMessage(error: unknown): string {
   return String(error)
 }
 
+function agentAdapterLabel(adapterId: string): string {
+  if (adapterId === 'codex') return 'Codex'
+  if (adapterId === 'claude-code') return 'Claude Code'
+  return adapterId
+}
+
 export function App(): React.JSX.Element {
   const { language, setLanguage, t } = useI18n()
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([])
+  const [muxSessions, setMuxSessions] = useState<MuxSession[]>([])
+  const [activeMuxSessionId, setActiveMuxSessionId] = useState('')
+  const [collapsedMuxSessionIds, setCollapsedMuxSessionIds] = useState<Set<string>>(new Set())
   const [tabs, setTabs] = useState<WorkspaceTab[]>([])
+  const [browserResources, setBrowserResources] = useState<BrowserResourceState[]>([])
   const [activeKey, setActiveKey] = useState('')
+  const [maximizedPaneId, setMaximizedPaneId] = useState('')
+  const [layoutMenuOpen, setLayoutMenuOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [bookmarkDialog, setBookmarkDialog] = useState<Bookmark | 'new' | null>(null)
   const [authRequest, setAuthRequest] = useState<{ bookmark: Bookmark; target: ConnectionTarget } | null>(null)
@@ -58,7 +74,11 @@ export function App(): React.JSX.Element {
   const [conflict, setConflict] = useState<{ taskId: string; sourcePath: string; destinationPath: string } | null>(null)
   const [transfers, setTransfers] = useState<TransferTask[]>([])
   const [transferView, setTransferView] = useState<'queue' | 'history'>('queue')
-  const [workspaceView, setWorkspaceView] = useState<'terminal' | 'files'>('terminal')
+  const [workspaceView, setWorkspaceView] = useState<'terminal' | 'agents' | 'browser' | 'files'>('terminal')
+  const [managedAgentEvents, setManagedAgentEvents] = useState<ManagedAgentEvent[]>([])
+  const [agentControlGrants, setAgentControlGrants] = useState<AgentControlGrant[]>([])
+  const [controlAuditDialog, setControlAuditDialog] = useState<ControlAuditRecord[] | null>(null)
+  const [readAgentSequences, setReadAgentSequences] = useState<Set<number>>(new Set())
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [collapsedBookmarkGroups, setCollapsedBookmarkGroups] = useState<Set<string>>(new Set())
   const [bookmarkGroupNames, setBookmarkGroupNames] = useState<string[]>([])
@@ -88,15 +108,23 @@ export function App(): React.JSX.Element {
   const [lunaRemoteImportPreview, setLunaRemoteImportPreview] = useState<LunaRemoteImportPreview | null>(null)
   const [sidebarContextMenu, setSidebarContextMenu] = useState<SidebarContextMenu | null>(null)
   const [groupDialog, setGroupDialog] = useState<GroupDialogState | null>(null)
+  const [muxSessionDialog, setMuxSessionDialog] = useState<MuxSessionDialogState | null>(null)
+  const [paneRenameDialog, setPaneRenameDialog] = useState<WorkspaceTab | null>(null)
+  const [connectionLibraryDialog, setConnectionLibraryDialog] = useState(false)
+  const [paneLauncher, setPaneLauncher] = useState<{ targets: TerminalTarget[] } | null>(null)
+  const [agentLauncher, setAgentLauncher] = useState<{ targets: TerminalTarget[]; profiles: AgentLaunchProfile[] } | null>(null)
+  const [browserLauncher, setBrowserLauncher] = useState<{ chrome: ChromeInstallation | null } | null>(null)
   const [confirmation, setConfirmation] = useState<PendingConfirmation | null>(null)
   const [toast, setToast] = useState('')
   const [toastKind, setToastKind] = useState<'error' | 'success'>('error')
+  const bootstrapStarted = useRef(false)
   const stateRestored = useRef(false)
   const sidebarWidthRef = useRef(defaultSidebarWidth)
   const sidebarPointerDragRef = useRef<SidebarPointerDrag | null>(null)
   const sidebarPointerDropRef = useRef<SidebarPointerDrop | null>(null)
   const suppressSidebarClickRef = useRef(false)
   const terminalPaneRefs = useRef(new Map<string, TerminalPaneHandle>())
+  const browserResourceStartInFlightRef = useRef(new Set<string>())
 
   const showToast = (message: string, kind: 'error' | 'success' = 'error'): void => { setToastKind(kind); setToast(message); setTimeout(() => setToast(''), 4500) }
   const showError = (message: string): void => showToast(message)
@@ -107,6 +135,180 @@ export function App(): React.JSX.Element {
     setConfirmation(null)
   }
   const openSettings = (section: SettingsSection = 'appearance'): void => { setSettingsInitialSection(section); setSettingsDialog(true) }
+  const openPaneLauncher = async (muxSessionId = activeMuxSessionId): Promise<void> => {
+    if (!muxSessionId) { showError(t('app.createSessionFirst')); return }
+    setActiveMuxSessionId(muxSessionId)
+    setActiveKey(tabs.find((pane) => pane.muxSessionId === muxSessionId)?.key ?? '')
+    setWorkspaceView('terminal')
+    setMaximizedPaneId('')
+    setCollapsedMuxSessionIds((current) => {
+      if (!current.has(muxSessionId)) return current
+      const next = new Set(current)
+      next.delete(muxSessionId)
+      return next
+    })
+    try {
+      const runtimeTargets = await window.api.terminalRuntimes.targets()
+      const targets = runtimeTargets.filter((item) => item.transport === 'localPty' || item.transport === 'ssh')
+      setPaneLauncher({ targets })
+    } catch (error) { showError(errorMessage(error)) }
+  }
+  const openAgentLauncher = async (): Promise<void> => {
+    if (!activeMuxSessionId) { showError(t('app.createSessionFirst')); return }
+    try {
+      const [runtimeTargets, profiles] = await Promise.all([
+        window.api.terminalRuntimes.targets(),
+        window.api.managedAgents.profiles()
+      ])
+      if (!profiles.length) { showError(t('app.noAgentProfiles')); return }
+      setAgentLauncher({
+        targets: runtimeTargets.filter((item) => item.transport === 'localPty' || item.transport === 'ssh'),
+        profiles
+      })
+    } catch (error) { showError(errorMessage(error)) }
+  }
+  const openBrowserLauncher = async (): Promise<void> => {
+    if (!activeMuxSessionId) { showError(t('app.createSessionFirst')); return }
+    try { setBrowserLauncher({ chrome: await window.api.browserRuntimes.discoverChrome() }) }
+    catch (error) { showError(errorMessage(error)) }
+  }
+  const persistSessionLayout = async (session: MuxSession, layout: MuxSplitNode | undefined): Promise<MuxSession> => {
+    const saved = await window.api.muxSessions.save({ id: session.id, name: session.name, rootPath: session.rootPath, layout })
+    setMuxSessions((current) => current.map((item) => item.id === saved.id ? saved : item))
+    return saved
+  }
+  const openLocalTerminal = async (targetId?: string, launchProfile?: AgentLaunchProfile, paneTitle = ''): Promise<void> => {
+    try {
+      const muxSession = muxSessions.find((session) => session.id === activeMuxSessionId)
+      if (!muxSession) { showError(t('app.createSessionFirst')); return }
+      if (!targetId) { await openPaneLauncher(); return }
+      const localTargets = (await window.api.terminalRuntimes.targets()).filter((item) => item.transport === 'localPty')
+      const target = localTargets.find((item) => item.id === targetId)
+      if (!target) { showError(t('app.localTerminalUnavailable')); return }
+      if (launchProfile) {
+        const availability = await window.api.managedAgents.availability(launchProfile.id, target.id)
+        if (!availability.available) {
+          showError(availability.detail || t('app.agentCommandUnavailable', { value0: launchProfile.command, value1: target.label }))
+          return
+        }
+      }
+      setPaneLauncher(null)
+      setAgentLauncher(null)
+      const title = paneTitle.trim() || (launchProfile ? launchProfile.label + ' · ' + target.label : target.label)
+      const savedPane = await window.api.muxPanes.save({ muxSessionId: muxSession.id, kind: 'terminal', title, targetId: target.id, cwd: muxSession.rootPath, launchProfileId: launchProfile?.id })
+      const runtimeId = crypto.randomUUID()
+      const agentId = launchProfile ? crypto.randomUUID() : undefined
+      const pane: WorkspaceTab = { ...savedPane, key: savedPane.id, agentId, status: 'connecting' }
+      setTabs((current) => [...current, pane])
+      const layout = insertPaneInLayout(layoutFromPanes(muxSession.layout, sessionTabs), activeKey || undefined, pane.id, 'horizontal')
+      await persistSessionLayout(muxSession, layout)
+      setActiveKey(pane.key)
+      setWorkspaceView('terminal')
+      const runtime = await window.api.terminalRuntimes.create({
+        runtimeId,
+        context: { muxSessionId: muxSession.id, paneId: pane.id, runtimeId },
+        targetId: target.id,
+        title,
+        cwd: muxSession.rootPath || undefined,
+        managedAgent: launchProfile && agentId ? { muxSessionId: muxSession.id, paneId: pane.id, runtimeId, agentId, launchProfileId: launchProfile.id } : undefined,
+        cols: 100,
+        rows: 30
+      })
+      setTabs((current) => current.map((tab) => tab.key === pane.key ? { ...tab, runtimeId: runtime.runtimeId, agentId, status: runtime.status === 'running' ? 'connected' : runtime.status === 'error' ? 'error' : 'connecting', error: runtime.error } : tab))
+    } catch (error) {
+      showError(errorMessage(error))
+    }
+  }
+  const createBrowserResource = async (name: string, temporaryProfile = false): Promise<void> => {
+    try {
+      const muxSession = muxSessions.find((session) => session.id === activeMuxSessionId)
+      if (!muxSession) { showError(t('app.createSessionFirst')); return }
+      setBrowserLauncher(null)
+      const saved = await window.api.browserResources.save({ muxSessionId: muxSession.id, name, sourcePaneId: '', temporaryProfile })
+      const activeResource = browserResources.find((item) => item.muxSessionId === muxSession.id && (item.status === 'running' || item.status === 'starting'))
+      const resource: BrowserResourceState = { ...saved, status: activeResource ? 'stopped' : 'starting' }
+      setBrowserResources((current) => [...current, resource])
+      setWorkspaceView('browser')
+      if (activeResource) {
+        showToast(t('app.browserCreatedStopped', { value0: resource.name, value1: activeResource.name }), 'success')
+      } else {
+        await startBrowserResource(resource)
+      }
+    } catch (error) { showError(errorMessage(error)) }
+  }
+
+  const startBrowserResource = async (resource: BrowserResourceState): Promise<void> => {
+    if (browserResourceStartInFlightRef.current.has(resource.id)) return
+    const activeResource = browserResources.find((item) => item.id !== resource.id && item.muxSessionId === resource.muxSessionId && (item.status === 'running' || item.status === 'starting'))
+    if (activeResource) {
+      setBrowserResources((current) => current.map((item) => item.id === resource.id ? { ...item, status: 'stopped', error: undefined } : item))
+      showError(t('app.anotherBrowserIsActive', { value0: activeResource.name }))
+      return
+    }
+    browserResourceStartInFlightRef.current.add(resource.id)
+    let tunnel: BrowserTunnel | undefined
+    try {
+      setBrowserResources((current) => current.map((item) => item.id === resource.id ? { ...item, status: 'starting', error: undefined } : item))
+      let launchUrl = 'about:blank'
+      if (resource.sourcePaneId) {
+        const sourcePane = tabs.find((item) => item.id === resource.sourcePaneId && item.muxSessionId === resource.muxSessionId)
+        if (!sourcePane?.sessionId || sourcePane.status !== 'connected') throw new Error(t('app.remoteBrowserSourceUnavailable'))
+        tunnel = await window.api.tunnels.startBrowser(sourcePane.sessionId, resource.id, sourcePane.id, resource.url)
+        launchUrl = tunnel.localUrl
+      }
+      const runtime = await window.api.browserRuntimes.create({ muxSessionId: resource.muxSessionId, browserResourceId: resource.id, url: launchUrl, temporaryProfile: resource.temporaryProfile })
+      setBrowserResources((current) => current.map((item) => item.id === resource.id ? { ...item, runtime, tunnel, status: runtime.status, error: runtime.error } : item))
+      await window.api.browserRuntimes.focusExternal(runtime.id)
+    } catch (error) {
+      if (tunnel) await window.api.tunnels.stop(tunnel.tunnel.sessionId, tunnel.tunnel.id).catch(() => undefined)
+      setBrowserResources((current) => current.map((item) => item.id === resource.id ? { ...item, status: 'error', error: errorMessage(error), runtime: undefined, tunnel: undefined } : item))
+      showError(errorMessage(error))
+    } finally {
+      browserResourceStartInFlightRef.current.delete(resource.id)
+    }
+  }
+
+  const stopBrowserResource = async (resource: BrowserResourceState): Promise<void> => {
+    if (resource.runtime) await window.api.browserRuntimes.close(resource.runtime.id).catch(() => undefined)
+    if (resource.tunnel) await window.api.tunnels.stop(resource.tunnel.tunnel.sessionId, resource.tunnel.tunnel.id).catch(() => undefined)
+    setBrowserResources((current) => current.map((item) => item.id === resource.id ? { ...item, runtime: undefined, tunnel: undefined, status: 'stopped', error: undefined } : item))
+  }
+  const restartBrowserResource = async (resource: BrowserResourceState): Promise<void> => {
+    await stopBrowserResource(resource)
+    await startBrowserResource({ ...resource, runtime: undefined, tunnel: undefined, status: 'stopped', error: undefined })
+  }
+  const removeBrowserResource = async (resource: BrowserResourceState): Promise<void> => {
+    if (!await confirmAction({ title: t('app.deleteBrowserResource'), message: t('app.deleteBrowserResourceValue', { value0: resource.name }), detail: t('app.browserResourceDeleteDetail'), kind: 'danger', confirmLabel: t('app.deleteBrowserResource') })) return
+    try {
+      await stopBrowserResource(resource)
+      await window.api.browserResources.remove(resource.id)
+      setBrowserResources((current) => current.filter((item) => item.id !== resource.id))
+      setAgentControlGrants(await window.api.managedAgents.listGrants())
+    } catch (error) { showError(errorMessage(error)) }
+  }
+  const startLocalPane = async (pane: WorkspaceTab): Promise<void> => {
+    try {
+      setActiveKey(pane.key)
+      setWorkspaceView('terminal')
+      setTabs((current) => current.map((item) => item.key === pane.key ? { ...item, status: 'connecting', error: undefined } : item))
+      const runtimeId = crypto.randomUUID()
+      const agentId = pane.launchProfileId ? crypto.randomUUID() : undefined
+      const runtime = await window.api.terminalRuntimes.create({
+        runtimeId,
+        context: { muxSessionId: pane.muxSessionId, paneId: pane.id, runtimeId },
+        targetId: pane.targetId,
+        title: pane.title,
+        cwd: pane.cwd || undefined,
+        managedAgent: pane.launchProfileId && agentId ? { muxSessionId: pane.muxSessionId, paneId: pane.id, runtimeId, agentId, launchProfileId: pane.launchProfileId } : undefined,
+        cols: 100,
+        rows: 30
+      })
+      setTabs((current) => current.map((item) => item.key === pane.key ? { ...item, runtimeId: runtime.runtimeId, agentId, status: runtime.status === 'running' ? 'connected' : runtime.status === 'error' ? 'error' : 'connecting', error: runtime.error } : item))
+    } catch (error) {
+      setTabs((current) => current.map((item) => item.key === pane.key ? { ...item, status: 'error', error: errorMessage(error) } : item))
+      showError(errorMessage(error))
+    }
+  }
   const reloadBookmarks = async (): Promise<void> => setBookmarks(await window.api.bookmarks.list())
   const reloadSidebarData = async (): Promise<void> => {
     const [items, groups] = await Promise.all([window.api.bookmarks.list(), window.api.bookmarkGroups.list()])
@@ -131,8 +333,23 @@ export function App(): React.JSX.Element {
   }
 
   useEffect(() => {
-    void Promise.all([window.api.bookmarks.list(), window.api.bookmarkGroups.list(), window.api.transfers.list(), window.api.state.getSidebarCollapsed(), window.api.state.getCollapsedBookmarkGroups(), window.api.state.getSidebarWidth(), window.api.settings.getTerminal(), window.api.settings.getAppIcons(), window.api.settings.getUiTheme(), window.api.ai.getSettings()]).then(([items, groups, transferItems, collapsed, collapsedGroups, width, appearance, icons, theme, ai]) => {
+    if (bootstrapStarted.current) return
+    bootstrapStarted.current = true
+    void Promise.all([window.api.bookmarks.list(), window.api.bookmarkGroups.list(), window.api.transfers.list(), window.api.state.getSidebarCollapsed(), window.api.state.getCollapsedBookmarkGroups(), window.api.state.getSidebarWidth(), window.api.settings.getTerminal(), window.api.settings.getAppIcons(), window.api.settings.getUiTheme(), window.api.ai.getSettings(), window.api.muxSessions.list(), window.api.muxPanes.list(), window.api.browserResources.list(), window.api.managedAgents.events(), window.api.managedAgents.listGrants()]).then(async ([items, groups, transferItems, collapsed, collapsedGroups, width, appearance, icons, theme, ai, storedSessions, storedPanes, storedBrowserResources, agentEvents, agentGrants]) => {
+      const uniqueSessions = [...new Map(storedSessions.map((session) => [session.id, session])).values()]
+      const emptyDefaults = uniqueSessions.filter((session) => session.id === 'default-session' && !session.rootPath && !session.layout && !storedPanes.some((pane) => pane.muxSessionId === session.id) && ['Untitled session', '未命名会话'].includes(session.name))
+      if (emptyDefaults.length) {
+        const obsoleteIds = new Set(emptyDefaults.map((session) => session.id))
+        await Promise.all([...obsoleteIds].map((id) => window.api.muxSessions.remove(id)))
+        for (let index = uniqueSessions.length - 1; index >= 0; index -= 1) if (obsoleteIds.has(uniqueSessions[index]!.id)) uniqueSessions.splice(index, 1)
+      }
+      const sessionItems = uniqueSessions
       setBookmarks(items); setTransfers(transferItems)
+      setMuxSessions(sessionItems)
+      setActiveMuxSessionId(sessionItems[0]?.id ?? '')
+      setTabs(storedPanes.map((pane) => ({ ...pane, key: pane.id, status: 'disconnected' })))
+      setBrowserResources(storedBrowserResources.map((resource) => ({ ...resource, status: 'stopped' })))
+      setActiveKey(storedPanes.find((pane) => pane.muxSessionId === sessionItems[0]?.id)?.id ?? '')
       setBookmarkGroupNames(groups)
       setSidebarCollapsed(collapsed)
       setCollapsedBookmarkGroups(new Set(collapsedGroups))
@@ -142,6 +359,8 @@ export function App(): React.JSX.Element {
       setAppIcons(icons)
       setUiTheme(theme)
       setAiSettings(ai)
+      setManagedAgentEvents(agentEvents)
+      setAgentControlGrants(agentGrants)
       if (appearance.backgroundImagePath) void window.api.settings.loadTerminalBackground(appearance.backgroundImagePath).then(setTerminalBackground).catch(() => setTerminalBackground(''))
       stateRestored.current = true
     }).catch((error) => showError(errorMessage(error)))
@@ -179,23 +398,102 @@ export function App(): React.JSX.Element {
     }
   }, [sidebarContextMenu])
 
+  useEffect(() => {
+    if (!layoutMenuOpen) return
+    const close = (): void => setLayoutMenuOpen(false)
+    const closeOnKey = (event: KeyboardEvent): void => { if (event.key === 'Escape') close() }
+    document.addEventListener('pointerdown', close)
+    window.addEventListener('blur', close)
+    document.addEventListener('keydown', closeOnKey)
+    return () => {
+      document.removeEventListener('pointerdown', close)
+      window.removeEventListener('blur', close)
+      document.removeEventListener('keydown', closeOnKey)
+    }
+  }, [layoutMenuOpen])
+
   useEffect(() => window.api.onEvent((event: AppEvent) => {
     if (event.type === 'session') {
       setTabs((current) => current.map((tab) => tab.sessionId === event.payload.id ? { ...tab, status: event.payload.status, error: event.payload.error } : tab))
       if (event.payload.status === 'connected') void reloadBookmarks()
-      if (['disconnected', 'error'].includes(event.payload.status)) setHostPrompts((current) => current.filter((item) => item.sessionId !== event.payload.id))
+      if (['disconnected', 'error'].includes(event.payload.status)) {
+        setHostPrompts((current) => current.filter((item) => item.sessionId !== event.payload.id))
+        setBrowserResources((current) => current.map((resource) => {
+          if (resource.tunnel?.tunnel.sessionId !== event.payload.id) return resource
+          if (resource.runtime) void window.api.browserRuntimes.close(resource.runtime.id).catch(() => undefined)
+          return { ...resource, runtime: undefined, tunnel: undefined, status: 'error', error: t('app.remoteBrowserConnectionLost') }
+        }))
+      }
     }
     if (event.type === 'host-key') setHostPrompts((current) => current.some((item) => item.sessionId === event.payload.sessionId && item.fingerprint === event.payload.fingerprint) ? current : [...current, event.payload])
     if (event.type === 'transfer') {
       setTransfers((current) => [event.payload, ...current.filter((item) => item.id !== event.payload.id)].sort((a, b) => b.createdAt.localeCompare(a.createdAt)))
       if (event.payload.status !== 'conflict') setConflict((current) => current?.taskId === event.payload.id ? null : current)
     }
+    if (event.type === 'tunnel' && event.payload.status === 'error') {
+      void window.api.tunnels.stop(event.payload.sessionId, event.payload.id).catch(() => undefined)
+      setBrowserResources((current) => current.map((resource) => {
+        if (resource.tunnel?.tunnel.id !== event.payload.id) return resource
+        if (resource.runtime) void window.api.browserRuntimes.close(resource.runtime.id).catch(() => undefined)
+        return { ...resource, runtime: undefined, tunnel: undefined, status: 'error', error: event.payload.error || t('app.remoteBrowserConnectionLost') }
+      }))
+    }
     if (event.type === 'transfer-conflict') setConflict(event.payload)
   }), [])
 
+  useEffect(() => window.api.onTerminalRuntimeEvent((event: TerminalRuntimeEvent) => {
+    const runtime = event.type === 'status' ? event.payload.runtime : undefined
+    const runtimeId = event.type === 'status' ? event.payload.runtime.runtimeId : event.payload.runtimeId
+    if (!runtimeId) return
+    setTabs((current) => current.map((tab) => {
+      if (tab.runtimeId !== runtimeId) return tab
+      if (event.type === 'status') return { ...tab, status: runtime!.status === 'running' ? 'connected' : runtime!.status === 'error' ? 'error' : runtime!.status === 'exited' ? 'disconnected' : 'connecting', error: runtime!.error }
+      if (event.type === 'exit') return { ...tab, status: 'disconnected', error: event.payload.message }
+      return tab
+    }))
+  }), [])
+
+  useEffect(() => window.api.onBrowserRuntimeEvent((event) => {
+    if (event.type === 'started') {
+      setBrowserResources((current) => current.map((resource) => resource.id === event.runtime.browserResourceId
+        ? { ...resource, runtime: event.runtime, status: event.runtime.status, error: event.runtime.error }
+        : resource))
+      return
+    }
+    setBrowserResources((current) => current.map((resource) => {
+      if (resource.runtime?.id !== event.runtimeId) return resource
+      const stopped = event.status === 'stopped' || event.status === 'error'
+      if (stopped && resource.tunnel) void window.api.tunnels.stop(resource.tunnel.tunnel.sessionId, resource.tunnel.tunnel.id).catch(() => undefined)
+      return {
+        ...resource,
+        status: event.status,
+        error: event.error,
+        ...(stopped ? { runtime: undefined, tunnel: undefined } : {})
+      }
+    }))
+  }), [])
+
+  useEffect(() => window.api.onManagedAgentEvent((event) => {
+    setManagedAgentEvents((current) => [...current.filter((item) => item.sequence !== event.sequence), event].sort((a, b) => a.sequence - b.sequence))
+    if (event.evidence !== 'structuredHook') return
+    if (!['waiting', 'completed', 'error'].includes(event.status)) return
+    const pane = tabs.find((item) => item.id === event.context.paneId)
+    void window.api.system.isWindowFocused().then((focused) => {
+      if (focused && activeMuxSessionId === event.context.muxSessionId && activeKey === event.context.paneId && workspaceView === 'terminal') return
+      const labels: Record<ManagedAgentStatus, string> = { working: t('app.agentWorking'), waiting: t('app.agentWaiting'), completed: t('app.agentCompleted'), error: t('app.agentError') }
+      return window.api.system.notify(pane?.title ?? t('app.agentGeneric'), labels[event.status])
+    }).catch(() => undefined)
+  }), [tabs, activeMuxSessionId, activeKey, workspaceView, t])
+
   const bookmarkMap = useMemo(() => new Map(bookmarks.map((item) => [item.id, item])), [bookmarks])
-  const activeTab = tabs.find((tab) => tab.key === activeKey)
-  const activeBookmark = activeTab ? bookmarkMap.get(activeTab.bookmarkId) : undefined
+  const activeMuxSession = muxSessions.find((session) => session.id === activeMuxSessionId)
+  const sessionTabs = tabs.filter((tab) => tab.muxSessionId === activeMuxSessionId)
+  const sessionBrowserResources = browserResources.filter((resource) => resource.muxSessionId === activeMuxSessionId)
+  const activeTab = sessionTabs.find((tab) => tab.key === activeKey)
+  const activeBookmark = activeTab?.kind === 'terminal' && activeTab.bookmarkId ? bookmarkMap.get(activeTab.bookmarkId) : undefined
+  const sessionAgentEvents = managedAgentEvents.filter((event) => event.context.muxSessionId === activeMuxSessionId)
+  const sessionAgents = useMemo(() => summarizeManagedAgents(sessionTabs, sessionAgentEvents, readAgentSequences), [sessionTabs, sessionAgentEvents, readAgentSequences])
+  const unreadAgentCount = sessionAgents.filter((agent) => agent.unread).length
   const selectedBookmark = bookmarkMap.get(selectedBookmarkId) ?? activeBookmark
   const filteredBookmarks = bookmarks.filter((item) => `${item.name} ${item.host} ${item.username} ${item.groupName} ${item.note}`.toLowerCase().includes(query.toLowerCase()))
   const bookmarkGroups = useMemo(() => {
@@ -206,6 +504,10 @@ export function App(): React.JSX.Element {
     }
     return [...groups].filter(([, items]) => !query || items.length > 0)
   }, [bookmarkGroupNames, filteredBookmarks, query])
+
+  useEffect(() => {
+    if (workspaceView === 'files' && activeTab && !activeTab.bookmarkId) setWorkspaceView('terminal')
+  }, [activeTab, workspaceView])
 
   const toggleBookmarkGroup = (group: string): void => {
     setCollapsedBookmarkGroups((current) => {
@@ -372,14 +674,94 @@ export function App(): React.JSX.Element {
     } catch (error) { showError(errorMessage(error)) }
   }
 
-  const connect = async (bookmark: Bookmark, credentials: ConnectionCredentials = {}, target: ConnectionTarget = {}): Promise<void> => {
-    let key = target.tabKey ?? (target.newSession ? undefined : tabs.find((tab) => tab.bookmarkId === bookmark.id)?.key)
-    if (!key) { key = crypto.randomUUID(); setTabs((current) => [...current, { key: key!, bookmarkId: bookmark.id, status: 'connecting' }]) }
-    else setTabs((current) => current.map((tab) => tab.key === key ? { ...tab, sessionId: undefined, runtimeId: undefined, status: 'connecting', error: undefined } : tab))
-    setActiveKey(key); setAuthRequest(null)
+  const saveMuxSession = async (name: string, rootPath: string): Promise<void> => {
     try {
-      const summary = await window.api.sessions.connect({ bookmarkId: bookmark.id, newSession: target.newSession, ...credentials })
-      setTabs((current) => current.map((tab) => tab.key === key ? { ...tab, sessionId: summary.id, runtimeId: summary.id, status: summary.status, error: undefined } : tab))
+      const saved = await window.api.muxSessions.save({
+        id: muxSessionDialog?.session?.id,
+        name,
+        rootPath,
+        layout: muxSessionDialog?.session?.layout
+      })
+      setMuxSessions((current) => [...current.filter((session) => session.id !== saved.id), saved].sort((a, b) => a.sortOrder - b.sortOrder))
+      setActiveMuxSessionId(saved.id)
+      setActiveKey(tabs.find((pane) => pane.muxSessionId === saved.id)?.key ?? '')
+      setMuxSessionDialog(null)
+    } catch (error) { showError(errorMessage(error)) }
+  }
+
+  const selectMuxSession = (id: string): void => {
+    if (id === activeMuxSessionId) {
+      setCollapsedMuxSessionIds((current) => {
+        const next = new Set(current)
+        if (next.has(id)) next.delete(id); else next.add(id)
+        return next
+      })
+      return
+    }
+    setCollapsedMuxSessionIds((current) => {
+      if (!current.has(id)) return current
+      const next = new Set(current)
+      next.delete(id)
+      return next
+    })
+    setActiveMuxSessionId(id)
+    setActiveKey(tabs.find((pane) => pane.muxSessionId === id)?.key ?? '')
+    setWorkspaceView(tabs.some((pane) => pane.muxSessionId === id) || !browserResources.some((resource) => resource.muxSessionId === id) ? 'terminal' : 'browser')
+    setMaximizedPaneId('')
+  }
+
+  const removeMuxSession = async (session: MuxSession): Promise<void> => {
+    if (!await confirmAction({ title: t('app.deleteSession'), message: t('app.deleteValue', { value0: session.name }), detail: t('app.sessionPanesWillBeDeleted'), kind: 'danger', confirmLabel: t('app.deleteSession') })) return
+    try {
+      const panes = tabs.filter((pane) => pane.muxSessionId === session.id)
+      for (const pane of panes) {
+        if (pane.runtimeId) await window.api.terminalRuntimes.close(pane.runtimeId).catch(() => undefined)
+      }
+      for (const resource of browserResources.filter((item) => item.muxSessionId === session.id)) await stopBrowserResource(resource)
+      await window.api.muxSessions.remove(session.id)
+      const remaining = muxSessions.filter((item) => item.id !== session.id)
+      setMuxSessions(remaining)
+      setTabs((current) => current.filter((pane) => pane.muxSessionId !== session.id))
+      setBrowserResources((current) => current.filter((resource) => resource.muxSessionId !== session.id))
+      if (activeMuxSessionId === session.id) {
+        setActiveMuxSessionId(remaining[0]?.id ?? '')
+        setActiveKey(tabs.find((pane) => pane.muxSessionId === remaining[0]?.id)?.key ?? '')
+      }
+    } catch (error) { showError(errorMessage(error)) }
+  }
+
+  const connect = async (bookmark: Bookmark, credentials: ConnectionCredentials = {}, target: ConnectionTarget = {}): Promise<void> => {
+    let key = target.tabKey
+    let pane = key ? tabs.find((tab) => tab.key === key) : undefined
+    try {
+      const muxSession = muxSessions.find((session) => session.id === activeMuxSessionId)
+      if (!muxSession) { showError(t('app.createSessionFirst')); return }
+      const launchProfileId = target.launchAgentProfileId ?? pane?.launchProfileId ?? ''
+      if (!key) {
+        const title = target.paneTitle?.trim() || (launchProfileId ? (target.launchAgentLabel || 'Agent') + ' · ' + bookmark.name : bookmark.name)
+        const savedPane = await window.api.muxPanes.save({ muxSessionId: muxSession.id, kind: 'terminal', title, targetId: 'ssh-bookmark:' + bookmark.id, bookmarkId: bookmark.id, launchProfileId })
+        key = savedPane.id
+        pane = { ...savedPane, key: savedPane.id, status: 'connecting' }
+        setTabs((current) => [...current, pane!])
+        const layout = insertPaneInLayout(layoutFromPanes(muxSession.layout, sessionTabs), activeKey || undefined, savedPane.id, 'horizontal')
+        await persistSessionLayout(muxSession, layout)
+      } else setTabs((current) => current.map((tab) => tab.key === key ? { ...tab, sessionId: undefined, runtimeId: undefined, status: 'connecting', error: undefined } : tab))
+      setActiveKey(key); setAuthRequest(null)
+      if (!pane) throw new Error(t('app.sshTargetUnavailable'))
+      const runtimeId = crypto.randomUUID()
+      const agentId = launchProfileId ? crypto.randomUUID() : undefined
+      const runtime = await window.api.terminalRuntimes.create({
+        runtimeId,
+        context: { muxSessionId: pane.muxSessionId, paneId: pane.id, runtimeId },
+        targetId: 'ssh-bookmark:' + bookmark.id,
+        title: pane.title,
+        cwd: pane.cwd || undefined,
+        authentication: { type: 'ssh', options: { credential: credentials.credential, rememberCredential: Boolean(credentials.rememberCredential), jumpCredential: credentials.jumpCredential, rememberJumpCredential: Boolean(credentials.rememberJumpCredential) } },
+        managedAgent: launchProfileId && agentId ? { muxSessionId: pane.muxSessionId, paneId: pane.id, runtimeId, agentId, launchProfileId } : undefined,
+        cols: 100,
+        rows: 30
+      })
+      setTabs((current) => current.map((tab) => tab.key === key ? { ...tab, sessionId: runtime.runtimeId, runtimeId: runtime.runtimeId, agentId, status: runtime.status === 'running' ? 'connected' : runtime.status === 'error' ? 'error' : 'connecting', error: runtime.error } : tab))
       if (credentials.rememberCredential || credentials.rememberJumpCredential) await reloadBookmarks()
     } catch (error) {
       setTabs((current) => current.map((tab) => tab.key === key ? { ...tab, status: 'error', error: errorMessage(error) } : tab))
@@ -390,33 +772,49 @@ export function App(): React.JSX.Element {
   const openBookmark = (bookmark: Bookmark, target: ConnectionTarget = {}): void => {
     const requestedTab = target.tabKey ? tabs.find((tab) => tab.key === target.tabKey) : undefined
     if (requestedTab && ['connected', 'connecting'].includes(requestedTab.status)) { setActiveKey(requestedTab.key); return }
-    const existing = target.newSession ? undefined : requestedTab ?? tabs.find((tab) => tab.bookmarkId === bookmark.id && ['connected', 'connecting'].includes(tab.status)) ?? tabs.find((tab) => tab.bookmarkId === bookmark.id)
+    const existing = target.newSession ? requestedTab : requestedTab ?? sessionTabs.find((tab) => tab.bookmarkId === bookmark.id && ['connected', 'connecting'].includes(tab.status)) ?? sessionTabs.find((tab) => tab.bookmarkId === bookmark.id)
     if (!target.tabKey && (existing?.status === 'connected' || existing?.status === 'connecting')) { setActiveKey(existing.key); return }
     const jumpBookmark = bookmark.jumpBookmarkId ? bookmarkMap.get(bookmark.jumpBookmarkId) : undefined
-    const hasOtherActiveSession = Boolean(target.tabKey && tabs.some((tab) => tab.key !== target.tabKey && tab.bookmarkId === bookmark.id && ['connected', 'connecting'].includes(tab.status)))
+    const hasOtherActiveSession = Boolean(target.tabKey && sessionTabs.some((tab) => tab.key !== target.tabKey && tab.bookmarkId === bookmark.id && ['connected', 'connecting'].includes(tab.status)))
     const connectionTarget = target.tabKey ? { ...target, newSession: target.newSession ?? hasOtherActiveSession } : { ...target, tabKey: existing?.key }
     const needsPrompt = (item: Bookmark): boolean => item.authType === 'privateKey' || (item.authType === 'password' && !item.hasSavedCredential)
     if (!needsPrompt(bookmark) && (!jumpBookmark || !needsPrompt(jumpBookmark))) void connect(bookmark, {}, connectionTarget)
     else setAuthRequest({ bookmark, target: connectionTarget })
   }
 
-  const openBookmarkFromSidebar = (bookmark: Bookmark): void => {
-    const hasActiveSession = tabs.some((tab) => tab.bookmarkId === bookmark.id && ['connected', 'connecting'].includes(tab.status))
-    openBookmark(bookmark, hasActiveSession ? { newSession: true } : {})
+  const openSshTargetAsPane = (bookmark: Bookmark): void => {
+    openBookmark(bookmark, { newSession: true })
   }
 
-  const tabLabel = (tab: WorkspaceTab, bookmark?: Bookmark): string => {
-    const matchingTabs = tabs.filter((item) => item.bookmarkId === tab.bookmarkId)
-    if (matchingTabs.length < 2) return bookmark?.name ?? t('common.deletedConnection')
-    return `${bookmark?.name ?? t('common.deletedConnection')} ${matchingTabs.findIndex((item) => item.key === tab.key) + 1}`
-  }
-
-  const closeTab = (tab: WorkspaceTab): void => {
-    if (tab.sessionId) void window.api.sessions.disconnect(tab.sessionId).catch((error) => showError(errorMessage(error)))
+  const closeTab = async (tab: WorkspaceTab, alreadyConfirmed = false): Promise<void> => {
+    if (!alreadyConfirmed && tab.runtimeId && ['connected', 'connecting'].includes(tab.status)) {
+      const accepted = await confirmAction({
+        title: t('app.closeRunningPane'),
+        message: t('app.closeRunningPaneMessage', { value0: tab.title }),
+        detail: t('app.closeRunningPaneDetail'),
+        kind: 'warning',
+        confirmLabel: t('app.closePane')
+      })
+      if (!accepted) return
+    }
+    try {
+      if (tab.runtimeId) await window.api.terminalRuntimes.close(tab.runtimeId)
+      await window.api.muxPanes.remove(tab.id)
+      if (tab.launchProfileId) setAgentControlGrants(await window.api.managedAgents.listGrants())
+    } catch (error) {
+      showError(errorMessage(error))
+      return
+    }
+    const owner = muxSessions.find((session) => session.id === tab.muxSessionId)
+    if (owner) await persistSessionLayout(owner, removePaneFromLayout(layoutFromPanes(owner.layout, tabs.filter((pane) => pane.muxSessionId === owner.id)), tab.id)).catch((error) => showError(errorMessage(error)))
+    if (maximizedPaneId === tab.id) setMaximizedPaneId('')
+    setManagedAgentEvents((current) => current.filter((event) => event.context.paneId !== tab.id))
     setTabs((current) => {
-      const index = current.findIndex((item) => item.key === tab.key)
+      const siblings = current.filter((item) => item.muxSessionId === tab.muxSessionId)
+      const index = siblings.findIndex((item) => item.key === tab.key)
+      const nextSibling = siblings.filter((item) => item.key !== tab.key)[Math.min(index, siblings.length - 2)]
       const next = current.filter((item) => item.key !== tab.key)
-      if (activeKey === tab.key) setActiveKey(next[Math.min(index, next.length - 1)]?.key ?? '')
+      if (activeKey === tab.key) setActiveKey(nextSibling?.key ?? '')
       return next
     })
   }
@@ -425,7 +823,7 @@ export function App(): React.JSX.Element {
     if (!await confirmAction({ title: t('common.deleteConnection'), message: t('app.deleteValue', { value0: bookmark.name }), detail: t('app.relatedOpenSessionsWillAlsoCloseThisCannot'), kind: 'danger', confirmLabel: t('common.deleteConnection') })) return
     try {
       await window.api.bookmarks.remove(bookmark.id)
-      for (const tab of tabs.filter((item) => item.bookmarkId === bookmark.id)) closeTab(tab)
+      for (const tab of tabs.filter((item) => item.bookmarkId === bookmark.id)) await closeTab(tab, true)
       setSelectedBookmarkId((current) => current === bookmark.id ? '' : current)
       await reloadBookmarks()
     } catch (error) { showError(errorMessage(error)) }
@@ -489,10 +887,22 @@ export function App(): React.JSX.Element {
       }
       if (document.querySelector('.modal-backdrop, .help-backdrop')) return
       const commandKey = window.api.platform === 'darwin' ? event.metaKey : event.ctrlKey
-      if (commandKey && event.shiftKey && event.key.toLowerCase() === 't' && activeBookmark) {
+      if (commandKey && event.shiftKey && event.key.toLowerCase() === 't' && activeMuxSession) {
         event.preventDefault()
         event.stopPropagation()
-        openBookmark(activeBookmark, { newSession: true })
+        void openPaneLauncher()
+        return
+      }
+      if (commandKey && event.shiftKey && event.key.toLowerCase() === 'd' && activeTab) {
+        event.preventDefault()
+        event.stopPropagation()
+        void splitPane(activeTab, event.altKey ? 'vertical' : 'horizontal')
+        return
+      }
+      if (commandKey && event.shiftKey && event.key.toLowerCase() === 'r' && activeTab) {
+        event.preventDefault()
+        event.stopPropagation()
+        void restartPane(activeTab)
         return
       }
       if (commandKey && !event.shiftKey && event.key.toLowerCase() === 'w' && activeTab) {
@@ -501,19 +911,18 @@ export function App(): React.JSX.Element {
         closeTab(activeTab)
         return
       }
-      if (event.ctrlKey && event.key === 'Tab' && tabs.length > 1) {
+      if (event.ctrlKey && event.key === 'Tab' && sessionTabs.length > 1) {
         event.preventDefault()
         event.stopPropagation()
-        const index = tabs.findIndex((tab) => tab.key === activeKey)
+        const index = sessionTabs.findIndex((tab) => tab.key === activeKey)
         const offset = event.shiftKey ? -1 : 1
-        setActiveKey(tabs[(index + offset + tabs.length) % tabs.length]!.key)
+        setActiveKey(sessionTabs[(index + offset + sessionTabs.length) % sessionTabs.length]!.key)
       }
     }
     window.addEventListener('keydown', onKeyDown, true)
     return () => window.removeEventListener('keydown', onKeyDown, true)
-  }, [activeBookmark, activeTab, activeKey, tabs])
+  }, [activeBookmark, activeTab, activeKey, sessionTabs, activeMuxSession])
 
-  const statusText: Record<SessionStatus, string> = { connecting: t('app.connecting'), connected: t('app.connected'), disconnected: t('app.disconnected'), error: t('app.connectionFailed') }
 
   const saveSettings = async (settings: TerminalSettings, previewImage: string, appIcon: AppIconId, theme: UiTheme, appLanguage: AppLanguage, ai: AiSettingsInput): Promise<void> => {
     try {
@@ -618,6 +1027,121 @@ export function App(): React.JSX.Element {
       if (preview) setArchiveImportPreview(preview)
     } catch (error) { showError(errorMessage(error)) }
   }
+
+  const splitPane = async (pane: WorkspaceTab, direction: 'horizontal' | 'vertical'): Promise<void> => {
+    const owner = muxSessions.find((session) => session.id === pane.muxSessionId)
+    if (!owner) return
+    try {
+      const savedPane = await window.api.muxPanes.save({ muxSessionId: owner.id, kind: pane.kind, title: pane.title, targetId: pane.targetId, bookmarkId: pane.bookmarkId, cwd: pane.cwd })
+      const nextPane: WorkspaceTab = { ...savedPane, key: savedPane.id, status: 'disconnected' }
+      setTabs((current) => [...current, nextPane])
+      await persistSessionLayout(owner, insertPaneInLayout(layoutFromPanes(owner.layout, sessionTabs), pane.id, savedPane.id, direction))
+      setActiveKey(savedPane.id)
+    } catch (error) { showError(errorMessage(error)) }
+  }
+
+  const reconnectPane = (pane: WorkspaceTab): void => {
+    const bookmark = pane.bookmarkId ? bookmarkMap.get(pane.bookmarkId) : undefined
+    if (bookmark) openBookmark(bookmark, { tabKey: pane.key, newSession: true, launchAgentProfileId: pane.launchProfileId || undefined })
+    else void startLocalPane(pane)
+  }
+
+  const restartPane = async (pane: WorkspaceTab): Promise<void> => {
+    if (pane.runtimeId) await window.api.terminalRuntimes.close(pane.runtimeId).catch((error) => showError(errorMessage(error)))
+    const stopped = { ...pane, runtimeId: undefined, sessionId: undefined, status: 'disconnected' as SessionStatus, error: undefined }
+    setTabs((current) => current.map((item) => item.id === pane.id ? stopped : item))
+    reconnectPane(stopped)
+  }
+
+  const focusAgentPane = (agent: ManagedAgentSummary): void => {
+    setActiveKey(agent.paneId)
+    setWorkspaceView('terminal')
+    markAgentRead(agent.agentId)
+  }
+
+  const interruptAgent = async (agent: ManagedAgentSummary): Promise<void> => {
+    const pane = tabs.find((item) => item.id === agent.paneId)
+    if (!pane?.runtimeId || pane.runtimeId !== agent.runtimeId || pane.status !== 'connected') return
+    try { await window.api.terminalRuntimes.interrupt(pane.runtimeId) }
+    catch (error) { showError(errorMessage(error)) }
+  }
+
+  const sendAgentInput = async (agent: ManagedAgentSummary, input: string): Promise<void> => {
+    const pane = tabs.find((item) => item.id === agent.paneId)
+    if (!pane?.runtimeId || pane.runtimeId !== agent.runtimeId || pane.status !== 'connected') return
+    try {
+      await window.api.terminalRuntimes.write(pane.runtimeId, `${input}\r`)
+      markAgentRead(agent.agentId)
+    } catch (error) { showError(errorMessage(error)) }
+  }
+
+  const restartAgent = (agent: ManagedAgentSummary): void => {
+    const pane = tabs.find((item) => item.id === agent.paneId)
+    if (pane) void restartPane(pane)
+  }
+
+  const markAgentRead = (agentId: string): void => {
+    setReadAgentSequences((current) => {
+      const next = new Set(current)
+      for (const event of managedAgentEvents) if (event.context.agentId === agentId) next.add(event.sequence)
+      return next
+    })
+  }
+
+  const updateAgentGrant = async (sourcePaneId: string, targetResourceKind: 'pane' | 'browser', targetResourceId: string, access: AgentControlAccess | 'none'): Promise<void> => {
+    try {
+      const existing = agentControlGrants.find((grant) => grant.sourcePaneId === sourcePaneId && grant.targetResourceKind === targetResourceKind && grant.targetResourceId === targetResourceId)
+      if (access === 'none') {
+        if (existing) await window.api.managedAgents.removeGrant(existing.id)
+      } else {
+        await window.api.managedAgents.saveGrant({ sourcePaneId, targetResourceKind, targetResourceId, access })
+      }
+      setAgentControlGrants(await window.api.managedAgents.listGrants())
+    } catch (error) { showError(errorMessage(error)) }
+  }
+
+  const openControlAudit = async (): Promise<void> => {
+    try { setControlAuditDialog(await window.api.controlAudit.list(200)) }
+    catch (error) { showError(errorMessage(error)) }
+  }
+
+  const resizeLayout = (path: string, ratio: number, persist: boolean): void => {
+    if (!activeMuxSession) return
+    const currentLayout = layoutFromPanes(activeMuxSession.layout, sessionTabs)
+    if (!currentLayout) return
+    const layout = setSplitRatio(currentLayout, path, ratio)
+    setMuxSessions((current) => current.map((session) => session.id === activeMuxSession.id ? { ...session, layout } : session))
+    if (persist) void persistSessionLayout(activeMuxSession, layout).catch((error) => showError(errorMessage(error)))
+  }
+
+  const applyLayoutPreset = async (preset: LayoutPreset): Promise<void> => {
+    if (!activeMuxSession) return
+    const currentLayout = layoutFromPanes(activeMuxSession.layout, sessionTabs)
+    if (!currentLayout) return
+    const layout = layoutForPreset(paneIdsInLayout(currentLayout), preset)
+    setLayoutMenuOpen(false)
+    setMaximizedPaneId('')
+    try { await persistSessionLayout(activeMuxSession, layout) }
+    catch (error) { showError(errorMessage(error)) }
+  }
+
+  const renamePane = async (pane: WorkspaceTab, title: string): Promise<void> => {
+    try {
+      const saved = await window.api.muxPanes.save({
+        id: pane.id,
+        muxSessionId: pane.muxSessionId,
+        kind: pane.kind,
+        title,
+        targetId: pane.targetId,
+        bookmarkId: pane.bookmarkId,
+        cwd: pane.cwd,
+        command: pane.command,
+        launchProfileId: pane.launchProfileId
+      })
+      setTabs((current) => current.map((item) => item.id === pane.id ? { ...item, ...saved, key: item.key } : item))
+      setPaneRenameDialog(null)
+    } catch (error) { showError(errorMessage(error)) }
+  }
   const importLunaRemoteDatabase = async (): Promise<void> => {
     try {
       const sources = await window.api.bookmarks.discoverLunaRemoteSources()
@@ -653,65 +1177,90 @@ export function App(): React.JSX.Element {
       </div>
     </header>
     <div className={`main-layout ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`} style={{ '--sidebar-width': `${sidebarWidth}px` } as React.CSSProperties}>
-      <aside className="sidebar" onContextMenu={(event) => openSidebarContextMenu(event)}>
-        <div className="sidebar-heading"><strong>{t('app.connections')}</strong><div className="sidebar-actions">
-          <button className="icon-button" title={t('common.newConnection')} onClick={() => setBookmarkDialog('new')}><CirclePlus size={18} /></button>
-          <button className="icon-button" title={t('app.deleteSelectedConnection')} disabled={!selectedBookmark} onClick={() => selectedBookmark && void removeBookmark(selectedBookmark)}><Trash2 size={17} /></button>
+      <div className="session-toolbar">
+        <div className="session-toolbar-leading"><button className="icon-button" title={sidebarCollapsed ? t('app.showWorkspace') : t('app.hideWorkspace')} aria-label={sidebarCollapsed ? t('app.showWorkspace') : t('app.hideWorkspace')} aria-expanded={!sidebarCollapsed} onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}>
+          {sidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
+        </button></div>
+        <div className="view-switcher" role="tablist" aria-label={t('app.sessionView')}>
+          <button role="tab" disabled={!activeMuxSession} aria-selected={workspaceView === 'terminal'} className={workspaceView === 'terminal' ? 'active' : ''} onClick={() => setWorkspaceView('terminal')}><Columns2 size={15} />{t('app.panes')}</button>
+          <button role="tab" disabled={!activeMuxSession} aria-selected={workspaceView === 'agents'} className={workspaceView === 'agents' ? 'active' : ''} onClick={() => setWorkspaceView('agents')}><Sparkles size={15} />{t('app.agents')}{unreadAgentCount > 0 && <span className="view-count">{unreadAgentCount}</span>}</button>
+          <button role="tab" disabled={!activeMuxSession} aria-selected={workspaceView === 'browser'} className={workspaceView === 'browser' ? 'active' : ''} onClick={() => setWorkspaceView('browser')}><Globe2 size={15} />{t('app.browserResources')}<span className="view-count quiet">{sessionBrowserResources.length}</span></button>
+          {activeBookmark && <button role="tab" aria-selected={workspaceView === 'files'} className={workspaceView === 'files' ? 'active' : ''} onClick={() => setWorkspaceView('files')}><FolderOpen size={15} />{t('app.files')}</button>}
+        </div>
+        <div className="session-actions">
+          {workspaceView === 'terminal' && sessionTabs.length > 1 && <div className="layout-menu-anchor" onPointerDown={(event) => event.stopPropagation()}>
+            <button className="icon-button" title={t('app.arrangePanes')} aria-label={t('app.arrangePanes')} aria-haspopup="menu" aria-expanded={layoutMenuOpen} onClick={() => setLayoutMenuOpen((open) => !open)}><LayoutGrid size={17} /></button>
+            {layoutMenuOpen && <div className="layout-menu" role="menu" aria-label={t('app.arrangePanes')}>
+              <button role="menuitem" onClick={() => void applyLayoutPreset('horizontal')}><Columns3 size={16} />{t('app.horizontalLayout')}</button>
+              <button role="menuitem" onClick={() => void applyLayoutPreset('vertical')}><Rows3 size={16} />{t('app.verticalLayout')}</button>
+              <button role="menuitem" onClick={() => void applyLayoutPreset('twoColumns')}><Grid2x2 size={16} />{t('app.twoColumnLayout')}</button>
+            </div>}
+          </div>}
+          {workspaceView === 'files' && activeBookmark && activeTab?.sessionId && <button className="secondary-button" onClick={() => setDeploymentDialog(true)}><Rocket size={15} />{t('app.deploy')}</button>}
+          {workspaceView === 'terminal' && activeBookmark && <button className="secondary-button" onClick={() => setAiDialog(true)}><WandSparkles size={15} />{t('app.aiCommand')}</button>}
+          {workspaceView !== 'browser' && activeTab?.status === 'connected' && activeTab.sessionId && <button className="secondary-button" onClick={() => setTunnelDialog(true)}><Network size={15} />{t('app.portForwarding')}</button>}
+        </div>
+      </div>
+      <aside className="sidebar">
+        <div className="sidebar-heading mux-heading"><div className="session-nav-title"><strong>{t('app.sessions')}</strong><small>{muxSessions.length}</small></div><div className="sidebar-actions">
+          <button className="icon-button" title={t('app.newSession')} aria-label={t('app.newSession')} onClick={() => setMuxSessionDialog({ mode: 'create' })}><CirclePlus size={18} /></button>
         </div></div>
-        <label className="search-box"><Search size={16} /><input placeholder={t('app.searchConnections')} value={query} onChange={(event) => setQuery(event.target.value)} /></label>
-        <div className="bookmark-list">
-          {query && filteredBookmarks.length === 0 && <div className="sidebar-empty"><BookmarkIcon size={24} /><span>{t('app.noMatchingConnections')}</span></div>}
-          {bookmarkGroups.flatMap(([group, items]) => {
-            const collapsed = !query && collapsedBookmarkGroups.has(group)
-            const groupDropClass = groupDrop?.group === group ? `drop-${groupDrop.position}` : ''
-            return [<button type="button" data-group-name={group} className={`bookmark-group ${draggedGroupName === group ? 'dragging' : ''} ${groupDropClass}`} key={`group:${group}`} aria-expanded={!collapsed} onPointerDown={(event) => startSidebarPointerDrag(event, 'group', group)} onClick={(event) => { if (suppressSidebarClickRef.current) { event.preventDefault(); return } toggleBookmarkGroup(group) }} onContextMenu={(event) => openSidebarContextMenu(event, { group })}>
-              <span className="group-drag-handle" title={query ? t('common.clearTheSearchToReorder') : t('app.dragToReorderGroup')}><GripVertical size={13} /></span>{collapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}{collapsed ? <Folder size={14} /> : <FolderOpen size={14} />}<span>{group || t('common.ungrouped')}</span><small>{items.length}</small>
-            </button>, ...(collapsed ? [] : items.map((bookmark) => {
-            const tab = tabs.find((item) => item.bookmarkId === bookmark.id)
-            const jumpBookmark = bookmark.jumpBookmarkId ? bookmarkMap.get(bookmark.jumpBookmarkId) : undefined
-            const dropClass = bookmarkDrop?.id === bookmark.id ? `drop-${bookmarkDrop.position}` : ''
-            return <button key={bookmark.id} data-bookmark-id={bookmark.id} className={`bookmark-item ${selectedBookmark?.id === bookmark.id ? 'active' : ''} ${draggedBookmarkId === bookmark.id ? 'dragging' : ''} ${dropClass}`} onPointerDown={(event) => startSidebarPointerDrag(event, 'bookmark', bookmark.id)} onClick={(event) => { if (suppressSidebarClickRef.current) { event.preventDefault(); return } setSelectedBookmarkId(bookmark.id) }} onDoubleClick={(event) => { if (suppressSidebarClickRef.current) { event.preventDefault(); return } openBookmarkFromSidebar(bookmark) }} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); setSelectedBookmarkId(bookmark.id); openBookmarkFromSidebar(bookmark) } }} onContextMenu={(event) => openSidebarContextMenu(event, { bookmark })}>
-              <span className="bookmark-drag-handle" title={query ? t('common.clearTheSearchToReorder') : t('app.dragToReorder')}><GripVertical size={14} /></span>
-              <span className={`server-icon ${tab?.status ?? 'disconnected'}`}><Server size={17} /></span>
-              <span className="bookmark-copy"><strong>{bookmark.name}</strong><small title={jumpBookmark ? t('app.viaValue', { value0: jumpBookmark.name }) : undefined}>{bookmark.username}@{bookmark.host}:{bookmark.port}{jumpBookmark ? t('common.viaValue', { value0: jumpBookmark.name }) : ''}</small></span>
-              <span className="bookmark-flags">{bookmark.favorite && <Star size={12} className="favorite-star" fill="currentColor" />}{bookmark.hasSavedCredential && <KeyRound size={12} className="saved-key" />}</span>
-            </button>
-          }))]})}
+        <div className="mux-session-list">
+          {muxSessions.map((session) => {
+            const active = session.id === activeMuxSessionId
+            const expanded = active && !collapsedMuxSessionIds.has(session.id)
+            const panes = tabs.filter((pane) => pane.muxSessionId === session.id)
+            return <div className={`mux-session-item ${active ? 'active' : ''}`} key={session.id}>
+              <div className="mux-session-row">
+                <button className="mux-session-select" aria-expanded={expanded} title={session.rootPath || session.name} onClick={() => selectMuxSession(session.id)}>
+                  {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                  <span><strong>{session.name}</strong>{session.rootPath && <small>{session.rootPath}</small>}</span>
+                  <small className="mux-pane-count">{panes.length}</small>
+                </button>
+                <div className="mux-session-actions">
+                  <button className="icon-button" title={t('app.addPane')} aria-label={t('app.addPane')} onClick={() => void openPaneLauncher(session.id)}><Plus size={15} /></button>
+                  <button className="icon-button" title={t('app.renameSession')} aria-label={t('app.renameSession')} onClick={() => setMuxSessionDialog({ mode: 'rename', session })}><Edit3 size={14} /></button>
+                  <button className="icon-button danger" title={t('app.deleteSession')} aria-label={t('app.deleteSession')} onClick={() => void removeMuxSession(session)}><Trash2 size={14} /></button>
+                </div>
+              </div>
+              {expanded && <div className="mux-pane-list">
+                {panes.map((pane) => { const agent = sessionAgents.find((item) => item.paneId === pane.id); return <div className={`mux-pane-item ${pane.key === activeKey ? 'active' : ''} ${agent?.unread ? 'unread' : ''}`} key={pane.key}>
+                  <button className="mux-pane-select" title={pane.title} onClick={() => { setActiveKey(pane.key); setWorkspaceView('terminal') }} onDoubleClick={() => { if (pane.status !== 'connected') reconnectPane(pane) }}>
+                    <span className={`status-dot ${agent ? `agent-${agent.status}` : pane.status}`} />
+                    {agent ? <Sparkles size={14} /> : pane.bookmarkId ? <Server size={14} /> : <SquareTerminal size={14} />}
+                    <span>{pane.title}</span>
+                  </button>
+                  <div className="mux-pane-actions">
+                    <button title={t('app.renamePane')} aria-label={t('app.renamePane')} onClick={() => setPaneRenameDialog(pane)}><Edit3 size={13} /></button>
+                    <button title={t('app.closePane')} aria-label={t('app.closePane')} onClick={() => closeTab(pane)}><X size={13} /></button>
+                  </div>
+                </div> })}
+                {panes.length === 0 && <div className="mux-pane-empty">{t('app.noPanes')}</div>}
+              </div>}
+            </div>
+          })}
         </div>
       </aside>
       <div className="sidebar-resizer" role="separator" aria-label={t('app.resizeSidebar')} aria-orientation="vertical" aria-valuemin={minSidebarWidth} aria-valuemax={maxSidebarWidth} aria-valuenow={sidebarWidth} tabIndex={0} title={t('app.dragToResizeDoubleClickToReset')} onPointerDown={startSidebarResize} onDoubleClick={() => saveSidebarWidth(defaultSidebarWidth)} onKeyDown={resizeSidebarWithKeyboard} />
-      <main className={`workspace ${tabs.length && workspaceView === 'files' ? 'file-mode' : ''}`}>
-        <div className="tabbar">
-          <button className="icon-button tab-sidebar-toggle" title={sidebarCollapsed ? t('common.showConnections') : t('common.hideConnections')} aria-label={sidebarCollapsed ? t('common.showConnections') : t('common.hideConnections')} aria-expanded={!sidebarCollapsed} onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}>
-            {sidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
-          </button>
-          {tabs.map((tab) => { const bookmark = bookmarkMap.get(tab.bookmarkId); const label = tabLabel(tab, bookmark); const endpoint = bookmark ? `${bookmark.username}@${bookmark.host}:${bookmark.port}` : ''; return <div key={tab.key} className={`session-tab ${tab.key === activeKey ? 'active' : ''}`}>
-            <button className="session-tab-select" title={bookmark ? `${label} · ${endpoint}` : label} onClick={() => setActiveKey(tab.key)} onAuxClick={(event) => { if (event.button === 1) closeTab(tab) }}><span className={`status-dot ${tab.status}`} /><span title={label}>{label}</span></button>
-            <button className="session-tab-close" title={t('app.closeSession')} aria-label={t('app.closeNamedSession', { name: bookmark?.name ?? t('common.session') })} onClick={() => closeTab(tab)}><X size={14} /></button>
-          </div> })}
-          <button className="icon-button tab-add" title={t('common.newConnection')} onClick={() => setBookmarkDialog('new')}><CirclePlus size={17} /></button>
-        </div>
-        {tabs.length === 0 ? <div className="welcome-state"><div className="welcome-icon"><Plug size={30} /></div><h2>{t('app.chooseAnSshConnection')}</h2><p>{t('app.useTheTerminalAndSftpFileTransfersIn')}</p><button className="primary-button" onClick={() => setBookmarkDialog('new')}><CirclePlus size={16} />{t('common.newConnection')}</button></div> : <>
-          <div className="session-toolbar"><div className="session-info"><span className={`status-dot ${activeTab?.status}`} /><span className="session-status">{activeTab ? statusText[activeTab.status] : ''}</span>{activeBookmark && <span className="session-endpoint" title={`${activeBookmark.username}@${activeBookmark.host}:${activeBookmark.port}`}>{activeBookmark.username}@{activeBookmark.host}:{activeBookmark.port}</span>}{activeTab?.error && <span className="error-text" title={activeTab.error}>{activeTab.error}</span>}</div>
-            <div className="view-switcher" role="tablist" aria-label={t('app.sessionView')}>
-              <button role="tab" aria-selected={workspaceView === 'terminal'} className={workspaceView === 'terminal' ? 'active' : ''} onClick={() => setWorkspaceView('terminal')}><SquareTerminal size={15} />{t('common.terminal')}</button>
-              <button role="tab" aria-selected={workspaceView === 'files'} className={workspaceView === 'files' ? 'active' : ''} onClick={() => setWorkspaceView('files')}><FolderOpen size={15} />{t('app.files')}</button>
-            </div><div className="session-actions">
-            {workspaceView === 'files' && activeBookmark && activeTab?.sessionId && <button className="secondary-button" onClick={() => setDeploymentDialog(true)}><Rocket size={15} />{t('app.deploy')}</button>}
-            {workspaceView === 'terminal' && activeBookmark && <button className="secondary-button" onClick={() => setAiDialog(true)}><WandSparkles size={15} />{t('app.aiCommand')}</button>}
-            {activeTab?.status === 'connected' && activeTab.sessionId && <button className="secondary-button" onClick={() => setTunnelDialog(true)}><Network size={15} />{t('app.portForwarding')}</button>}
-            {activeTab?.status === 'connected' && <button className="secondary-button" onClick={() => activeTab.sessionId && void window.api.sessions.disconnect(activeTab.sessionId).catch((error) => showError(errorMessage(error)))}><Power size={15} />{t('app.disconnect')}</button>}
-          </div></div>
+      <main className={`workspace ${sessionTabs.length && workspaceView === 'files' ? 'file-mode' : ''}`}>
+        {!activeMuxSession ? <div className="welcome-state"><div className="welcome-icon"><SquareTerminal size={30} /></div><h2>{t('app.createYourFirstSession')}</h2><div className="welcome-actions"><button className="primary-button" onClick={() => setMuxSessionDialog({ mode: 'create' })}><CirclePlus size={16} />{t('app.newSession')}</button></div></div> : sessionTabs.length === 0 && sessionBrowserResources.length === 0 ? <div className="welcome-state"><div className="welcome-icon"><SquareTerminal size={30} /></div><h2>{activeMuxSession.name}</h2>{activeMuxSession.rootPath && <p>{activeMuxSession.rootPath}</p>}<div className="welcome-actions"><button className="primary-button" onClick={() => void openPaneLauncher()}><CirclePlus size={16} />{t('app.addFirstPane')}</button><button className="secondary-button" onClick={() => void openBrowserLauncher()}><Globe2 size={16} />{t('app.newBrowserResource')}</button></div></div> : <>
           <div className="session-stack">
-            {tabs.map((tab) => { const bookmark = bookmarkMap.get(tab.bookmarkId); const reconnect = bookmark ? () => openBookmark(bookmark, { tabKey: tab.key }) : undefined; return <div key={tab.key} className={`session-view ${tab.key === activeKey ? 'active' : ''} ${workspaceView}`}>
-              <div className="terminal-region"><TerminalPane ref={(pane) => { if (pane) terminalPaneRefs.current.set(tab.key, pane); else terminalPaneRefs.current.delete(tab.key) }} runtimeId={tab.runtimeId} connected={tab.status === 'connected'} visible={tab.key === activeKey && workspaceView === 'terminal'} settings={terminalSettings} backgroundImage={terminalBackground} onConnect={reconnect} onOpenSettings={() => openSettings('terminal')} /></div>
-              <div className="sftp-region"><SftpPane sessionId={tab.sessionId} bookmarkId={tab.bookmarkId} connected={tab.status === 'connected'} visible={tab.key === activeKey && workspaceView === 'files'} onError={showError} onConnect={reconnect} /></div>
-            </div> })}
+            {workspaceView === 'terminal' && activeMuxSession && (() => {
+              if (sessionTabs.length === 0) return <div className="welcome-state pane-empty-state"><div className="welcome-icon"><SquareTerminal size={30} /></div><h2>{t('app.noPanes')}</h2><p>{t('app.addPaneDescription')}</p><div className="welcome-actions"><button className="primary-button" onClick={() => void openPaneLauncher()}><CirclePlus size={16} />{t('app.addFirstPane')}</button></div></div>
+              const layout = layoutFromPanes(activeMuxSession.layout, sessionTabs)
+              const visiblePanes = maximizedPaneId ? sessionTabs.filter((pane) => pane.id === maximizedPaneId) : sessionTabs
+              const visibleLayout = maximizedPaneId ? { type: 'pane', paneId: maximizedPaneId } as MuxSplitNode : layout
+              return visibleLayout ? <MuxLayout node={visibleLayout} panes={visiblePanes} activePaneId={activeKey} settings={terminalSettings} backgroundImage={terminalBackground} terminalPaneRefs={terminalPaneRefs} onFocus={(pane) => setActiveKey(pane.key)} onReconnect={reconnectPane} onSplit={(pane, direction) => void splitPane(pane, direction)} onClose={closeTab} onResize={resizeLayout} onToggleMaximize={(paneId) => setMaximizedPaneId((current) => current ? '' : paneId)} onOpenSettings={() => openSettings('terminal')} maximizedPaneId={maximizedPaneId} /> : null
+            })()}
+            {workspaceView === 'agents' && activeMuxSession && <AgentDashboard agents={sessionAgents} panes={sessionTabs} grants={agentControlGrants} onGrantChange={updateAgentGrant} onOpenAudit={() => void openControlAudit()} onFocus={focusAgentPane} onInput={sendAgentInput} onInterrupt={(agent) => void interruptAgent(agent)} onRestart={restartAgent} onMarkRead={markAgentRead} onCreate={() => void openAgentLauncher()} />}
+            {workspaceView === 'browser' && activeMuxSession && <BrowserResourceManager resources={sessionBrowserResources} panes={sessionTabs} onCreate={() => void openBrowserLauncher()} onStart={(resource) => void startBrowserResource(resource)} onFocus={(resource) => { if (resource.runtime) void window.api.browserRuntimes.focusExternal(resource.runtime.id).catch((error) => showError(errorMessage(error))) }} onRestart={(resource) => void restartBrowserResource(resource)} onStop={(resource) => void stopBrowserResource(resource)} onRemove={(resource) => void removeBrowserResource(resource)} />}
+            {workspaceView === 'files' && activeTab && activeBookmark && <div className="session-view active files"><div className="sftp-region"><SftpPane sessionId={activeTab.sessionId} bookmarkId={activeTab.bookmarkId} connected={activeTab.status === 'connected'} visible onError={showError} onConnect={() => reconnectPane(activeTab)} /></div></div>}
           </div>
         </>}
-        {tabs.length > 0 && workspaceView === 'files' && <TransferPanel transfers={transfers} view={transferView} setView={setTransferView} onRetry={(task) => void retryTransfer(task)} onCancel={(task) => void cancelTransfer(task)} onClear={() => void clearCompletedTransfers()} />}
+        {activeBookmark && sessionTabs.length > 0 && workspaceView === 'files' && <TransferPanel transfers={transfers} view={transferView} setView={setTransferView} onRetry={(task) => void retryTransfer(task)} onCancel={(task) => void cancelTransfer(task)} onClear={() => void clearCompletedTransfers()} />}
       </main>
     </div>
+    {controlAuditDialog && <ControlAuditDialog records={controlAuditDialog} onClose={() => setControlAuditDialog(null)} onClear={async () => { try { await window.api.controlAudit.clear(); setControlAuditDialog([]) } catch (error) { showError(errorMessage(error)) } }} />}
     {sidebarContextMenu && <div className="sidebar-context-menu" role="menu" style={{ left: sidebarContextMenu.x, top: sidebarContextMenu.y }} onPointerDown={(event) => event.stopPropagation()}>
       {sidebarContextMenu.group !== undefined ? <>
         <button role="menuitem" onClick={() => { setSidebarContextMenu(null); setGroupDialog({ mode: 'create' }) }}><FolderPlus size={15} />{t('common.newGroup')}</button>
@@ -731,7 +1280,58 @@ export function App(): React.JSX.Element {
         <button role="menuitem" onClick={() => { setSidebarContextMenu(null); setGroupDialog({ mode: 'create' }) }}><FolderPlus size={15} />{t('common.newGroup')}</button>
       </>}
     </div>}
+    {connectionLibraryDialog && <Modal title={t('app.sshTargetLibrary')} onClose={() => setConnectionLibraryDialog(false)} wide className="connection-library-dialog"><div className="resource-library">
+      <div className="resource-library-toolbar">
+        <label className="search-box"><Search size={16} /><input placeholder={t('app.searchSshTargets')} value={query} onChange={(event) => setQuery(event.target.value)} /></label>
+        <div className="resource-library-actions">
+          <button className="secondary-button" title={t('common.importOpensshConfig')} onClick={() => void chooseSshConfig()}><FileInput size={15} />{t('common.import')}</button>
+          <button className="primary-button" onClick={() => setBookmarkDialog('new')}><CirclePlus size={15} />{t('common.newConnection')}</button>
+        </div>
+      </div>
+      <div className="resource-library-meta"><span>{t('app.sshTargetCount', { value0: bookmarks.length })}</span><span>{t('app.sshTargetsArePaneResources')}</span></div>
+      <div className="bookmark-list resource-bookmark-list" onContextMenu={(event) => openSidebarContextMenu(event)}>
+        {filteredBookmarks.length === 0 && <div className="sidebar-empty"><BookmarkIcon size={24} /><span>{query ? t('app.noMatchingConnections') : t('app.noSshTargets')}</span></div>}
+        {bookmarkGroups.flatMap(([group, items]) => {
+          const collapsed = !query && collapsedBookmarkGroups.has(group)
+          const groupDropClass = groupDrop?.group === group ? `drop-${groupDrop.position}` : ''
+          return [<button type="button" data-group-name={group} className={`bookmark-group ${draggedGroupName === group ? 'dragging' : ''} ${groupDropClass}`} key={`group:${group}`} aria-expanded={!collapsed} onPointerDown={(event) => startSidebarPointerDrag(event, 'group', group)} onClick={(event) => { if (suppressSidebarClickRef.current) { event.preventDefault(); return } toggleBookmarkGroup(group) }} onContextMenu={(event) => openSidebarContextMenu(event, { group })}>
+            <span className="group-drag-handle" title={query ? t('common.clearTheSearchToReorder') : t('app.dragToReorderGroup')}><GripVertical size={13} /></span>{collapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}{collapsed ? <Folder size={14} /> : <FolderOpen size={14} />}<span>{group || t('common.ungrouped')}</span><small>{items.length}</small>
+          </button>, ...(collapsed ? [] : items.map((bookmark) => {
+            const tab = sessionTabs.find((item) => item.bookmarkId === bookmark.id)
+            const jumpBookmark = bookmark.jumpBookmarkId ? bookmarkMap.get(bookmark.jumpBookmarkId) : undefined
+            const dropClass = bookmarkDrop?.id === bookmark.id ? `drop-${bookmarkDrop.position}` : ''
+            const launch = (): void => { setConnectionLibraryDialog(false); openSshTargetAsPane(bookmark) }
+            return <button key={bookmark.id} data-bookmark-id={bookmark.id} className={`bookmark-item ${selectedBookmark?.id === bookmark.id ? 'active' : ''} ${draggedBookmarkId === bookmark.id ? 'dragging' : ''} ${dropClass}`} onPointerDown={(event) => startSidebarPointerDrag(event, 'bookmark', bookmark.id)} onClick={(event) => { if (suppressSidebarClickRef.current) { event.preventDefault(); return } setSelectedBookmarkId(bookmark.id) }} onDoubleClick={(event) => { if (suppressSidebarClickRef.current) { event.preventDefault(); return } launch() }} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); setSelectedBookmarkId(bookmark.id); launch() } }} onContextMenu={(event) => openSidebarContextMenu(event, { bookmark })}>
+              <span className="bookmark-drag-handle" title={query ? t('common.clearTheSearchToReorder') : t('app.dragToReorder')}><GripVertical size={14} /></span>
+              <span className={`server-icon ${tab?.status ?? 'disconnected'}`}><Server size={17} /></span>
+              <span className="bookmark-copy"><strong>{bookmark.name}</strong><small title={jumpBookmark ? t('app.viaValue', { value0: jumpBookmark.name }) : undefined}>{bookmark.username}@{bookmark.host}:{bookmark.port}{jumpBookmark ? t('common.viaValue', { value0: jumpBookmark.name }) : ''}</small></span>
+              <span className="bookmark-flags">{bookmark.favorite && <Star size={12} className="favorite-star" fill="currentColor" />}{bookmark.hasSavedCredential && <KeyRound size={12} className="saved-key" />}</span>
+            </button>
+          }))]
+        })}
+      </div>
+      <div className="resource-library-footer"><span>{t('app.doubleClickTargetToAddPane')}</span><div><button className="text-button" onClick={() => void importConnectionArchive()}>{t('app.importConnectionBackup')}</button><button className="text-button" onClick={() => void importLunaRemoteDatabase()}>{t('app.importFromLunaRemote')}</button><button className="text-button" onClick={() => void exportConnectionArchive()}>{t('app.exportConnectionBackup')}</button></div></div>
+    </div></Modal>}
     {groupDialog && <GroupNameDialog mode={groupDialog.mode} initialName={groupDialog.group ?? ''} onClose={() => setGroupDialog(null)} onSave={(name) => void saveGroup(name)} />}
+    {paneLauncher && <PaneLauncherDialog targets={paneLauncher.targets} onClose={() => setPaneLauncher(null)} onManageConnections={() => { setPaneLauncher(null); setConnectionLibraryDialog(true) }} onSelect={(target, paneTitle) => {
+      if (target.transport === 'ssh') {
+        const bookmark = bookmarkMap.get(target.id.replace(/^ssh-bookmark:/, ''))
+        if (!bookmark) { showError(t('app.sshTargetUnavailable')); return }
+        setPaneLauncher(null)
+        openBookmark(bookmark, { newSession: true, paneTitle })
+      } else void openLocalTerminal(target.id, undefined, paneTitle)
+    }} />}
+    {agentLauncher && <AgentLauncherDialog targets={agentLauncher.targets} profiles={agentLauncher.profiles} onClose={() => setAgentLauncher(null)} onSelect={(target, profile) => {
+      if (target.transport === 'ssh') {
+        const bookmark = bookmarkMap.get(target.id.replace(/^ssh-bookmark:/, ''))
+        if (!bookmark) { showError(t('app.sshTargetUnavailable')); return }
+        setAgentLauncher(null)
+        openBookmark(bookmark, { newSession: true, launchAgentProfileId: profile.id, launchAgentLabel: profile.label })
+      } else void openLocalTerminal(target.id, profile)
+    }} />}
+    {browserLauncher && <BrowserResourceDialog chrome={browserLauncher.chrome} activeResourceName={sessionBrowserResources.find((resource) => resource.status === 'running' || resource.status === 'starting')?.name} onClose={() => setBrowserLauncher(null)} onCreate={(name, temporaryProfile) => void createBrowserResource(name, temporaryProfile)} />}
+    {muxSessionDialog && <MuxSessionDialog mode={muxSessionDialog.mode} session={muxSessionDialog.session} onClose={() => setMuxSessionDialog(null)} onSave={(name, rootPath) => void saveMuxSession(name, rootPath)} />}
+    {paneRenameDialog && <PaneNameDialog pane={paneRenameDialog} onClose={() => setPaneRenameDialog(null)} onSave={(title) => void renamePane(paneRenameDialog, title)} />}
     {bookmarkDialog && <BookmarkDialog bookmark={bookmarkDialog === 'new' ? undefined : bookmarkDialog} connections={bookmarks} groups={bookmarkGroupNames} onClose={() => setBookmarkDialog(null)} onSaved={async () => { setBookmarkDialog(null); await reloadSidebarData() }} onError={showError} />}
     {authRequest && <AuthDialog bookmark={authRequest.bookmark} jumpBookmark={authRequest.bookmark.jumpBookmarkId ? bookmarkMap.get(authRequest.bookmark.jumpBookmarkId) : undefined} onClose={() => setAuthRequest(null)} onConnect={(credentials) => void connect(authRequest.bookmark, credentials, authRequest.target)} />}
     {hostPrompts[0] && <HostKeyDialog prompt={hostPrompts[0]} onDecision={(accept) => { const prompt = hostPrompts[0]; if (!prompt) return; window.api.sessions.hostKeyDecision(prompt.sessionId, accept); setHostPrompts((current) => current.filter((item) => item !== prompt)) }} />}
@@ -930,6 +1530,124 @@ function AiDiagnosticsDialog({ exchange, onClose, onClear }: { exchange: AiRawEx
   </div></Modal>
 }
 
+function summarizeManagedAgents(panes: WorkspaceTab[], events: ManagedAgentEvent[], readSequences: Set<number>): ManagedAgentSummary[] {
+  const byAgent = new Map<string, ManagedAgentEvent[]>()
+  for (const event of events) byAgent.set(event.context.agentId, [...(byAgent.get(event.context.agentId) ?? []), event])
+  const summaries: ManagedAgentSummary[] = []
+  const activeAgentIds = [...byAgent.entries()]
+    .filter(([, matching]) => !['SessionEnd', 'RuntimeExit', 'AgentProcessExit'].includes(matching.at(-1)?.hookEventName ?? ''))
+    .map(([agentId]) => agentId)
+  for (const agentId of activeAgentIds) {
+    const matching = byAgent.get(agentId) ?? []
+    const latest = matching.at(-1)
+    const pane = panes.find((item) => item.id === latest?.context.paneId)
+    if (!pane || !latest) continue
+    summaries.push({
+      agentId,
+      paneId: pane.id,
+      runtimeId: latest.context.runtimeId,
+      status: latest.status,
+      waitingReason: latest?.waitingReason,
+      timestamp: latest?.timestamp,
+      eventCount: matching.length,
+      unread: matching.some((event) => !readSequences.has(event.sequence)),
+      latest
+    })
+  }
+  return summaries.sort((a, b) => (b.unread ? 1 : 0) - (a.unread ? 1 : 0) || (b.timestamp ?? '').localeCompare(a.timestamp ?? ''))
+}
+
+function AgentDashboard({ agents, panes, grants, onGrantChange, onOpenAudit, onFocus, onInput, onInterrupt, onRestart, onMarkRead, onCreate }: { agents: ManagedAgentSummary[]; panes: WorkspaceTab[]; grants: AgentControlGrant[]; onGrantChange(sourcePaneId: string, targetResourceKind: 'pane' | 'browser', targetResourceId: string, access: AgentControlAccess | 'none'): Promise<void>; onOpenAudit(): void; onFocus(agent: ManagedAgentSummary): void; onInput(agent: ManagedAgentSummary, input: string): Promise<void>; onInterrupt(agent: ManagedAgentSummary): void; onRestart(agent: ManagedAgentSummary): void; onMarkRead(agentId: string): void; onCreate(): void }): React.JSX.Element {
+  const { t } = useI18n()
+  const [drafts, setDrafts] = useState<Record<string, string>>({})
+  const [replyEditor, setReplyEditor] = useState('')
+  const [grantEditor, setGrantEditor] = useState('')
+  const paneMap = new Map(panes.map((pane) => [pane.id, pane]))
+  const statusLabel: Record<ManagedAgentSummary['status'], string> = {
+    starting: t('app.agentStarting'),
+    working: t('app.agentWorking'),
+    waiting: t('app.agentWaiting'),
+    completed: t('app.agentCompleted'),
+    error: t('app.agentError'),
+    stopped: t('app.agentStopped')
+  }
+  const waitingLabel: Record<string, string> = {
+    permission: t('app.permissionRequired'),
+    input: t('app.agentWaitingForInput'),
+    external: t('app.agentWaitingExternal'),
+    unknown: t('app.agentWaitingUnknown')
+  }
+  const attentionAgents = agents.filter((agent) => agent.status === 'waiting' || agent.status === 'error')
+  const runningAgents = agents.filter((agent) => agent.status === 'working' || agent.status === 'starting')
+  const finishedAgents = agents.filter((agent) => agent.status === 'completed' || agent.status === 'stopped')
+  const groups = [
+    { key: 'attention', label: t('app.agentNeedsResponse'), agents: attentionAgents },
+    { key: 'running', label: t('app.agentRunning'), agents: runningAgents },
+    { key: 'finished', label: t('app.agentFinished'), agents: finishedAgents }
+  ]
+
+  if (!agents.length) return <div className="agent-dashboard empty"><Bot size={30} /><strong>{t('app.noAgents')}</strong><button className="primary-button" onClick={onCreate}><Play size={15} />{t('app.startAgent')}</button></div>
+
+  const renderAgent = (agent: ManagedAgentSummary): React.JSX.Element => {
+    const pane = paneMap.get(agent.paneId)
+    const live = Boolean(pane?.runtimeId && pane.runtimeId === agent.runtimeId && pane.status === 'connected')
+    const showReply = agent.status === 'waiting' || replyEditor === agent.agentId
+    const activity = agent.waitingReason ? waitingLabel[agent.waitingReason] ?? statusLabel[agent.status] : statusLabel[agent.status]
+    const adapterLabel = agent.latest ? agentAdapterLabel(agent.latest.adapterId) : t('app.agentGeneric')
+    const time = agent.timestamp ? new Date(agent.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''
+    const agentTargets = [...new Set(agents.filter((target) => target.paneId !== agent.paneId).map((target) => target.paneId))].map((paneId) => paneMap.get(paneId)).filter((targetPane): targetPane is WorkspaceTab => Boolean(targetPane))
+    return <article className={['agent-item', agent.status === 'waiting' || agent.status === 'error' ? 'attention' : '', agent.unread ? 'unread' : ''].filter(Boolean).join(' ')} key={agent.agentId}>
+      <div className="agent-item-core">
+        <button className="agent-main" onClick={() => onFocus(agent)}>
+          <span className={'agent-status agent-' + agent.status}><Bot size={16} /></span>
+          <span className="agent-copy">
+            <span className="agent-name-line"><strong>{pane?.title ?? t('app.agentGeneric')}</strong><em className={'agent-state agent-state-' + agent.status}>{statusLabel[agent.status]}</em></span>
+            <small title={agent.latest?.hookEventName}>{adapterLabel} · {activity}{agent.latest?.evidence === 'terminalHeuristic' ? ' · ' + t('app.heuristicStatus') : ''}{time ? ' · ' + time : ''}</small>
+          </span>
+          {agent.unread && <i aria-label={t('app.unreadAgentEvents')} />}
+        </button>
+        <div className="agent-actions">
+          <button className="icon-button" title={t('app.focusPane')} aria-label={t('app.focusPane')} onClick={() => onFocus(agent)}><Maximize2 size={14} /></button>
+          <button className={'icon-button ' + (showReply ? 'active' : '')} title={t('app.replyToAgent')} aria-label={t('app.replyToAgent')} disabled={!live} onClick={() => setReplyEditor((current) => current === agent.agentId && agent.status !== 'waiting' ? '' : agent.agentId)}><Send size={14} /></button>
+          <button className="icon-button" title={t('app.interruptAgent')} aria-label={t('app.interruptAgent')} disabled={!live} onClick={() => onInterrupt(agent)}><Pause size={14} /></button>
+          <button className="icon-button" title={t('app.restartPane')} aria-label={t('app.restartPane')} disabled={!pane} onClick={() => onRestart(agent)}><RotateCcw size={14} /></button>
+          <button className="icon-button" title={t('app.markRead')} aria-label={t('app.markRead')} disabled={!agent.unread} onClick={() => onMarkRead(agent.agentId)}><Check size={14} /></button>
+          <button className={'icon-button ' + (grantEditor === agent.paneId ? 'active' : '')} title={t('app.agentControlGrants')} aria-label={t('app.agentControlGrants')} onClick={() => setGrantEditor((current) => current === agent.paneId ? '' : agent.paneId)}><ShieldAlert size={14} /></button>
+        </div>
+      </div>
+      {showReply && <form className="agent-response" onSubmit={(event) => { event.preventDefault(); const value = drafts[agent.agentId]?.trim(); if (!value || !live) return; void onInput(agent, value).then(() => { setDrafts((current) => ({ ...current, [agent.agentId]: '' })); setReplyEditor('') }) }}><input autoFocus={replyEditor === agent.agentId} value={drafts[agent.agentId] ?? ''} disabled={!live} placeholder={t('app.agentInputPlaceholder')} aria-label={t('app.agentInputPlaceholder')} onChange={(event) => setDrafts((current) => ({ ...current, [agent.agentId]: event.target.value }))} /><button className="agent-send-button" type="submit" disabled={!live || !drafts[agent.agentId]?.trim()} title={t('app.sendToAgent')} aria-label={t('app.sendToAgent')}><Send size={14} /></button></form>}
+      {grantEditor === agent.paneId && <div className="agent-grants"><strong>{t('app.agentControlGrants')}</strong>{agentTargets.map((targetPane) => {
+        const grant = grants.find((item) => item.sourcePaneId === agent.paneId && item.targetResourceKind === 'pane' && item.targetResourceId === targetPane.id)
+        return <label key={'pane:' + targetPane.id}><span><Bot size={13} />{targetPane.title}</span><select value={grant?.access ?? 'none'} aria-label={targetPane.title} onChange={(event) => void onGrantChange(agent.paneId, 'pane', targetPane.id, event.target.value as AgentControlAccess | 'none')}><option value="none">{t('app.noAgentAccess')}</option><option value="read">{t('app.agentReadAccess')}</option><option value="write">{t('app.agentWriteAccess')}</option><option value="control">{t('app.agentControlAccess')}</option></select></label>
+      })}{agentTargets.length === 0 && <span>{t('app.noAgentGrantTargets')}</span>}</div>}
+    </article>
+  }
+
+  return <div className="agent-dashboard">
+    <header>
+      <div className="agent-dashboard-title"><Bot size={17} /><div><strong>{t('app.agentMonitor')}</strong><span>{t('app.agentCount', { value0: agents.length })}</span></div></div>
+      <div className="agent-dashboard-controls"><button className="icon-button" title={t('app.controlAudit')} aria-label={t('app.controlAudit')} onClick={onOpenAudit}><HistoryIcon size={15} /></button><button className="primary-button" onClick={onCreate}><Play size={15} />{t('app.startAgent')}</button></div>
+    </header>
+    <div className="agent-overview">
+      <div className="attention"><span className="status-dot agent-waiting" /><strong>{attentionAgents.length}</strong><small>{t('app.agentNeedsResponse')}</small></div>
+      <div><span className="status-dot agent-working" /><strong>{runningAgents.length}</strong><small>{t('app.agentRunning')}</small></div>
+      <div><span className="status-dot agent-completed" /><strong>{finishedAgents.length}</strong><small>{t('app.agentFinished')}</small></div>
+      <div><span className="status-dot" /><strong>{agents.length}</strong><small>{t('app.allAgents')}</small></div>
+    </div>
+    <div className="agent-groups">{groups.map((group) => {
+      if (group.key !== 'attention' && group.agents.length === 0) return null
+      return <section className={'agent-group ' + group.key} key={group.key}><header><strong>{group.label}</strong><span>{group.agents.length}</span></header>{group.agents.length ? <div className="agent-group-list">{group.agents.map(renderAgent)}</div> : <div className="agent-group-empty"><Check size={14} />{t('app.noAgentsNeedResponse')}</div>}</section>
+    })}</div>
+  </div>
+}
+function ControlAuditDialog({ records, onClose, onClear }: { records: ControlAuditRecord[]; onClose(): void; onClear(): Promise<void> }): React.JSX.Element {
+  const { t } = useI18n()
+  return <Modal title={t('app.controlAudit')} onClose={onClose} wide><div className="control-audit-dialog">
+    <div className="control-audit-list">{records.length ? records.map((record) => <div key={record.id} className={record.result === 'success' ? '' : 'failed'}><time>{new Date(record.timestamp).toLocaleString()}</time><strong>{record.operation}</strong><span>{record.callerId}</span><code>{record.resourceId || record.resourceKind || '-'}</code><em>{record.errorCode || record.result}</em></div>) : <div className="agent-filter-empty">{t('app.noControlAudit')}</div>}</div>
+    <div className="dialog-actions spread"><button className="danger-button" disabled={!records.length} onClick={() => void onClear()}><Trash2 size={15} />{t('app.clearControlAudit')}</button><button className="primary-button" onClick={onClose}>{t('common.close')}</button></div>
+  </div></Modal>
+}
+
 function SshConfigImportDialog({ preview, onClose, onImported, onError }: { preview: SshConfigPreview; onClose(): void; onImported(): void; onError(message: string): void }): React.JSX.Element {
   const { t } = useI18n()
   const [selected, setSelected] = useState(() => new Set(preview.entries.map((item) => item.alias)))
@@ -954,6 +1672,190 @@ function SshConfigImportDialog({ preview, onClose, onImported, onError }: { prev
     </label>)}</div>
     <div className="dialog-actions"><button className="secondary-button" onClick={onClose}>{t('common.cancel')}</button><button className="primary-button" disabled={!selected.size || loading} onClick={() => void importSelected()}>{loading ? t('app.importing') : t('app.importValueConnections', { value0: selected.size })}</button></div>
   </div></Modal>
+}
+
+function layoutFromPanes(layout: MuxSplitNode | undefined, panes: WorkspaceTab[]): MuxSplitNode | undefined {
+  const paneIds = new Set(panes.map((pane) => pane.id))
+  const prune = (node: MuxSplitNode | undefined): MuxSplitNode | undefined => {
+    if (!node) return undefined
+    if (node.type === 'pane') return paneIds.has(node.paneId) ? node : undefined
+    const first = prune(node.first)
+    const second = prune(node.second)
+    if (!first) return second
+    if (!second) return first
+    return { ...node, first, second }
+  }
+  let normalized = prune(layout)
+  const placed = new Set(normalized ? paneIdsInLayout(normalized) : [])
+  for (const pane of panes) {
+    if (placed.has(pane.id)) continue
+    const leaf: MuxSplitNode = { type: 'pane', paneId: pane.id }
+    normalized = normalized ? { type: 'split', direction: 'horizontal', ratio: 0.5, first: normalized, second: leaf } : leaf
+  }
+  return normalized
+}
+
+function insertPaneInLayout(layout: MuxSplitNode | undefined, anchorPaneId: string | undefined, paneId: string, direction: 'horizontal' | 'vertical'): MuxSplitNode {
+  const leaf: MuxSplitNode = { type: 'pane', paneId }
+  if (!layout) return leaf
+  if (!anchorPaneId) return { type: 'split', direction, ratio: 0.5, first: layout, second: leaf }
+  const visit = (node: MuxSplitNode): [MuxSplitNode, boolean] => {
+    if (node.type === 'pane') return node.paneId === anchorPaneId
+      ? [{ type: 'split', direction, ratio: 0.5, first: node, second: leaf }, true]
+      : [node, false]
+    const [first, insertedFirst] = visit(node.first)
+    if (insertedFirst) return [{ ...node, first }, true]
+    const [second, insertedSecond] = visit(node.second)
+    return insertedSecond ? [{ ...node, second }, true] : [node, false]
+  }
+  const [next, inserted] = visit(layout)
+  return inserted ? next : { type: 'split', direction, ratio: 0.5, first: layout, second: leaf }
+}
+
+function removePaneFromLayout(layout: MuxSplitNode | undefined, paneId: string): MuxSplitNode | undefined {
+  if (!layout) return undefined
+  if (layout.type === 'pane') return layout.paneId === paneId ? undefined : layout
+  const first = removePaneFromLayout(layout.first, paneId)
+  const second = removePaneFromLayout(layout.second, paneId)
+  if (!first) return second
+  if (!second) return first
+  return { ...layout, first, second }
+}
+
+function setSplitRatio(layout: MuxSplitNode, path: string, ratio: number, currentPath = ''): MuxSplitNode {
+  if (layout.type === 'pane') return layout
+  if (path === currentPath) return { ...layout, ratio }
+  return {
+    ...layout,
+    first: setSplitRatio(layout.first, path, ratio, `${currentPath}0`),
+    second: setSplitRatio(layout.second, path, ratio, `${currentPath}1`)
+  }
+}
+
+function paneIdsInLayout(layout: MuxSplitNode): string[] {
+  return layout.type === 'pane' ? [layout.paneId] : [...paneIdsInLayout(layout.first), ...paneIdsInLayout(layout.second)]
+}
+
+function balancedLayout(nodes: MuxSplitNode[], direction: 'horizontal' | 'vertical'): MuxSplitNode {
+  if (nodes.length === 1) return nodes[0]!
+  const midpoint = Math.ceil(nodes.length / 2)
+  return {
+    type: 'split',
+    direction,
+    ratio: midpoint / nodes.length,
+    first: balancedLayout(nodes.slice(0, midpoint), direction),
+    second: balancedLayout(nodes.slice(midpoint), direction)
+  }
+}
+
+function layoutForPreset(paneIds: string[], preset: LayoutPreset): MuxSplitNode {
+  const leaves = paneIds.map((paneId): MuxSplitNode => ({ type: 'pane', paneId }))
+  if (preset !== 'twoColumns') return balancedLayout(leaves, preset)
+  const rows: MuxSplitNode[] = []
+  for (let index = 0; index < leaves.length; index += 2) {
+    const row = leaves.slice(index, index + 2)
+    rows.push(row.length === 1 ? row[0]! : balancedLayout(row, 'horizontal'))
+  }
+  return balancedLayout(rows, 'vertical')
+}
+
+interface MuxLayoutProps {
+  node: MuxSplitNode
+  panes: WorkspaceTab[]
+  activePaneId: string
+  settings: TerminalSettings
+  backgroundImage: string
+  terminalPaneRefs: React.MutableRefObject<Map<string, TerminalPaneHandle>>
+  onFocus(pane: WorkspaceTab): void
+  onReconnect(pane: WorkspaceTab): void
+  onSplit(pane: WorkspaceTab, direction: 'horizontal' | 'vertical'): void
+  onClose(pane: WorkspaceTab): void
+  onResize(path: string, ratio: number, persist: boolean): void
+  onToggleMaximize(paneId: string): void
+  onOpenSettings(): void
+  maximizedPaneId: string
+  path?: string
+}
+
+function MuxLayout({ node, panes, activePaneId, settings, backgroundImage, terminalPaneRefs, onFocus, onReconnect, onSplit, onClose, onResize, onToggleMaximize, onOpenSettings, maximizedPaneId, path = '' }: MuxLayoutProps): React.JSX.Element | null {
+  const { t } = useI18n()
+  if (node.type === 'pane') {
+    const pane = panes.find((item) => item.id === node.paneId)
+    if (!pane) return null
+    const active = pane.id === activePaneId
+    const stoppedState = pane.bookmarkId
+      ? { title: t('terminal.sshTerminalDisconnected'), description: t('terminal.reconnectSshTerminalToContinue'), actionLabel: t('terminal.reconnectSshTerminal') }
+      : { title: t('terminal.localTerminalStopped'), description: t('terminal.startLocalTerminalToContinue'), actionLabel: t('terminal.startLocalTerminal') }
+    return <section className={`mux-leaf ${active ? 'active' : ''}`} onPointerDown={() => onFocus(pane)}>
+      <header className="mux-leaf-header">
+        <span className={`status-dot ${pane.status}`} />
+        {pane.bookmarkId ? <Server size={13} /> : <SquareTerminal size={13} />}
+        <strong title={pane.title}>{pane.title}</strong>
+        <div className="mux-leaf-actions">
+          <button className="icon-button" title={t('app.splitRight')} aria-label={t('app.splitRight')} onClick={() => onSplit(pane, 'horizontal')}><Columns2 size={14} /></button>
+          <button className="icon-button" title={t('app.splitDown')} aria-label={t('app.splitDown')} onClick={() => onSplit(pane, 'vertical')}><Rows2 size={14} /></button>
+          <button className="icon-button" title={maximizedPaneId ? t('app.restorePane') : t('app.maximizePane')} aria-label={maximizedPaneId ? t('app.restorePane') : t('app.maximizePane')} onClick={() => onToggleMaximize(pane.id)}>{maximizedPaneId ? <Minimize size={14} /> : <Maximize2 size={14} />}</button>
+          <button className="icon-button danger" title={t('app.closePane')} aria-label={t('app.closePane')} onClick={() => onClose(pane)}><X size={14} /></button>
+        </div>
+      </header>
+      <div className="terminal-region"><TerminalPane ref={(terminalPane) => { if (terminalPane) terminalPaneRefs.current.set(pane.key, terminalPane); else terminalPaneRefs.current.delete(pane.key) }} runtimeId={pane.runtimeId} connected={pane.status === 'connected'} visible={active || Boolean(maximizedPaneId)} settings={settings} backgroundImage={backgroundImage} stoppedState={stoppedState} onStart={() => onReconnect(pane)} onOpenSettings={onOpenSettings} /></div>
+    </section>
+  }
+  const direction = node.direction
+  const startResize = (event: React.PointerEvent<HTMLDivElement>): void => {
+    event.preventDefault()
+    event.stopPropagation()
+    const container = event.currentTarget.parentElement
+    if (!container) return
+    const bounds = container.getBoundingClientRect()
+    const ratioAt = (pointer: PointerEvent): number => {
+      const raw = direction === 'horizontal' ? (pointer.clientX - bounds.left) / bounds.width : (pointer.clientY - bounds.top) / bounds.height
+      return Math.min(0.85, Math.max(0.15, raw))
+    }
+    const move = (pointer: PointerEvent): void => onResize(path, ratioAt(pointer), false)
+    const up = (pointer: PointerEvent): void => {
+      document.removeEventListener('pointermove', move)
+      document.removeEventListener('pointerup', up)
+      document.body.classList.remove('mux-split-resizing')
+      onResize(path, ratioAt(pointer), true)
+    }
+    document.body.classList.add('mux-split-resizing')
+    document.addEventListener('pointermove', move)
+    document.addEventListener('pointerup', up)
+  }
+  const style = direction === 'horizontal'
+    ? { gridTemplateColumns: `minmax(0, ${node.ratio}fr) 5px minmax(0, ${1 - node.ratio}fr)` }
+    : { gridTemplateRows: `minmax(0, ${node.ratio}fr) 5px minmax(0, ${1 - node.ratio}fr)` }
+  return <div className={`mux-split ${direction}`} style={style}>
+    <MuxLayout node={node.first} panes={panes} activePaneId={activePaneId} settings={settings} backgroundImage={backgroundImage} terminalPaneRefs={terminalPaneRefs} onFocus={onFocus} onReconnect={onReconnect} onSplit={onSplit} onClose={onClose} onResize={onResize} onToggleMaximize={onToggleMaximize} onOpenSettings={onOpenSettings} maximizedPaneId={maximizedPaneId} path={`${path}0`} />
+    <div className="mux-split-divider" role="separator" aria-orientation={direction === 'horizontal' ? 'vertical' : 'horizontal'} onPointerDown={startResize} />
+    <MuxLayout node={node.second} panes={panes} activePaneId={activePaneId} settings={settings} backgroundImage={backgroundImage} terminalPaneRefs={terminalPaneRefs} onFocus={onFocus} onReconnect={onReconnect} onSplit={onSplit} onClose={onClose} onResize={onResize} onToggleMaximize={onToggleMaximize} onOpenSettings={onOpenSettings} maximizedPaneId={maximizedPaneId} path={`${path}1`} />
+  </div>
+}
+
+function BrowserResourceManager({ resources, panes, onCreate, onStart, onFocus, onRestart, onStop, onRemove }: { resources: BrowserResourceState[]; panes: WorkspaceTab[]; onCreate(): void; onStart(resource: BrowserResourceState): void; onFocus(resource: BrowserResourceState): void; onRestart(resource: BrowserResourceState): void; onStop(resource: BrowserResourceState): void; onRemove(resource: BrowserResourceState): void }): React.JSX.Element {
+  const { t } = useI18n()
+  const paneMap = new Map(panes.map((pane) => [pane.id, pane]))
+  if (!resources.length) return <div className="browser-resource-manager empty"><Globe2 size={30} /><strong>{t('app.noBrowserResources')}</strong><button className="primary-button" onClick={onCreate}><CirclePlus size={15} />{t('app.newBrowserResource')}</button></div>
+  return <div className="browser-resource-manager">
+    <header><div><strong>{t('app.browserResources')}</strong><span>{t('app.browserResourceCount', { value0: resources.length })}</span></div><button className="primary-button" onClick={onCreate}><CirclePlus size={15} />{t('app.newBrowserResource')}</button></header>
+    <div className="browser-resource-list">{resources.map((resource) => {
+      const live = resource.status === 'running' && Boolean(resource.runtime)
+      const sourcePane = resource.sourcePaneId ? paneMap.get(resource.sourcePaneId) : undefined
+      return <div className={`browser-resource-row ${live ? 'running' : resource.status}`} key={resource.id}>
+        <span className={`status-dot ${live ? 'connected' : resource.status === 'error' ? 'error' : resource.status === 'starting' ? 'connecting' : 'disconnected'}`} />
+        <Globe2 size={17} />
+        <div className="browser-resource-copy"><strong>{resource.name}</strong><small>{sourcePane ? `${t('app.viaSshPane')} ${sourcePane.title}` : t('app.localService')}{resource.temporaryProfile ? ` · ${t('app.temporaryProfile')}` : ''}</small>{resource.error && <em title={resource.error}>{resource.error}</em>}</div>
+        <div className="browser-resource-runtime">{resource.runtime ? <><span>PID {resource.runtime.processId}</span><span>CDP :{resource.runtime.cdpPort}</span></> : <span>{resource.status === 'error' ? t('app.browserRuntimeFailed') : t('app.browserRuntimeStopped')}</span>}</div>
+        <div className="browser-resource-actions">
+          {live ? <button className="icon-button" title={t('app.openManagedChrome')} aria-label={t('app.openManagedChrome')} onClick={() => onFocus(resource)}><ExternalLink size={15} /></button> : <button className="icon-button" title={t('app.startBrowser')} aria-label={t('app.startBrowser')} disabled={resource.status === 'starting'} onClick={() => onStart(resource)}><Play size={15} /></button>}
+          <button className="icon-button" title={t('app.restartBrowser')} aria-label={t('app.restartBrowser')} disabled={resource.status === 'starting'} onClick={() => onRestart(resource)}><RotateCcw size={15} /></button>
+          <button className="icon-button" title={t('app.stopBrowser')} aria-label={t('app.stopBrowser')} disabled={!resource.runtime} onClick={() => onStop(resource)}><Power size={15} /></button>
+          <button className="icon-button danger" title={t('app.deleteBrowserResource')} aria-label={t('app.deleteBrowserResource')} onClick={() => onRemove(resource)}><Trash2 size={15} /></button>
+        </div>
+      </div>
+    })}</div>
+  </div>
 }
 
 function BookmarkArchiveImportDialog({ preview, onClose, onImported, onError }: { preview: BookmarkArchivePreview; onClose(): void; onImported(result: { importedConnections: number; importedGroups: number }): void; onError(message: string): void }): React.JSX.Element {
@@ -1201,6 +2103,10 @@ function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, u
   const [testingAi, setTestingAi] = useState(false)
   const [aiTested, setAiTested] = useState(false)
   const [diagnosticPath, setDiagnosticPath] = useState('')
+  const [adapterStatus, setAdapterStatus] = useState<AgentAdapterInstallStatus | null>(null)
+  const [adapterPreview, setAdapterPreview] = useState<AgentAdapterInstallPreview | null>(null)
+  const [adapterLoading, setAdapterLoading] = useState(false)
+  const [adapterBackupPath, setAdapterBackupPath] = useState('')
   const [section, setSection] = useState<SettingsSection>(initialSection)
   const [systemFonts, setSystemFonts] = useState<string[] | null>(null)
   const [manualFontMode, setManualFontMode] = useState(false)
@@ -1217,6 +2123,14 @@ function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, u
       .catch(() => { if (active) setSystemFonts([]) })
     return () => { active = false }
   }, [section, systemFonts])
+  useEffect(() => {
+    if (section !== 'agents' || adapterStatus !== null) return
+    let active = true
+    void window.api.managedAgents.adapterStatus()
+      .then((status) => { if (active) setAdapterStatus(status) })
+      .catch((error) => { if (active) onError(errorMessage(error)) })
+    return () => { active = false }
+  }, [section, adapterStatus])
   const chooseBackground = async (): Promise<void> => {
     try {
       const path = await window.api.settings.chooseTerminalBackground()
@@ -1227,6 +2141,7 @@ function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, u
     } catch (error) { onError(errorMessage(error)) }
   }
   const reset = (): void => {
+    if (section === 'agents') return
     if (section === 'ai') { setAiForm({ ...DEFAULT_AI_SETTINGS, apiKeyConfigured: aiForm.apiKeyConfigured }); setApiKey(''); setAiTested(false); return }
     setForm({ ...DEFAULT_TERMINAL_SETTINGS }); setManualFontMode(false); setManualFontName('JetBrains Mono'); setPreviewImage(''); setAppIcon('luna'); selectTheme('system'); setDialogLanguage('zh-CN'); onLanguagePreview('zh-CN')
   }
@@ -1241,6 +2156,21 @@ function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, u
     try { const saved = await window.api.ai.deleteApiKey(); setApiKey(''); setAiForm((current) => ({ ...current, apiKeyConfigured: saved.apiKeyConfigured })); onAiSettingsChange(saved) }
     catch (error) { onError(errorMessage(error)) }
   }
+  const previewAdapter = async (action: AgentAdapterInstallAction): Promise<void> => {
+    setAdapterLoading(true); setAdapterBackupPath('')
+    try { setAdapterPreview(await window.api.managedAgents.previewAdapter(action)) }
+    catch (error) { onError(errorMessage(error)) }
+    finally { setAdapterLoading(false) }
+  }
+  const applyAdapter = async (): Promise<void> => {
+    if (!adapterPreview || !adapterPreview.changed) return
+    setAdapterLoading(true)
+    try {
+      const result = await window.api.managedAgents.applyAdapter(adapterPreview.action)
+      setAdapterStatus(result.status); setAdapterPreview(null); setAdapterBackupPath(result.backupPath ?? '')
+    } catch (error) { onError(errorMessage(error)) }
+    finally { setAdapterLoading(false) }
+  }
   const themeOptions: { value: UiTheme; label: string; icon: typeof Monitor }[] = [{ value: 'system', label: t('app.system'), icon: Monitor }, { value: 'light', label: t('app.light'), icon: Sun }, { value: 'dark', label: t('app.dark'), icon: Moon }]
   const providerOptions: { value: AiProvider; label: string }[] = [{ value: 'auto', label: t('app.autoDetect') }, { value: 'openAi', label: 'OpenAI' }, { value: 'anthropic', label: 'Anthropic' }, { value: 'qwen', label: 'Qwen' }, { value: 'deepSeek', label: 'DeepSeek' }, { value: 'kimi', label: 'Kimi' }, { value: 'glm', label: 'GLM' }, { value: 'miniMax', label: 'MiniMax' }, { value: 'grok', label: 'Grok' }, { value: 'gemini', label: 'Gemini' }]
   const providerClue = `${aiForm.provider} ${aiForm.baseUrl} ${aiForm.model}`.toLowerCase()
@@ -1251,9 +2181,9 @@ function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, u
   const installedFont = installedFonts.find((font) => font.toLocaleLowerCase() === currentFontName.toLocaleLowerCase())
   const fontChoice = manualFontMode ? '__manual__' : currentFontName === 'JetBrains Mono' ? '__bundled__' : currentFontName === 'monospace' ? '__system__' : systemFonts === null ? '__current__' : installedFont ?? '__manual__'
   return <Modal title={t('common.settings')} onClose={onClose} wide className="settings-dialog"><form className="form-grid terminal-settings-form" onSubmit={(event) => { event.preventDefault(); onSave(form, previewImage, appIcon, theme, language, aiInput()) }}>
-    <div className="settings-tabs" role="tablist" aria-label={t('app.settingsCategories')}><button type="button" role="tab" aria-selected={section === 'appearance'} className={section === 'appearance' ? 'active' : ''} onClick={() => setSection('appearance')}><Palette size={15} />{t('app.appearance')}</button><button type="button" role="tab" aria-selected={section === 'terminal'} className={section === 'terminal' ? 'active' : ''} onClick={() => setSection('terminal')}><SquareTerminal size={15} />{t('common.terminal')}</button><button type="button" role="tab" aria-selected={section === 'ai'} className={section === 'ai' ? 'active' : ''} onClick={() => setSection('ai')}><Bot size={15} />AI</button></div>
+    <div className="settings-tabs" role="tablist" aria-label={t('app.settingsCategories')}><button type="button" role="tab" aria-selected={section === 'appearance'} className={section === 'appearance' ? 'active' : ''} onClick={() => setSection('appearance')}><Palette size={15} />{t('app.appearance')}</button><button type="button" role="tab" aria-selected={section === 'terminal'} className={section === 'terminal' ? 'active' : ''} onClick={() => setSection('terminal')}><SquareTerminal size={15} />{t('common.terminal')}</button><button type="button" role="tab" aria-selected={section === 'agents'} className={section === 'agents' ? 'active' : ''} onClick={() => setSection('agents')}><Sparkles size={15} />{t('app.agentIntegration')}</button><button type="button" role="tab" aria-selected={section === 'ai'} className={section === 'ai' ? 'active' : ''} onClick={() => setSection('ai')}><Bot size={15} />AI</button></div>
     <div className={`settings-content ${section}`}>
-    {section === 'appearance' ? <><fieldset className="ui-theme-settings"><legend>{t('common.theme')}</legend><div className="theme-options" role="radiogroup" aria-label={t('common.theme')}>{themeOptions.map((option) => { const Icon = option.icon; return <button key={option.value} type="button" role="radio" aria-checked={theme === option.value} className={theme === option.value ? 'active' : ''} onClick={() => selectTheme(option.value)}><Icon size={17} /><span>{option.label}</span></button> })}</div></fieldset><fieldset className="ui-theme-settings"><legend>{t('common.language')}</legend><div className="theme-options" role="radiogroup" aria-label={t('common.language')}>{availableLanguages.map((option) => <button key={option.code} type="button" role="radio" aria-checked={language === option.code} className={language === option.code ? 'active' : ''} onClick={() => { setDialogLanguage(option.code); onLanguagePreview(option.code) }}><Languages size={17} /><span>{option.label}</span></button>)}</div></fieldset><fieldset className="app-icon-settings"><legend>{t('app.appIcon')}</legend><div className="app-icon-options">{appIcons.options.map((icon) => <label key={icon.id} className={appIcon === icon.id ? 'selected' : ''}><input type="radio" name="app-icon" checked={appIcon === icon.id} onChange={() => setAppIcon(icon.id)} /><img src={icon.dataUrl} alt="" /><span>{t(appIconMessageKeys[icon.id])}</span></label>)}</div></fieldset><section className="diagnostic-section"><strong>{t('app.diagnostics')}</strong><div className="diagnostic-export"><button type="button" className="secondary-button" onClick={async () => { try { const path = await window.api.diagnostics.export(); if (path) setDiagnosticPath(path) } catch (error) { onError(errorMessage(error)) } }}><FileInput size={15} />{t('app.exportDiagnostics')}</button>{diagnosticPath && <small title={diagnosticPath}>{diagnosticPath}</small>}</div></section></> : section === 'ai' ? <div className="ai-settings">
+    {section === 'appearance' ? <><fieldset className="ui-theme-settings"><legend>{t('common.theme')}</legend><div className="theme-options" role="radiogroup" aria-label={t('common.theme')}>{themeOptions.map((option) => { const Icon = option.icon; return <button key={option.value} type="button" role="radio" aria-checked={theme === option.value} className={theme === option.value ? 'active' : ''} onClick={() => selectTheme(option.value)}><Icon size={17} /><span>{option.label}</span></button> })}</div></fieldset><fieldset className="ui-theme-settings"><legend>{t('common.language')}</legend><div className="theme-options" role="radiogroup" aria-label={t('common.language')}>{availableLanguages.map((option) => <button key={option.code} type="button" role="radio" aria-checked={language === option.code} className={language === option.code ? 'active' : ''} onClick={() => { setDialogLanguage(option.code); onLanguagePreview(option.code) }}><Languages size={17} /><span>{option.label}</span></button>)}</div></fieldset><fieldset className="app-icon-settings"><legend>{t('app.appIcon')}</legend><div className="app-icon-options">{appIcons.options.map((icon) => <label key={icon.id} className={appIcon === icon.id ? 'selected' : ''}><input type="radio" name="app-icon" checked={appIcon === icon.id} onChange={() => setAppIcon(icon.id)} /><img src={icon.dataUrl} alt="" /><span>{t(appIconMessageKeys[icon.id])}</span></label>)}</div></fieldset><section className="diagnostic-section"><strong>{t('app.diagnostics')}</strong><div className="diagnostic-export"><button type="button" className="secondary-button" onClick={async () => { try { const path = await window.api.diagnostics.export(); if (path) setDiagnosticPath(path) } catch (error) { onError(errorMessage(error)) } }}><FileInput size={15} />{t('app.exportDiagnostics')}</button>{diagnosticPath && <small title={diagnosticPath}>{diagnosticPath}</small>}</div></section></> : section === 'agents' ? <AgentAdapterSettings status={adapterStatus} preview={adapterPreview} loading={adapterLoading} backupPath={adapterBackupPath} onPreview={previewAdapter} onApply={applyAdapter} onCancelPreview={() => setAdapterPreview(null)} /> : section === 'ai' ? <div className="ai-settings">
       <label>API Base URL<input required type="url" value={aiForm.baseUrl} onChange={(event) => setAi('baseUrl', event.target.value)} placeholder="https://api.openai.com/v1" /></label>
       <label>{t('app.model')}<input value={aiForm.model} onChange={(event) => setAi('model', event.target.value)} placeholder="gpt-5" /></label>
       <label>API Key<div className="input-button"><input type="password" autoComplete="off" value={apiKey} onChange={(event) => { setApiKey(event.target.value); setAiTested(false) }} placeholder={aiForm.apiKeyConfigured ? t('app.savedSecurelyLeaveBlankToKeepIt') : t('common.optional')} /><button type="button" className="icon-button danger" title={t('app.deleteSavedApiKey')} disabled={!aiForm.apiKeyConfigured} onClick={() => void deleteAiKey()}><Trash2 size={15} /></button></div></label>
@@ -1271,8 +2201,22 @@ function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, u
       <label>{t('app.imageFit')}<select value={form.backgroundImageFit} onChange={(event) => set('backgroundImageFit', event.target.value as TerminalSettings['backgroundImageFit'])}><option value="cover">{t('app.cover')}</option><option value="contain">{t('app.contain')}</option><option value="stretch">{t('app.stretch')}</option><option value="tile">{t('app.tile')}</option></select></label>
     </>}
     </div>
-    <div className="dialog-actions spread"><button type="button" className="secondary-button" onClick={reset}><RotateCcw size={15} />{t('app.restoreDefaults')}</button><div><button type="button" className="secondary-button" onClick={onClose}>{t('common.cancel')}</button><button className="primary-button" type="submit">{t('common.save')}</button></div></div>
+    <div className="dialog-actions spread"><button type="button" className="secondary-button" disabled={section === 'agents'} onClick={reset}><RotateCcw size={15} />{t('app.restoreDefaults')}</button><div><button type="button" className="secondary-button" onClick={onClose}>{t('common.cancel')}</button><button className="primary-button" type="submit">{t('common.save')}</button></div></div>
   </form></Modal>
+}
+
+function AgentAdapterSettings({ status, preview, loading, backupPath, onPreview, onApply, onCancelPreview }: { status: AgentAdapterInstallStatus | null; preview: AgentAdapterInstallPreview | null; loading: boolean; backupPath: string; onPreview(action: AgentAdapterInstallAction): Promise<void>; onApply(): Promise<void>; onCancelPreview(): void }): React.JSX.Element {
+  const { t } = useI18n()
+  return <div className="agent-adapter-settings">
+    <header><div><strong>{t('app.codexLifecycleAdapter')}</strong><span className={`adapter-state ${status?.current && !status.hooksDisabled ? 'ready' : ''}`}>{status === null ? t('app.checking') : status.current ? t('app.installed') : status.installed ? t('app.updateRequired') : t('app.notInstalled')}</span></div><small>{t('app.codexAdapterDescription')}</small></header>
+    {status && <div className="adapter-paths"><span>{t('app.hookConfiguration')}</span><code title={status.hooksPath}>{status.hooksPath}</code></div>}
+    {status?.inlineHooksDetected && <div className="adapter-warning"><ShieldAlert size={16} /><span>{t('app.inlineHooksDetected')}</span></div>}
+    {status?.hooksDisabled && <div className="adapter-warning"><ShieldAlert size={16} /><span>{t('app.codexHooksDisabled')}</span></div>}
+    {status?.trustReviewRequired && <div className="adapter-notice"><CircleHelp size={16} /><span>{t('app.codexHookTrustRequired')}</span></div>}
+    {backupPath && <div className="adapter-backup"><Check size={15} /><span>{t('app.adapterBackupCreated')}</span><code title={backupPath}>{backupPath}</code></div>}
+    <div className="adapter-actions"><button type="button" className="primary-button" disabled={loading || status === null} onClick={() => void onPreview('install')}><FileJson2 size={15} />{status?.installed ? t('app.previewAdapterUpdate') : t('app.previewAdapterInstall')}</button><button type="button" className="secondary-button danger" disabled={loading || !status?.installed} onClick={() => void onPreview('uninstall')}><Trash2 size={15} />{t('app.previewAdapterUninstall')}</button></div>
+    {preview && <section className="adapter-preview"><header><strong>{t(preview.action === 'install' ? 'app.adapterInstallPreview' : 'app.adapterUninstallPreview')}</strong><span>{preview.changes.length ? t('app.adapterChangeCount', { value0: preview.changes.length }) : t('app.noChanges')}</span></header>{preview.backupWillBeCreated && <small>{t('app.existingHooksWillBeBackedUp')}</small>}<div className="adapter-diff"><label>{t('app.before')}<pre>{preview.beforeContents || t('app.fileDoesNotExist')}</pre></label><label>{t('app.after')}<pre>{preview.afterContents}</pre></label></div><div className="adapter-preview-actions"><button type="button" className="secondary-button" onClick={onCancelPreview}>{t('common.cancel')}</button><button type="button" className={preview.action === 'uninstall' ? 'danger-button' : 'primary-button'} disabled={!preview.changed || loading} onClick={() => void onApply()}>{t(preview.action === 'install' ? 'app.applyAdapterInstall' : 'app.applyAdapterUninstall')}</button></div></section>}
+  </div>
 }
 
 function GroupNameDialog({ mode, initialName, onClose, onSave }: { mode: 'create' | 'rename'; initialName: string; onClose(): void; onSave(name: string): void }): React.JSX.Element {
@@ -1281,6 +2225,70 @@ function GroupNameDialog({ mode, initialName, onClose, onSave }: { mode: 'create
   return <Modal title={mode === 'create' ? t('common.newGroup') : t('common.renameGroup')} onClose={onClose}><form className="form-grid compact-form" onSubmit={(event) => { event.preventDefault(); onSave(name.trim()) }}>
     <label>{t('app.groupName')}<input autoFocus required value={name} onChange={(event) => setName(event.target.value)} placeholder={t('app.forExampleProduction')} /></label>
     <div className="dialog-actions"><button type="button" className="secondary-button" onClick={onClose}>{t('common.cancel')}</button><button type="submit" className="primary-button">{t('common.save')}</button></div>
+  </form></Modal>
+}
+
+function MuxSessionDialog({ mode, session, onClose, onSave }: { mode: 'create' | 'rename'; session?: MuxSession; onClose(): void; onSave(name: string, rootPath: string): void }): React.JSX.Element {
+  const { t } = useI18n()
+  const [name, setName] = useState(session?.name ?? '')
+  const [rootPath, setRootPath] = useState(session?.rootPath ?? '')
+  const chooseRoot = async (): Promise<void> => {
+    const path = await window.api.files.chooseLocalDirectory()
+    if (path) { setRootPath(path); if (!name.trim()) setName(path.split(/[\\/]/).filter(Boolean).at(-1) ?? '') }
+  }
+  return <Modal title={mode === 'create' ? t('app.newSession') : t('app.renameSession')} onClose={onClose}><form className="form-grid compact-form" onSubmit={(event) => { event.preventDefault(); onSave(name.trim(), rootPath.trim()) }}>
+    <label>{t('app.sessionName')}<input autoFocus required value={name} onChange={(event) => setName(event.target.value)} placeholder={t('app.untitledSession')} /></label>
+    <label>{t('app.projectRoot')}<div className="input-button"><input value={rootPath} onChange={(event) => setRootPath(event.target.value)} placeholder={t('app.optionalProjectRoot')} /><button type="button" className="secondary-button" onClick={() => void chooseRoot()}>{t('common.choose')}</button></div></label>
+    <div className="dialog-actions"><button type="button" className="secondary-button" onClick={onClose}>{t('common.cancel')}</button><button type="submit" className="primary-button">{t('common.save')}</button></div>
+  </form></Modal>
+}
+
+function PaneLauncherDialog({ targets, onClose, onManageConnections, onSelect }: { targets: TerminalTarget[]; onClose(): void; onManageConnections(): void; onSelect(target: TerminalTarget, paneTitle: string): void }): React.JSX.Element {
+  const { t } = useI18n()
+  const [paneTitle, setPaneTitle] = useState('')
+  const localTargets = targets.filter((target) => target.transport === 'localPty')
+  const sshTargets = targets.filter((target) => target.transport === 'ssh')
+  const renderTarget = (target: TerminalTarget): React.JSX.Element => <button key={target.id} type="button" onClick={() => onSelect(target, paneTitle.trim())}>{target.transport === 'ssh' ? <Server size={18} /> : <SquareTerminal size={18} />}<span><strong>{target.label}</strong><small>{target.transport === 'ssh' ? t('app.sshEnvironment') : target.kind === 'wsl' ? t('app.wslEnvironment') : t('app.localEnvironment')}</small></span><ChevronRight size={16} /></button>
+  return <Modal title={t('app.addPane')} onClose={onClose} className="pane-launcher-dialog"><div className="pane-launcher">
+    <label className="pane-name-field">{t('app.paneName')}<input autoFocus value={paneTitle} onChange={(event) => setPaneTitle(event.target.value)} placeholder={t('app.paneNamePlaceholder')} /></label>
+    <section><header><span>{t('app.onThisComputer')}</span><small>{localTargets.length}</small></header><div className="local-target-list">{localTargets.map(renderTarget)}</div></section>
+    <section><header><span>{t('app.overSsh')}</span><button className="text-button" onClick={onManageConnections}>{t('app.manageSshTargets')}</button></header><div className="local-target-list">{sshTargets.map(renderTarget)}{sshTargets.length === 0 && <button type="button" className="empty-target" onClick={onManageConnections}><Server size={18} /><span><strong>{t('app.noSshTargets')}</strong><small>{t('app.addSshTargetToUse')}</small></span><ChevronRight size={16} /></button>}</div></section>
+  </div></Modal>
+}
+
+function PaneNameDialog({ pane, onClose, onSave }: { pane: WorkspaceTab; onClose(): void; onSave(title: string): void }): React.JSX.Element {
+  const { t } = useI18n()
+  const [title, setTitle] = useState(pane.title)
+  return <Modal title={t('app.renamePane')} onClose={onClose}><form className="form-grid compact-form" onSubmit={(event) => { event.preventDefault(); onSave(title.trim()) }}>
+    <label>{t('app.paneNameRequired')}<input autoFocus required value={title} onChange={(event) => setTitle(event.target.value)} /></label>
+    <div className="dialog-actions"><button type="button" className="secondary-button" onClick={onClose}>{t('common.cancel')}</button><button type="submit" className="primary-button">{t('common.save')}</button></div>
+  </form></Modal>
+}
+
+function AgentLauncherDialog({ targets, profiles, onClose, onSelect }: { targets: TerminalTarget[]; profiles: AgentLaunchProfile[]; onClose(): void; onSelect(target: TerminalTarget, profile: AgentLaunchProfile): void }): React.JSX.Element {
+  const { t } = useI18n()
+  const [profileId, setProfileId] = useState(profiles[0]?.id ?? '')
+  const profile = profiles.find((item) => item.id === profileId) ?? profiles[0]
+  const localTargets = targets.filter((target) => target.transport === 'localPty')
+  const sshTargets = targets.filter((target) => target.transport === 'ssh')
+  const renderTarget = (target: TerminalTarget): React.JSX.Element => <button key={target.id} type="button" disabled={!profile} onClick={() => { if (profile) onSelect(target, profile) }}>{target.transport === 'ssh' ? <Server size={18} /> : <SquareTerminal size={18} />}<span><strong>{target.label}</strong><small>{target.transport === 'ssh' ? t('app.sshEnvironment') : target.kind === 'wsl' ? t('app.wslEnvironment') : t('app.localEnvironment')}</small></span><Play size={16} /></button>
+  return <Modal title={t('app.startAgent')} onClose={onClose} className="pane-launcher-dialog"><div className="pane-launcher agent-launcher">
+    <div className="agent-profile-picker" role="tablist">{profiles.map((item) => <button key={item.id} type="button" role="tab" aria-selected={item.id === profile?.id} className={item.id === profile?.id ? 'active' : ''} onClick={() => setProfileId(item.id)}><Bot size={16} /><span><strong>{item.label}</strong><code>{item.command}</code></span></button>)}</div>
+    <section><header><span>{t('app.onThisComputer')}</span><small>{localTargets.length}</small></header><div className="local-target-list">{localTargets.map(renderTarget)}</div></section>
+    {sshTargets.length > 0 && <section><header><span>{t('app.overSsh')}</span><small>{sshTargets.length}</small></header><div className="local-target-list">{sshTargets.map(renderTarget)}</div></section>}
+  </div></Modal>
+}
+
+function BrowserResourceDialog({ chrome, activeResourceName, onClose, onCreate }: { chrome: ChromeInstallation | null; activeResourceName?: string; onClose(): void; onCreate(name: string, temporaryProfile: boolean): void }): React.JSX.Element {
+  const { t } = useI18n()
+  const [name, setName] = useState(t('app.browserResourceDefaultName'))
+  const [temporaryProfile, setTemporaryProfile] = useState(false)
+  return <Modal title={t('app.newBrowserResource')} onClose={onClose} className="pane-launcher-dialog"><form className="browser-launch-form" onSubmit={(event) => { event.preventDefault(); if (chrome && name.trim()) onCreate(name.trim(), temporaryProfile) }}>
+    <div className={`chrome-discovery ${chrome ? 'ready' : 'missing'}`}><Globe2 size={20} /><span><strong>{chrome ? t('app.chromeDetected') : t('app.chromeNotFound')}</strong><small title={chrome?.executablePath}>{chrome ? chrome.version || chrome.executablePath : t('app.installChromeFirst')}</small></span></div>
+    {activeResourceName && <div className="browser-create-notice"><CircleHelp size={16} /><span>{t('app.browserWillRemainStopped', { value0: activeResourceName })}</span></div>}
+    <label>{t('app.browserResourceName')}<input autoFocus required value={name} onChange={(event) => setName(event.target.value)} /></label>
+    <label className="check-label"><input type="checkbox" checked={temporaryProfile} onChange={(event) => setTemporaryProfile(event.target.checked)} />{t('app.temporaryBrowserProfile')}</label>
+    <div className="dialog-actions"><button type="button" className="secondary-button" onClick={onClose}>{t('common.cancel')}</button><button type="submit" className="primary-button" disabled={!chrome || !name.trim()}><Globe2 size={15} />{activeResourceName ? t('app.createBrowserResourceStopped') : t('app.createBrowserResource')}</button></div>
   </form></Modal>
 }
 

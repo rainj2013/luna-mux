@@ -14,21 +14,21 @@ export function createChineseHelpSections(commandKey: string): HelpSection[] {
   return [
     {
       id: 'start', title: '快速开始', icon: BookOpen,
-      searchText: '快速开始 新增连接 连接 终端 文件传输 session 会话',
+      searchText: '快速开始 项目 会话 session pane 终端 agent ssh',
       content: <>
         <h2>快速开始</h2>
-        <p>从保存一台机器到打开终端，只需要完成以下步骤。</p>
+        <p>Luna Mux 以项目会话组织工作。一个会话可以同时包含多个本地终端、SSH 终端和 Coding Agent 窗格。</p>
         <ol>
-          <li>点击侧边栏顶部的“新增连接”，填写名称、Host、端口、用户名和认证方式。</li>
-          <li>双击侧边栏中的机器。首次连接需要输入凭据，并确认服务器主机指纹。</li>
-          <li>连接成功后使用“终端”执行命令，或切换到“文件传输”浏览本地和远端目录。</li>
-          <li>同一台机器已经连接时，再次双击侧边栏中的机器会创建一个独立 session。</li>
+          <li>新建一个项目会话，并按需指定项目根目录。</li>
+          <li>点击“添加窗格”，选择普通终端或 Coding Agent，再选择本地或 SSH 运行环境。</li>
+          <li>继续拆分窗格，让多个 Agent 和普通终端在同一个项目会话中协作。</li>
+          <li>需要远程环境时，在侧栏底部打开“SSH 目标”资源库进行新增、导入或管理。</li>
         </ol>
         <h3>界面布局</h3>
         <ul>
-          <li>标签栏左侧按钮用于展开或折叠连接管理。</li>
+          <li>左侧栏的一等对象是项目会话；展开后显示该会话拥有的窗格。</li>
+          <li>SSH 目标只是创建远程窗格时使用的资源，不代表项目或工作区。</li>
           <li>侧边栏边缘可拖动调整宽度，双击边缘恢复默认宽度。</li>
-          <li>每个标签对应独立 session；关闭标签会同时断开该 session。</li>
         </ul>
       </>
     },
@@ -37,11 +37,11 @@ export function createChineseHelpSections(commandKey: string): HelpSection[] {
       searchText: '连接 认证 密码 私钥 agent 跳板机 分组 收藏 搜索 keepalive 保活 config 导入 导出 备份 host proxyjump 凭据 指纹',
       content: <>
         <h2>连接与认证</h2>
-        <p>连接配置保存在本机。机器、分组和备份功能集中在左侧连接栏，认证方式和保活参数在新增或编辑连接时设置。</p>
+        <p>SSH 目标配置保存在本机，作为项目会话中远程窗格的可复用运行资源。它们集中在“SSH 目标”资源库中。</p>
         <h3>管理连接</h3>
         <ul>
-          <li><strong>选择与连接：</strong>单击选中机器，双击建立连接。侧边栏顶部保留新增和删除两个常用操作。</li>
-          <li><strong>更多操作：</strong>右键机器可编辑、复制或删除；右键侧边栏空白处可新增分组、导入和导出。</li>
+          <li><strong>创建远程窗格：</strong>在“添加窗格”窗口中选择保存的 SSH 目标，或在资源库中双击目标。</li>
+          <li><strong>更多操作：</strong>右键目标可编辑、复制或删除；右键资源库空白处可新增分组、导入和导出。</li>
           <li><strong>整理连接：</strong>机器和分组均可拖动排序，也可将机器拖入分组。收藏连接会优先排列。</li>
           <li><strong>查找：</strong>搜索会匹配连接名称、地址、用户名、分组和备注。</li>
           <li><strong>保存凭据：</strong>密码或私钥口令可保存到系统安全存储，也可在编辑连接时清除。</li>
@@ -61,7 +61,7 @@ export function createChineseHelpSections(commandKey: string): HelpSection[] {
         <p>编辑连接可设置保活间隔和最大无响应次数。保活能减少企业网关因空闲而断开连接，但无法跨越电脑休眠、网络切换或服务器强制回收。长时间任务建议在远端使用 <code>tmux</code> 或 <code>screen</code>。</p>
         <h3>导入与备份</h3>
         <div className="help-table-scroll"><table className="help-comparison-table"><colgroup><col /><col /><col /></colgroup><thead><tr><th scope="col">项目</th><th scope="col">OpenSSH Config</th><th scope="col">连接备份</th></tr></thead><tbody>
-          <tr><th scope="row">入口</th><td>右键侧边栏空白处，选择“导入 OpenSSH Config”</td><td>右键侧边栏空白处，选择导入或导出连接备份</td></tr>
+          <tr><th scope="row">入口</th><td>SSH 目标资源库顶部的“导入”</td><td>SSH 目标资源库底部的导入或导出入口</td></tr>
           <tr><th scope="row">用途</th><td>读取通常位于 <code>~/.ssh/config</code> 的现有 SSH 配置</td><td>迁移或备份本软件中的全部连接和分组</td></tr>
           <tr><th scope="row">包含内容</th><td>Host、地址、用户、端口、首个私钥和 ProxyJump</td><td>分组、顺序、收藏、备注、保活和跳板机关系</td></tr>
           <tr><th scope="row">不会导入</th><td>通配 Host、命令及其他不安全规则</td><td>密码、私钥口令及其他安全存储中的凭据</td></tr>
@@ -72,12 +72,12 @@ export function createChineseHelpSections(commandKey: string): HelpSection[] {
       id: 'terminal', title: '会话与终端', icon: SquareTerminal,
       searchText: '会话 session 终端 标签 新建 断开 重连 搜索 复制 粘贴 链接 快捷键 ctrl command cmd webgl',
       content: <>
-        <h2>会话与终端</h2>
-        <h3>多 session</h3>
+        <h2>项目会话、窗格与终端</h2>
+        <h3>层级关系</h3>
         <ul>
-          <li>已有活动 session 时，再次点击侧边栏中的同一机器会打开另一个独立 session。</li>
-          <li>断开后标签和滚屏内容会保留，再次点击侧边栏中的机器可在原标签中重新连接。</li>
-          <li>标签可单击切换、中键关闭；后台标签不会丢失终端内容。</li>
+          <li>一个项目对应一个会话；一个会话可以拥有多个窗格。</li>
+          <li>窗格可以是普通终端、Coding Agent 或浏览器，并可使用不同的本地或 SSH 目标。</li>
+          <li>应用重启会恢复会话、窗格和拆分布局，但不会自动重启进程。</li>
         </ul>
         <h3>终端操作</h3>
         <ul>
@@ -87,9 +87,9 @@ export function createChineseHelpSections(commandKey: string): HelpSection[] {
         </ul>
         <h3>应用快捷键</h3>
         <table className="help-shortcut-table"><tbody>
-          <tr><th scope="row">新建当前机器的 session</th><td><kbd>{commandKey}+Shift+T</kbd></td></tr>
-          <tr><th scope="row">关闭当前标签</th><td><kbd>{commandKey}+W</kbd></td></tr>
-          <tr><th scope="row">切换标签</th><td><kbd>Ctrl+Tab</kbd> / <kbd>Ctrl+Shift+Tab</kbd></td></tr>
+          <tr><th scope="row">添加窗格</th><td><kbd>{commandKey}+Shift+T</kbd></td></tr>
+          <tr><th scope="row">关闭当前窗格</th><td><kbd>{commandKey}+W</kbd></td></tr>
+          <tr><th scope="row">切换窗格</th><td><kbd>Ctrl+Tab</kbd> / <kbd>Ctrl+Shift+Tab</kbd></td></tr>
           <tr><th scope="row">打开帮助</th><td><kbd>F1</kbd></td></tr>
         </tbody></table>
       </>
@@ -148,7 +148,7 @@ export function createChineseHelpSections(commandKey: string): HelpSection[] {
       searchText: 'sftp 文件 目录 上传 下载 拖放 多选 隐藏 收藏 预览 重命名 删除 冲突 队列 重试 进度',
       content: <>
         <h2>SFTP 与文件传输</h2>
-        <p>连接成功后切换到“文件传输”。左侧是本地文件，右侧是当前 session 对应的远端文件。</p>
+        <p>连接成功后切换到“文件传输”。左侧是本地文件，右侧是当前会话对应的远端文件。</p>
         <h3>浏览与管理</h3>
         <ul>
           <li>使用后退、前进、上级目录、刷新或直接输入路径进行导航。</li>
@@ -171,7 +171,7 @@ export function createChineseHelpSections(commandKey: string): HelpSection[] {
       searchText: '部署 profile 配置 本地目录 远端目录 预览 diff 新增 变化 相同 仅远端 删除 多余文件 单向同步 发布 rsync 哈希 修改时间 符号链接',
       content: <>
         <h2>单向部署</h2>
-        <p>部署用于将一个固定的本地目录反复发布到当前连接的远端目录。它会先比较整个目录，再上传新增或变化的文件；适合发布网站、构建产物、脚本和配置目录。入口位于“文件传输”视图的 session 工具栏。</p>
+        <p>部署用于将一个固定的本地目录反复发布到当前连接的远端目录。它会先比较整个目录，再上传新增或变化的文件；适合发布网站、构建产物、脚本和配置目录。入口位于“文件传输”视图的会话工具栏。</p>
         <h3>与普通文件传输的区别</h3>
         <div className="help-table-scroll"><table className="help-comparison-table"><colgroup><col /><col /><col /></colgroup><thead><tr><th scope="col">能力</th><th scope="col">普通文件传输</th><th scope="col">部署</th></tr></thead><tbody>
           <tr><th scope="row">操作方式</th><td>每次手动选择文件或目录</td><td>保存固定的本地目录和远端目录</td></tr>
@@ -183,7 +183,7 @@ export function createChineseHelpSections(commandKey: string): HelpSection[] {
         </tbody></table></div>
         <h3>使用流程</h3>
         <ol>
-          <li>保持目标机器的 SSH session 已连接，然后打开“文件传输”视图中的部署入口。</li>
+          <li>保持目标机器的 SSH 会话已连接，然后打开“文件传输”视图中的部署入口。</li>
           <li>新建部署配置，填写便于识别的名称，选择本地目录，并填写远端绝对路径。</li>
           <li>点击“保存并预览”。应用会递归扫描两端目录，但此时不会上传或删除文件。</li>
           <li>逐项检查差异，尤其确认远端目录以及“仅远端”项目是否符合预期。</li>
@@ -216,7 +216,7 @@ export function createChineseHelpSections(commandKey: string): HelpSection[] {
       searchText: '端口转发 tunnel 隧道 local remote dynamic socks5 监听地址 端口 目标 localhost 127.0.0.1 0.0.0.0',
       content: <>
         <h2>端口转发</h2>
-        <p>连接成功后点击 session 工具栏中的“端口转发”。配置按机器保存，但每个运行中的转发只属于启动它的 session，session 断开时会自动停止。</p>
+        <p>连接成功后点击会话工具栏中的“端口转发”。配置按机器保存，但每个运行中的转发只属于启动它的会话，会话断开时会自动停止。</p>
         <h3>本地转发</h3>
         <p>本机程序先连接本机监听端口，流量经过 SSH 加密通道，再由 SSH 服务器连接目标。目标地址是从 SSH 服务器的网络视角解析，不是由本机直接访问。</p>
         <p><code>本机应用 → 本机监听端口 → SSH 服务器 → 目标服务</code></p>
@@ -263,7 +263,7 @@ export function createChineseHelpSections(commandKey: string): HelpSection[] {
           <li>应用图标可在“界面”页签中切换。</li>
         </ul>
         <h3>导出诊断</h3>
-        <p>在“界面”页签点击“导出诊断信息”生成 JSON 文件。诊断包含应用版本、平台、非敏感连接元数据、session 状态和传输汇总。</p>
+        <p>在“界面”页签点击“导出诊断信息”生成 JSON 文件。诊断包含应用版本、平台、非敏感连接元数据、会话状态和传输汇总。</p>
         <p>诊断不会包含密码、私钥内容或路径、主机指纹、终端输出以及文件内容。</p>
       </>
     },
@@ -277,7 +277,7 @@ export function createChineseHelpSections(commandKey: string): HelpSection[] {
         <h3>常见问题</h3>
         <ul>
           <li><strong>Agent 不可用：</strong>确认密钥已加入 Agent，并从具有正确 Agent 环境的终端启动应用；Windows 需启动 OpenSSH Authentication Agent 服务。</li>
-          <li><strong>空闲后断线：</strong>启用连接的 session 保活。如果企业网关仍强制回收，缩短保活间隔；长任务使用远端会话管理工具。</li>
+          <li><strong>空闲后断线：</strong>启用连接的会话保活。如果企业网关仍强制回收，缩短保活间隔；长任务使用远端会话管理工具。</li>
           <li><strong>SFTP 较慢：</strong>首次打开会初始化 SFTP 通道。应用会缓存目录并在可用时使用 SSH exec 加速，刷新操作会绕过缓存。</li>
           <li><strong>无法远端转发：</strong>服务器可能禁用了 TCP forwarding 或远端监听。请检查 sshd 的 <code>AllowTcpForwarding</code> 和 <code>GatewayPorts</code> 策略。</li>
           <li><strong>重新连接要密码：</strong>勾选“记住凭据”可使用系统安全存储；如果企业策略禁止长期凭据，断开后的重新认证无法由应用绕过。</li>
@@ -289,9 +289,9 @@ export function createChineseHelpSections(commandKey: string): HelpSection[] {
 
 export function createEnglishHelpSections(commandKey: string): HelpSection[] {
   return [
-    { id: 'start', title: 'Quick start', icon: BookOpen, searchText: 'quick start new connection terminal files session', content: <><h2>Quick start</h2><ol><li>Select “New connection” and enter the host, port, username, and authentication method.</li><li>Double-click the saved host, provide credentials if requested, and verify its host-key fingerprint.</li><li>Use Terminal for shell work or switch to Files for SFTP.</li><li>Double-click an already connected host to open another independent session.</li></ol><h3>Layout</h3><ul><li>Each tab owns an independent SSH session.</li><li>Drag the sidebar edge to resize it; double-click the edge to reset its width.</li></ul></> },
-    { id: 'connections', title: 'Connections and authentication', icon: Server, searchText: 'connection authentication password private key agent jump host group favorite keepalive config backup fingerprint', content: <><h2>Connections and authentication</h2><p>Connections are stored locally. Right-click a connection to edit, duplicate, or delete it, and right-click empty sidebar space to manage groups and backups.</p><h3>Authentication</h3><ul><li><strong>Password:</strong> supports password and keyboard-interactive prompts.</li><li><strong>Private key:</strong> uses an OpenSSH private key and prompts for its passphrase when needed.</li><li><strong>SSH Agent:</strong> uses the agent inherited when {PRODUCT_INFO.displayName} started.</li><li><strong>Jump host:</strong> routes through one saved direct connection; the jump host and target authenticate separately.</li></ul><p>Saved passwords and passphrases use the operating system’s secure credential store.</p></> },
-    { id: 'terminal', title: 'Sessions and terminal', icon: SquareTerminal, searchText: 'session terminal tab search copy paste shortcut webgl reconnect', content: <><h2>Sessions and terminal</h2><ul><li>Disconnected tabs and scrollback remain available for reconnection.</li><li>Use <kbd>{commandKey}+C</kbd> and <kbd>{commandKey}+V</kbd> to copy and paste.</li><li>Use <kbd>{commandKey}+F</kbd> to search terminal scrollback.</li><li>Use <kbd>{commandKey}+Shift+T</kbd> for another session to the current host and <kbd>{commandKey}+W</kbd> to close the current tab.</li><li>HTTP and HTTPS links open in the system browser.</li></ul></> },
+    { id: 'start', title: 'Quick start', icon: BookOpen, searchText: 'quick start project session pane terminal agent ssh', content: <><h2>Quick start</h2><p>{PRODUCT_INFO.displayName} organizes work around project Sessions. A Session can contain local terminals, SSH terminals, and coding-agent Panes at the same time.</p><ol><li>Create a project Session and optionally choose its project root.</li><li>Select “Add pane”, choose Terminal or Coding agent, then choose a local or SSH environment.</li><li>Split the layout to run multiple agents and ordinary terminals in one project.</li><li>Open “SSH targets” at the bottom of the sidebar to add, import, or manage remote environments.</li></ol><h3>Layout</h3><ul><li>Project Sessions and their Panes are the primary sidebar objects.</li><li>SSH targets are reusable Pane resources, not workspaces.</li><li>Drag the sidebar edge to resize it; double-click the edge to reset its width.</li></ul></> },
+    { id: 'connections', title: 'SSH targets and authentication', icon: Server, searchText: 'ssh target connection authentication password private key agent jump host group favorite keepalive config backup fingerprint', content: <><h2>SSH targets and authentication</h2><p>SSH targets are stored locally and reused when adding remote Panes to a project Session. Open the SSH target library from the bottom of the sidebar. Double-click a target to add it to the current Session; right-click to edit, duplicate, delete, group, import, or export.</p><h3>Authentication</h3><ul><li><strong>Password:</strong> supports password and keyboard-interactive prompts.</li><li><strong>Private key:</strong> uses an OpenSSH private key and prompts for its passphrase when needed.</li><li><strong>SSH Agent:</strong> uses the agent inherited when {PRODUCT_INFO.displayName} started.</li><li><strong>Jump host:</strong> routes through one saved direct target; the jump host and target authenticate separately.</li></ul><p>Saved passwords and passphrases use the operating system’s secure credential store.</p></> },
+    { id: 'terminal', title: 'Sessions, panes, and terminal', icon: SquareTerminal, searchText: 'session pane terminal split search copy paste shortcut webgl reconnect', content: <><h2>Sessions, panes, and terminal</h2><ul><li>One project maps to a Mux Session, and one Session owns multiple Panes.</li><li>Panes can run ordinary terminals or coding agents on different local and SSH targets.</li><li>Restarting the app restores Session definitions and layouts without restarting processes.</li><li>Use <kbd>{commandKey}+C</kbd> and <kbd>{commandKey}+V</kbd> to copy and paste, and <kbd>{commandKey}+F</kbd> to search terminal scrollback.</li><li>Use <kbd>{commandKey}+Shift+T</kbd> to add a Pane and <kbd>{commandKey}+W</kbd> to close the focused Pane.</li><li>HTTP and HTTPS links open in the system browser.</li></ul></> },
     { id: 'ai-settings', title: 'AI service', icon: Bot, searchText: 'AI API base URL key model provider thinking OpenAI compatible test', content: <><h2>AI service</h2><p>Open Settings → AI and configure an OpenAI-compatible base URL, model, and API key. Test the connection before saving.</p><ul><li>The base URL may end in <code>/v1</code> or point directly to a chat-completions endpoint.</li><li>The provider controls model-specific thinking parameters.</li><li>API keys are kept in secure system storage and excluded from backups and diagnostics.</li></ul></> },
     { id: 'ai-command', title: 'AI command assistant', icon: WandSparkles, searchText: 'AI command shell context redact history raw risk execute', content: <><h2>AI command assistant</h2><p>Describe a task, choose the target shell, and review the generated command, explanation, assumptions, warnings, and risk level.</p><ul><li>Copy writes to the clipboard; Insert writes into the terminal without pressing Enter.</li><li>Execute always asks for confirmation.</li><li>Optional terminal context is limited to 100 lines and 16,000 characters and can be redacted.</li><li>History keeps the ten most recent successful suggestions locally.</li></ul><div className="help-warning"><TriangleAlert size={15} /><div><strong>Review commands before execution</strong><p>Risk detection is advisory. Check paths and side effects, especially for destructive, privilege, process, package, and database commands.</p></div></div></> },
     { id: 'files', title: 'SFTP and transfers', icon: FolderOpen, searchText: 'sftp files upload download drag preview rename delete conflict queue retry', content: <><h2>SFTP and transfers</h2><ul><li>The left browser is local and the right browser is remote.</li><li>Navigate with the toolbar, filter the current directory, show hidden files, and save favorite paths.</li><li>Double-click directories to enter them and files to preview text.</li><li>Use the center arrows or drag and drop to upload and download.</li><li>Conflicts can overwrite, skip, or auto-rename; failed and interrupted transfers can be retried.</li></ul></> },

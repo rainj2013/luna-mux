@@ -6,10 +6,10 @@ use tauri::{
     menu::{Menu, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder},
 };
 
-use crate::{
-    models::{AppEvent, MenuCommand, NativeMenuLabels},
-    product,
-};
+use crate::models::{AppEvent, MenuCommand};
+
+#[cfg(target_os = "macos")]
+use crate::{models::NativeMenuLabels, product};
 
 #[cfg(target_os = "macos")]
 pub fn menu<R: Runtime>(app: &AppHandle<R>, labels: &NativeMenuLabels) -> tauri::Result<Menu<R>> {

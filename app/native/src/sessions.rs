@@ -16,10 +16,14 @@ use russh::{
     ChannelMsg, Disconnect, client,
     keys::{self, HashAlg, PrivateKeyWithHashAlg},
 };
-use russh_sftp::{client::SftpSession, protocol::FileType};
+use russh_sftp::{
+    client::SftpSession,
+    protocol::{FileAttributes, FileType, OpenFlags},
+};
 use tauri::{AppHandle, Emitter};
 use tokio::{
-    io::{AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWrite},
+    io::{AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWrite, AsyncWriteExt, copy_bidirectional},
+    net::TcpStream,
     sync::{Mutex, Notify, mpsc, oneshot},
 };
 use uuid::Uuid;
@@ -52,6 +56,32 @@ with os.scandir(path) as entries:
 json_bytes=json.dumps(items,separators=(',',':'),ensure_ascii=False).encode('utf-8','replace')
 payload=base64.b64encode(json_bytes).decode()
 sys.stdout.write('__SSH_CLIENT_REMOTE_LIST_V1__'+payload+'\n')"#;
+const AGENT_HOOK_FORWARDER: &str = r#"import os
+import sys
+import urllib.request
+
+MAX_BODY = 1024 * 1024
+body = sys.stdin.buffer.read(MAX_BODY + 1)
+endpoint = os.environ.get("LUNA_MUX_HOOK_ENDPOINT", "")
+token = os.environ.get("LUNA_MUX_HOOK_AUTHORIZATION", "")
+if len(body) > MAX_BODY or not endpoint or not token:
+    raise SystemExit(2)
+request = urllib.request.Request(
+    endpoint,
+    data=body,
+    headers={
+        "Authorization": "Bearer " + token,
+        "Content-Type": "application/json",
+    },
+    method="POST",
+)
+try:
+    with urllib.request.urlopen(request, timeout=5) as response:
+        if response.status < 200 or response.status >= 300:
+            raise SystemExit(1)
+except Exception:
+    raise SystemExit(1)
+"#;
 
 #[derive(Debug)]
 enum RemoteExecError {
@@ -219,6 +249,7 @@ impl SessionManager {
         Ok(self.get(id)?.bookmark.id.clone())
     }
 
+    #[allow(dead_code)]
     pub fn connect(self: &Arc<Self>, input: ConnectInput) -> Result<SessionSummary, String> {
         let bookmark = self
             .db
@@ -779,6 +810,9 @@ impl SessionManager {
                 .map_err(|e| e.to_string())?
         };
         let actual = if assigned == 0 { port as u32 } else { assigned };
+        if actual == 0 {
+            return Err("SSH 服务器没有分配远端转发端口".into());
+        }
         let actual = u16::try_from(actual).map_err(|_| "服务器返回了无效端口".to_string())?;
         let (sender, receiver) = mpsc::unbounded_channel();
         self.forwarded_routes
@@ -786,6 +820,148 @@ impl SessionManager {
             .map_err(|_| "远端转发路由锁已损坏")?
             .insert((id.to_string(), actual as u32), sender);
         Ok((actual, receiver))
+    }
+
+    pub async fn start_loopback_reverse_forward(
+        self: &Arc<Self>,
+        id: &str,
+        local_port: u16,
+    ) -> Result<u16, String> {
+        let (remote_port, mut channels) = self
+            .request_remote_forward(id, "127.0.0.1".into(), 0)
+            .await?;
+        let manager = self.clone();
+        let runtime_id = id.to_string();
+        tauri::async_runtime::spawn(async move {
+            while let Some(channel) = channels.recv().await {
+                tauri::async_runtime::spawn(async move {
+                    let Ok(mut socket) = TcpStream::connect(("127.0.0.1", local_port)).await else {
+                        return;
+                    };
+                    let mut stream = channel.into_stream();
+                    let _ = copy_bidirectional(&mut socket, &mut stream).await;
+                });
+            }
+            if let Ok(mut routes) = manager.forwarded_routes.lock() {
+                routes.remove(&(runtime_id, remote_port as u32));
+            }
+        });
+        Ok(remote_port)
+    }
+
+    pub async fn install_agent_hook_forwarder(&self, id: &str) -> Result<String, String> {
+        let home = self.remote_home(id).await?;
+        let root = format!("{home}/.luna-mux");
+        let bin = format!("{root}/bin");
+        let path = format!("{bin}/hook_forwarder.py");
+        let sftp = self.sftp(id).await?;
+        for directory in [&root, &bin] {
+            if !sftp
+                .try_exists(directory.to_string())
+                .await
+                .map_err(|error| error.to_string())?
+            {
+                sftp.create_dir(directory.to_string())
+                    .await
+                    .map_err(|error| error.to_string())?;
+            }
+        }
+        let current = sftp.read(path.clone()).await.ok();
+        if current.as_deref() != Some(AGENT_HOOK_FORWARDER.as_bytes()) {
+            let temporary = format!("{path}.{}.part", Uuid::new_v4().simple());
+            let mut file = sftp
+                .create(temporary.clone())
+                .await
+                .map_err(|error| error.to_string())?;
+            file.write_all(AGENT_HOOK_FORWARDER.as_bytes())
+                .await
+                .map_err(|error| error.to_string())?;
+            file.shutdown().await.map_err(|error| error.to_string())?;
+            if sftp.try_exists(path.clone()).await.unwrap_or(false) {
+                sftp.remove_file(path.clone())
+                    .await
+                    .map_err(|error| error.to_string())?;
+            }
+            sftp.rename(temporary, path.clone())
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(path)
+    }
+
+    pub async fn verify_remote_agent_requirements(
+        &self,
+        id: &str,
+        command: &str,
+        requires_python: bool,
+    ) -> Result<(), String> {
+        let active = self.get(id)?;
+        let probe = if requires_python {
+            format!(
+                "command -v {} >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1",
+                shell_quote(command),
+            )
+        } else {
+            format!("command -v {} >/dev/null 2>&1", shell_quote(command))
+        };
+        self.exec_remote(&active, &probe)
+            .await
+            .map(|_| ())
+            .map_err(|error| match error {
+                RemoteExecError::Unavailable => "远端 SSH 服务器不支持命令探测".into(),
+                RemoteExecError::Timeout => "远端 Agent 依赖检查超时".into(),
+                RemoteExecError::Failed(_) if requires_python => {
+                    format!("远端需要可用的 {command} 和 python3 命令")
+                }
+                RemoteExecError::Failed(_) => format!("远端需要可用的 {command} 命令"),
+            })
+    }
+
+    pub async fn remove_remote_file(&self, id: &str, path: &str) {
+        if let Ok(sftp) = self.sftp(id).await {
+            let _ = sftp.remove_file(path.to_string()).await;
+        }
+    }
+
+    pub async fn write_agent_environment_file(
+        &self,
+        id: &str,
+        hook_endpoint: &str,
+        hook_token: &str,
+        mcp_token: &str,
+    ) -> Result<String, String> {
+        let home = self.remote_home(id).await?;
+        let root = format!("{home}/.luna-mux");
+        let runtime_root = format!("{root}/runtime");
+        let path = format!("{runtime_root}/agent-{}.env", Uuid::new_v4().simple());
+        let sftp = self.sftp(id).await?;
+        for directory in [&root, &runtime_root] {
+            if !sftp
+                .try_exists(directory.to_string())
+                .await
+                .map_err(|error| error.to_string())?
+            {
+                sftp.create_dir(directory.to_string())
+                    .await
+                    .map_err(|error| error.to_string())?;
+            }
+        }
+        let contents = agent_environment_contents(hook_endpoint, hook_token, mcp_token);
+        let mut metadata = FileAttributes::empty();
+        metadata.permissions = Some(0o600);
+        let mut file = sftp
+            .open_with_flags_and_attributes(
+                path.clone(),
+                OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::WRITE,
+                metadata,
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        file.write_all(contents.as_bytes())
+            .await
+            .map_err(|error| error.to_string())?;
+        file.shutdown().await.map_err(|error| error.to_string())?;
+        Ok(path)
     }
     pub async fn cancel_remote_forward(
         &self,
@@ -1122,6 +1298,43 @@ impl SessionManager {
     }
 }
 
+fn agent_environment_contents(hook_endpoint: &str, hook_token: &str, mcp_token: &str) -> String {
+    format!(
+        "LUNA_MUX_HOOK_ENDPOINT={}\nLUNA_MUX_HOOK_AUTHORIZATION={}\nLUNA_MUX_MCP_AUTHORIZATION={}\n",
+        shell_quote(hook_endpoint),
+        shell_quote(hook_token),
+        shell_quote(mcp_token),
+    )
+}
+
+#[cfg(test)]
+mod agent_hook_forwarder_tests {
+    use super::{AGENT_HOOK_FORWARDER, agent_environment_contents};
+
+    #[test]
+    fn remote_forwarder_is_generic_and_contains_no_runtime_credentials() {
+        assert!(AGENT_HOOK_FORWARDER.contains("urllib.request"));
+        assert!(AGENT_HOOK_FORWARDER.contains("LUNA_MUX_HOOK_ENDPOINT"));
+        assert!(AGENT_HOOK_FORWARDER.contains("LUNA_MUX_HOOK_AUTHORIZATION"));
+        assert!(AGENT_HOOK_FORWARDER.contains("MAX_BODY = 1024 * 1024"));
+        assert!(!AGENT_HOOK_FORWARDER.contains("lmxh_"));
+        assert!(!AGENT_HOOK_FORWARDER.contains("127.0.0.1:"));
+    }
+
+    #[test]
+    fn one_time_environment_contains_both_quoted_tokens() {
+        let contents = agent_environment_contents(
+            "http://127.0.0.1:43127/v1/hooks",
+            "lmxh_hook-secret",
+            "lmx_control-secret",
+        );
+        assert!(contents.contains("LUNA_MUX_HOOK_ENDPOINT='http://127.0.0.1:43127/v1/hooks'"));
+        assert!(contents.contains("LUNA_MUX_HOOK_AUTHORIZATION='lmxh_hook-secret'"));
+        assert!(contents.contains("LUNA_MUX_MCP_AUTHORIZATION='lmx_control-secret'"));
+        assert_eq!(contents.lines().count(), 3);
+    }
+}
+
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
@@ -1138,11 +1351,11 @@ fn parse_remote_entries(output: &str) -> Result<Vec<DirectoryEntry>, RemoteExecE
 }
 
 #[derive(Default)]
-struct Utf8Decoder {
+pub(crate) struct Utf8Decoder {
     pending: Vec<u8>,
 }
 impl Utf8Decoder {
-    fn push(&mut self, data: &[u8]) -> String {
+    pub(crate) fn push(&mut self, data: &[u8]) -> String {
         self.pending.extend_from_slice(data);
         match std::str::from_utf8(&self.pending) {
             Ok(text) => {
@@ -1165,7 +1378,7 @@ impl Utf8Decoder {
             }
         }
     }
-    fn finish(self) -> String {
+    pub(crate) fn finish(self) -> String {
         String::from_utf8_lossy(&self.pending).into_owned()
     }
 }

@@ -51,6 +51,14 @@ impl TunnelManager {
             .unwrap_or_default()
     }
 
+    pub fn get(&self, tunnel_id: &str) -> Option<TunnelSummary> {
+        self.tunnels
+            .lock()
+            .ok()
+            .and_then(|items| items.get(tunnel_id).cloned())
+            .and_then(|item| item.summary.lock().ok().map(|summary| summary.clone()))
+    }
+
     pub async fn start(
         self: &Arc<Self>,
         session_id: String,

@@ -1,27 +1,29 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::HashMap,
     sync::{Arc, RwLock},
 };
 
 use async_trait::async_trait;
 use uuid::Uuid;
 
+use crate::terminal_output::{OUTPUT_CAPACITY_BYTES, OutputBuffer};
 use crate::{
     database::Database,
     models::{AppEvent, ConnectInput, SessionStatus, SessionSummary},
     sessions::SessionManager,
-    terminal_backend::{TerminalBackend, TerminalBackendResult, TerminalRuntimeEventSink},
+    terminal_backend::{
+        TerminalBackend, TerminalBackendResult, TerminalRuntimeEventSink,
+        standard_terminal_capabilities,
+    },
     terminal_runtime_contract::{
         TerminalCapabilities, TerminalRuntime, TerminalRuntimeAuthentication,
         TerminalRuntimeCreateRequest, TerminalRuntimeEvent, TerminalRuntimeExitEvent,
-        TerminalRuntimeExitReason, TerminalRuntimeOutputEvent, TerminalRuntimeOutputReadResult,
-        TerminalRuntimeStatus, TerminalRuntimeStatusEvent, TerminalTarget, TerminalTargetKind,
-        TerminalTransport,
+        TerminalRuntimeExitReason, TerminalRuntimeOutputReadResult, TerminalRuntimeStatus,
+        TerminalRuntimeStatusEvent, TerminalTarget, TerminalTargetKind, TerminalTransport,
     },
 };
 
 const SSH_TARGET_PREFIX: &str = "ssh-bookmark:";
-const OUTPUT_CAPACITY_BYTES: usize = 1024 * 1024;
 
 struct RuntimeRecord {
     runtime: TerminalRuntime,
@@ -101,15 +103,7 @@ impl InProcessSshTerminalBackend {
     }
 
     fn capabilities() -> TerminalCapabilities {
-        TerminalCapabilities {
-            terminal: true,
-            resize: true,
-            flow_control: true,
-            interrupt: true,
-            output_cursor: true,
-            remote_files: true,
-            port_forwarding: true,
-        }
+        standard_terminal_capabilities(true)
     }
 
     fn emit(&self, event: TerminalRuntimeEvent) {
@@ -168,7 +162,7 @@ impl InProcessSshTerminalBackend {
                         } else {
                             TerminalRuntimeExitReason::ConnectionLost
                         },
-                        cursor: record.output.next_cursor,
+                        cursor: record.output.next_cursor(),
                         exit_code: None,
                         signal: None,
                         message: summary.error,
@@ -249,14 +243,21 @@ impl TerminalBackend for InProcessSshTerminalBackend {
             None => (None, false, None, false),
         };
         let runtime = TerminalRuntime {
-            runtime_id: Uuid::new_v4().to_string(),
+            runtime_id: request
+                .runtime_id
+                .clone()
+                .unwrap_or_else(|| Uuid::new_v4().to_string()),
             target_id: request.target_id,
             title: request.title.unwrap_or(bookmark.name),
             status: TerminalRuntimeStatus::Starting,
             capabilities: Self::capabilities(),
+            managed_agent: request.managed_agent.clone(),
             error: None,
         };
-        let initial_input = initial_shell_input(request.cwd.as_deref(), request.command.as_deref());
+        let command = request.command.as_deref().map(|command| {
+            managed_agent_command(request.managed_agent.as_ref(), &runtime.runtime_id, command)
+        });
+        let initial_input = initial_shell_input(request.cwd.as_deref(), command.as_deref());
         self.runtimes
             .write()
             .map_err(|_| "SSH Runtime 状态锁已损坏")?
@@ -374,108 +375,35 @@ fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
-struct OutputChunk {
-    start_cursor: u64,
-    data: String,
-}
-
-struct OutputBuffer {
-    capacity: usize,
-    size: usize,
-    next_cursor: u64,
-    chunks: VecDeque<OutputChunk>,
-}
-
-impl OutputBuffer {
-    fn new(capacity: usize) -> Self {
-        Self {
-            capacity,
-            size: 0,
-            next_cursor: 0,
-            chunks: VecDeque::new(),
-        }
-    }
-
-    fn push(&mut self, runtime_id: &str, data: String) -> TerminalRuntimeOutputEvent {
-        let event = TerminalRuntimeOutputEvent::new(runtime_id, self.next_cursor, data);
-        self.next_cursor = event.end_cursor;
-        let mut chunk = OutputChunk {
-            start_cursor: event.start_cursor,
-            data: event.data.clone(),
-        };
-        if chunk.data.len() > self.capacity {
-            let mut offset = chunk.data.len() - self.capacity;
-            while !chunk.data.is_char_boundary(offset) {
-                offset += 1;
-            }
-            chunk.start_cursor += offset as u64;
-            chunk.data.drain(..offset);
-        }
-        self.size += chunk.data.len();
-        self.chunks.push_back(chunk);
-        while self.size > self.capacity {
-            if let Some(removed) = self.chunks.pop_front() {
-                self.size -= removed.data.len();
-            }
-        }
-        event
-    }
-
-    fn read(
-        &self,
-        runtime_id: &str,
-        requested_cursor: u64,
-        max_bytes: usize,
-    ) -> TerminalBackendResult<TerminalRuntimeOutputReadResult> {
-        let earliest_cursor = self
-            .chunks
-            .front()
-            .map(|chunk| chunk.start_cursor)
-            .unwrap_or(self.next_cursor);
-        let cursor = requested_cursor.max(earliest_cursor).min(self.next_cursor);
-        let mut data = String::new();
-        let mut next_cursor = cursor;
-        for chunk in &self.chunks {
-            let chunk_end = chunk.start_cursor + chunk.data.len() as u64;
-            if chunk_end <= next_cursor || chunk.start_cursor > next_cursor {
-                continue;
-            }
-            let mut offset = (next_cursor - chunk.start_cursor) as usize;
-            while offset < chunk.data.len() && !chunk.data.is_char_boundary(offset) {
-                offset += 1;
-            }
-            next_cursor = chunk.start_cursor + offset as u64;
-            let remaining = max_bytes.saturating_sub(data.len());
-            if remaining == 0 {
-                break;
-            }
-            let mut end = (offset + remaining).min(chunk.data.len());
-            while end > offset && !chunk.data.is_char_boundary(end) {
-                end -= 1;
-            }
-            if end == offset {
-                break;
-            }
-            data.push_str(&chunk.data[offset..end]);
-            next_cursor = chunk.start_cursor + end as u64;
-            if data.len() == max_bytes {
-                break;
-            }
-        }
-        Ok(TerminalRuntimeOutputReadResult {
-            runtime_id: runtime_id.into(),
-            requested_cursor,
-            earliest_cursor,
-            next_cursor,
-            truncated: requested_cursor < earliest_cursor,
-            data,
-        })
-    }
+fn managed_agent_command(
+    agent: Option<&crate::terminal_runtime_contract::TerminalManagedAgentContext>,
+    runtime_id: &str,
+    command: &str,
+) -> String {
+    let Some(agent) = agent else {
+        return command.into();
+    };
+    [
+        ("LUNA_MUX_SESSION_ID", agent.mux_session_id.as_str()),
+        ("LUNA_MUX_PANE_ID", agent.pane_id.as_str()),
+        ("LUNA_MUX_RUNTIME_ID", runtime_id),
+        ("LUNA_MUX_AGENT_ID", agent.agent_id.as_str()),
+        (
+            "LUNA_MUX_LAUNCH_PROFILE_ID",
+            agent.launch_profile_id.as_str(),
+        ),
+    ]
+    .into_iter()
+    .map(|(key, value)| format!("{key}={}", shell_quote(value)))
+    .chain(std::iter::once(command.into()))
+    .collect::<Vec<_>>()
+    .join(" ")
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{OutputBuffer, initial_shell_input};
+    use super::initial_shell_input;
+    use crate::terminal_output::OutputBuffer;
 
     #[test]
     fn output_buffer_reads_incrementally_and_reports_truncation() {
