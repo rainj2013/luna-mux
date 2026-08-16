@@ -1,0 +1,18 @@
+{
+  "version": 7,
+  "transports": ["localPty", "ssh"],
+  "targetKinds": ["powershell", "wsl", "macosShell", "ssh"],
+  "statuses": ["starting", "connecting", "running", "exited", "error"],
+  "exitReasons": ["exited", "signaled", "closed", "connectionLost", "failed"],
+  "capabilities": [
+    "terminal",
+    "resize",
+    "flowControl",
+    "interrupt",
+    "outputCursor",
+    "remoteFiles",
+    "portForwarding"
+  ],
+  "cursorUnit": "utf8Bytes",
+  "maxCursor": 9007199254740991
+}
