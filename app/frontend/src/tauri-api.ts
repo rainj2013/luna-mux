@@ -156,7 +156,10 @@ export async function createTauriApi(): Promise<AppApi> {
       startBrowser: (sessionId, browserResourceId, sourcePaneId, remoteUrl) => call('browser_tunnel_start', { sessionId, browserResourceId, sourcePaneId, remoteUrl }),
       stop: (sessionId, tunnelId) => call('tunnels_stop', { sessionId, tunnelId })
     },
-    diagnostics: { export: () => call('diagnostics_export') },
+    diagnostics: {
+      run: (filter) => call('diagnostics_run', filter === undefined ? {} : { filter }),
+      export: () => call('diagnostics_export')
+    },
     ai: {
       getSettings: () => call('ai_settings_get'),
       saveSettings: (settings: AiSettingsInput) => call('ai_settings_save', { settings }),

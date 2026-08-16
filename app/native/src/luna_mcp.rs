@@ -581,6 +581,7 @@ fn tool_for(descriptor: ControlOperationDescriptor) -> Tool {
         "settings.appearance.get"
             | "settings.theme.set"
             | "settings.terminal.set"
+            | "diagnostics.run"
             | "connections.list"
             | "agents.list"
             | "mux.sessions.list"
@@ -627,6 +628,9 @@ fn operation_routing_guidance(operation: &str) -> &'static str {
     match operation {
         "settings.appearance.get" | "settings.theme.set" | "settings.terminal.set" => {
             " Use only for the Luna Mux desktop application's own theme or terminal rendering preferences. Do not use for webpage CSS/theme, repository configuration, or operating-system appearance."
+        }
+        "diagnostics.run" => {
+            " Runs Luna Mux's built-in integration diagnostics: local codex/claude availability, persistent runtime hook/MCP environment files and endpoint reachability, and WSL distributions. Returns a machine-readable report suitable for self-analysis before changing settings or launching Agents."
         }
         "connections.list" => {
             " Lists credential-free summaries of connections saved in Luna Mux. This is not browser network traffic, an HTTP connection list, or a general host/network scan."
@@ -678,6 +682,13 @@ fn control_arguments_schema(operation: &str) -> Value {
         | "terminal.runtime.close"
         | "transfers.list"
         | "tunnels.list" => empty_object_schema(),
+        "diagnostics.run" => json!({
+            "type": "object",
+            "properties": {
+                "filter": { "type": "string", "description": "Optional substring used to limit runtime environment files and WSL distributions." }
+            },
+            "additionalProperties": false
+        }),
         "settings.theme.set" => json!({
             "type": "object",
             "properties": {
@@ -1047,6 +1058,27 @@ mod tests {
             schema["properties"]["arguments"]["properties"]["theme"]["enum"],
             json!(["system", "light", "dark"])
         );
+    }
+
+    #[test]
+    fn diagnostics_tool_is_readonly_settings_scoped_with_optional_filter() {
+        let tool = tool_for(ControlOperationDescriptor {
+            name: "diagnostics.run".into(),
+            version: 1,
+            access: ControlAccess::Read,
+            resource_kind: ControlResourceKind::Settings,
+            mutating: false,
+            supports_idempotency: true,
+            approval: ControlApprovalRequirement::None,
+        });
+        let schema = Value::Object((*tool.input_schema).clone());
+        assert_eq!(schema["required"], json!(["arguments"]));
+        assert_eq!(
+            schema["properties"]["arguments"]["properties"]["filter"]["type"],
+            "string"
+        );
+        let caller = base_runtime_caller(&context("runtime-1"));
+        assert!(caller.can_access_any(&ControlResourceKind::Settings, &ControlAccess::Read));
     }
 
     #[test]

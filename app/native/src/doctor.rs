@@ -9,17 +9,34 @@
 
 use serde::Serialize;
 
-#[derive(Serialize)]
-struct AgentCheckReport {
-    ok: bool,
-    checks: Vec<AgentCheck>,
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentCheckReport {
+    pub ok: bool,
+    pub checks: Vec<AgentCheck>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub managed_agents: Vec<DoctorManagedAgent>,
 }
 
-#[derive(Serialize)]
-struct AgentCheck {
-    name: String,
-    status: String,
-    detail: String,
+#[derive(Clone, Debug, Serialize)]
+pub struct AgentCheck {
+    pub name: String,
+    pub status: String,
+    pub detail: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DoctorManagedAgent {
+    pub agent_id: String,
+    pub adapter: String,
+    pub runtime_id: String,
+    pub pane_id: String,
+    pub pane_title: String,
+    pub mux_session_id: String,
+    pub session_name: String,
+    pub status: String,
+    pub last_activity: Option<String>,
 }
 
 pub fn try_run_agent_check(args: &[String]) -> Option<i32> {
@@ -28,21 +45,38 @@ pub fn try_run_agent_check(args: &[String]) -> Option<i32> {
         return None;
     }
     let filter = args.get(2).map(String::as_str);
-    let checks = run(filter);
-    let ok = checks.iter().all(|check| check.status != "error");
-    let report = AgentCheckReport { ok, checks };
+    let report = run_report(filter);
     println!(
         "{}",
         serde_json::to_string_pretty(&report).unwrap_or_else(|_| "{}".into())
     );
-    Some(if ok { 0 } else { 1 })
+    Some(if report.ok { 0 } else { 1 })
 }
 
-fn run(filter: Option<&str>) -> Vec<AgentCheck> {
+pub fn run_report(filter: Option<&str>) -> AgentCheckReport {
+    run_report_with_agents(filter, &[])
+}
+
+pub fn run_report_with_agents(
+    filter: Option<&str>,
+    managed_agents: &[DoctorManagedAgent],
+) -> AgentCheckReport {
+    let checks = run(filter, managed_agents);
+    let ok = checks.iter().all(|check| check.status != "error");
+    let managed_agents = managed_agents
+        .iter()
+        .filter(|agent| managed_agent_matches_filter(agent, filter))
+        .cloned()
+        .collect::<Vec<_>>();
+    AgentCheckReport { ok, checks, managed_agents }
+}
+
+fn run(filter: Option<&str>, managed_agents: &[DoctorManagedAgent]) -> Vec<AgentCheck> {
     let mut checks = Vec::new();
     checks.push(check_executable());
     checks.push(check_local_agents());
-    checks.push(check_runtime_environment_files(filter));
+    checks.push(check_runtime_environment_files(filter, managed_agents));
+    checks.push(check_managed_agents(filter, managed_agents));
     if cfg!(windows) {
         checks.push(check_wsl_distributions(filter));
     }
@@ -66,35 +100,47 @@ fn check_executable() -> AgentCheck {
 
 fn check_local_agents() -> AgentCheck {
     let mut available = Vec::new();
-    let mut missing = Vec::new();
     for command in ["codex", "claude"] {
-        match find_command(command) {
-            Some(path) => available.push(format!("{command}={path}")),
-            None => missing.push(command.to_string()),
+        if let Some(path) = find_command(command) {
+            available.push(format!("{command}={path}"));
         }
     }
-    if missing.is_empty() {
+    if available.is_empty() {
+        AgentCheck {
+            name: "local_agents".into(),
+            status: "warn".into(),
+            detail: "no agent executables found".into(),
+        }
+    } else {
         AgentCheck {
             name: "local_agents".into(),
             status: "ok".into(),
             detail: available.join("; "),
         }
-    } else {
-        AgentCheck {
-            name: "local_agents".into(),
-            status: "warn".into(),
-            detail: format!("missing {}; found {}", missing.join(", "), available.join("; ")),
-        }
     }
 }
 
-fn check_runtime_environment_files(filter: Option<&str>) -> AgentCheck {
+fn check_runtime_environment_files(
+    filter: Option<&str>,
+    managed_agents: &[DoctorManagedAgent],
+) -> AgentCheck {
     let root = std::env::temp_dir().join("luna-mux");
     let Ok(entries) = fs::read_dir(&root) else {
-        return AgentCheck {
-            name: "runtime_env_files".into(),
-            status: "warn".into(),
-            detail: "no luna-mux temp directory".into(),
+        return if managed_agents
+            .iter()
+            .any(|agent| managed_agent_matches_filter(agent, filter))
+        {
+            AgentCheck {
+                name: "runtime_env_files".into(),
+                status: "ok".into(),
+                detail: "active managed agents are present; persistent environment files are not required for managed agents".into(),
+            }
+        } else {
+            AgentCheck {
+                name: "runtime_env_files".into(),
+                status: "warn".into(),
+                detail: "no luna-mux temp directory".into(),
+            }
         };
     };
     let mut details = Vec::new();
@@ -126,10 +172,21 @@ fn check_runtime_environment_files(filter: Option<&str>) -> AgentCheck {
         }
     }
     if !found {
-        return AgentCheck {
-            name: "runtime_env_files".into(),
-            status: "warn".into(),
-            detail: "no persistent runtime environment files found; this is expected when no agent runtime is active".into(),
+        return if managed_agents
+            .iter()
+            .any(|agent| managed_agent_matches_filter(agent, filter))
+        {
+            AgentCheck {
+                name: "runtime_env_files".into(),
+                status: "ok".into(),
+                detail: "no persistent environment files found; active managed agents receive hook/MCP configuration through their launch environment instead".into(),
+            }
+        } else {
+            AgentCheck {
+                name: "runtime_env_files".into(),
+                status: "warn".into(),
+                detail: "no persistent runtime environment files found; this is expected when no agent runtime is active".into(),
+            }
         };
     }
     if errors.is_empty() {
@@ -145,6 +202,70 @@ fn check_runtime_environment_files(filter: Option<&str>) -> AgentCheck {
             detail: errors.join(" | "),
         }
     }
+}
+
+fn check_managed_agents(
+    filter: Option<&str>,
+    managed_agents: &[DoctorManagedAgent],
+) -> AgentCheck {
+    let matching = managed_agents
+        .iter()
+        .filter(|agent| managed_agent_matches_filter(agent, filter))
+        .collect::<Vec<_>>();
+    if matching.is_empty() {
+        return AgentCheck {
+            name: "managed_agents".into(),
+            status: "ok".into(),
+            detail: "no managed agent snapshots found".into(),
+        };
+    }
+    let mut details = Vec::new();
+    let mut errors = Vec::new();
+    for agent in matching {
+        let last_activity = agent
+            .last_activity
+            .as_deref()
+            .unwrap_or("unknown");
+        let detail = format!(
+            "{}: adapter={}, status={}, runtime={}, pane={}, pane_title={}, session={}, session_name={}, last_activity={}",
+            agent.agent_id,
+            agent.adapter,
+            agent.status,
+            agent.runtime_id,
+            agent.pane_id,
+            agent.pane_title,
+            agent.mux_session_id,
+            agent.session_name,
+            last_activity
+        );
+        if agent.status == "Error" {
+            errors.push(detail);
+        } else {
+            details.push(detail);
+        }
+    }
+    if errors.is_empty() {
+        AgentCheck {
+            name: "managed_agents".into(),
+            status: "ok".into(),
+            detail: details.join(" | "),
+        }
+    } else {
+        AgentCheck {
+            name: "managed_agents".into(),
+            status: "error".into(),
+            detail: errors.join(" | "),
+        }
+    }
+}
+
+fn managed_agent_matches_filter(agent: &DoctorManagedAgent, filter: Option<&str>) -> bool {
+    filter.is_none_or(|filter| {
+        agent.agent_id.contains(filter)
+            || agent.runtime_id.contains(filter)
+            || agent.pane_id.contains(filter)
+            || agent.mux_session_id.contains(filter)
+    })
 }
 
 fn inspect_environment_file(path: &Path) -> Result<String, String> {
@@ -326,6 +447,33 @@ fn find_command(command: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn active_managed_agents_suppress_missing_env_file_warning() {
+        let agents = vec![DoctorManagedAgent {
+            agent_id: "agent-1".into(),
+            adapter: "codex".into(),
+            runtime_id: "runtime-1".into(),
+            pane_id: "pane-1".into(),
+            pane_title: "My Pane".into(),
+            mux_session_id: "session-1".into(),
+            session_name: "My Session".into(),
+            status: "Working".into(),
+            last_activity: None,
+        }];
+        let checks = run(None, &agents);
+        let runtime_env = checks
+            .iter()
+            .find(|check| check.name == "runtime_env_files")
+            .unwrap();
+        assert_eq!(runtime_env.status, "ok");
+        let managed = checks
+            .iter()
+            .find(|check| check.name == "managed_agents")
+            .unwrap();
+        assert_eq!(managed.status, "ok");
+        assert!(managed.detail.contains("agent-1"));
+    }
 
     #[test]
     fn environment_parser_accepts_posix_and_powershell_forms() {

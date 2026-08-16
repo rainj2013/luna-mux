@@ -259,6 +259,7 @@ pub fn install_wsl_manual_bootstrap(
 {env_source}LUNA_MUX_AGENT_PROCESS_ID="$$-$(date +%s)"
 LUNA_MUX_AGENT_ADAPTER="claude-code"
 export LUNA_MUX_AGENT_PROCESS_ID LUNA_MUX_AGENT_ADAPTER
+export WSLENV="LUNA_MUX_AGENT_ADAPTER/w:LUNA_MUX_AGENT_PROCESS_ID/w${{WSLENV:+:$WSLENV}}"
 printf '%s' '{{"hook_event_name":"AgentProcessStart","agent_adapter":"claude-code"}}' | {forwarder} hook >/dev/null 2>&1 || true
 command claude --settings {settings} --mcp-config {mcp_config} --append-system-prompt {instructions} --no-chrome "$@"
 luna_mux_claude_exit_code=$?

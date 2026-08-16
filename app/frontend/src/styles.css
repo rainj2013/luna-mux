@@ -666,6 +666,69 @@ body.mux-split-resizing { cursor: col-resize; user-select: none; }
 .diagnostic-section > strong { color: var(--text-strong); font-size: 11px; }
 .diagnostic-export { min-width: 0; display: flex; align-items: center; gap: 10px; }
 .diagnostic-export small { min-width: 0; overflow: hidden; color: var(--text-muted); white-space: nowrap; text-overflow: ellipsis; font-size: 9px; }
+.diagnostics-panel { min-width: 0; display: grid; align-content: start; gap: 12px; }
+.diagnostics-summary { min-width: 0; padding: 0 0 14px; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px; border-bottom: 1px solid var(--border); }
+.diagnostics-summary-icon, .diagnostics-check-icon { width: 22px; height: 22px; flex: none; display: grid; place-items: center; border-radius: 4px; }
+.diagnostics-summary-icon { color: var(--text-muted); background: var(--surface-active); }
+.diagnostics-summary.ok .diagnostics-summary-icon, .diagnostics-check.ok .diagnostics-check-icon { color: var(--success); background: transparent; }
+.diagnostics-summary.warn .diagnostics-summary-icon, .diagnostics-check.warn .diagnostics-check-icon { color: var(--warning); background: transparent; }
+.diagnostics-summary.error .diagnostics-summary-icon, .diagnostics-check.error .diagnostics-check-icon { color: var(--danger); background: transparent; }
+.diagnostics-summary.idle .diagnostics-summary-icon { color: var(--text-muted); background: var(--surface-active); }
+.diagnostics-summary-copy { min-width: 0; display: grid; gap: 4px; }
+.diagnostics-summary-copy strong { color: var(--text-strong); font-size: 13px; }
+.diagnostics-summary-copy span { color: var(--text-muted); font-size: 11px; line-height: 1.5; }
+.diagnostics-actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; justify-content: flex-start; gap: 8px; padding-top: 2px; }
+.diagnostics-path { min-width: 0; overflow: hidden; color: var(--text-muted); white-space: nowrap; text-overflow: ellipsis; font-size: 9px; }
+.diagnostics-empty { min-height: 110px; display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--text-muted); border: 0; background: transparent; font-size: 11px; }
+.diagnostics-empty .spin { color: var(--accent-text); }
+.diagnostics-checks { min-width: 0; display: grid; }
+.diagnostics-check { min-width: 0; padding: 9px 0; display: grid; grid-template-columns: 22px minmax(0, 1fr); align-items: flex-start; gap: 8px; border-bottom: 1px solid var(--border); }
+.diagnostics-check:last-child { border-bottom: 0; }
+.diagnostics-check-main { min-width: 0; display: grid; gap: 5px; }
+.diagnostics-check-heading { min-width: 0; display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.diagnostics-check-heading strong { color: var(--text-strong); font-size: 11px; font-weight: 600; }
+.diagnostics-status { flex: none; padding: 0; color: var(--text-muted); background: transparent; font-size: 9px; font-weight: 600; letter-spacing: .03em; text-transform: uppercase; }
+.diagnostics-status.ok { color: var(--success); }
+.diagnostics-status.warn { color: var(--warning); }
+.diagnostics-status.error { color: var(--danger); }
+.diagnostics-check-detail { margin: 0; padding: 0; overflow-wrap: anywhere; color: var(--text-muted); background: transparent; border: 0; font: 10px/1.55 Consolas, monospace; white-space: pre-wrap; }
+.diagnostics-check-description { color: var(--text-muted); font-size: 10px; line-height: 1.5; }
+.diagnostics-runtime-fallback { color: var(--text-muted); font-size: 10px; line-height: 1.55; }
+.diagnostics-agent-list { min-width: 0; display: grid; gap: 7px; }
+.diagnostics-agent { min-width: 0; overflow: hidden; border: 1px solid var(--border-subtle); border-radius: 5px; background: var(--surface-subtle); }
+.diagnostics-agent-summary { width: 100%; min-width: 0; padding: 7px 8px; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px; border: 0; color: var(--text-strong); background: transparent; cursor: pointer; text-align: left; }
+.diagnostics-agent-summary:hover { background: var(--surface-active); }
+.diagnostics-agent-primary { min-width: 0; display: grid; gap: 2px; }
+.diagnostics-agent-kind { color: var(--text-strong); font-size: 10px; font-weight: 600; }
+.diagnostics-agent-location { min-width: 0; overflow: hidden; color: var(--text-muted); white-space: nowrap; text-overflow: ellipsis; font-size: 9px; }
+.diagnostics-agent-summary svg { color: var(--text-muted); }
+.diagnostics-agent-status { flex: none; color: var(--text-muted); font-size: 9px; font-weight: 600; letter-spacing: .03em; text-transform: uppercase; }
+.diagnostics-agent-status.working { color: var(--accent-text); }
+.diagnostics-agent-status.warning { color: var(--warning); }
+.diagnostics-agent-status.ok { color: var(--success); }
+.diagnostics-agent-status.error { color: var(--danger); }
+.diagnostics-agent-details { margin: 0; padding: 0 8px 8px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 14px; border-top: 1px solid var(--border-subtle); background: transparent; }
+.diagnostics-agent-details > div { min-width: 0; display: grid; gap: 2px; padding-top: 7px; }
+.diagnostics-agent-details dt { color: var(--text-subtle); font-size: 9px; }
+.diagnostics-agent-details dd { min-width: 0; margin: 0; overflow: hidden; color: var(--text-muted); white-space: nowrap; text-overflow: ellipsis; font: 10px/1.45 Consolas, monospace; }
+.diagnostics-runtime-list { min-width: 0; display: grid; gap: 7px; }
+.diagnostics-runtime { min-width: 0; overflow: hidden; border: 1px solid var(--border-subtle); border-radius: 5px; background: var(--surface-subtle); }
+.diagnostics-runtime-heading { min-width: 0; padding: 7px 8px; display: flex; align-items: center; justify-content: space-between; gap: 10px; border-bottom: 1px solid var(--border-subtle); }
+.diagnostics-runtime-heading strong { color: var(--text-strong); font-size: 10px; font-weight: 600; }
+.diagnostics-runtime-heading code { min-width: 0; overflow: hidden; color: var(--text-muted); white-space: nowrap; text-overflow: ellipsis; font: 9px/1.4 Consolas, monospace; }
+.diagnostics-runtime-details { margin: 0; padding: 0 8px 8px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px 14px; }
+.diagnostics-runtime-details > div { min-width: 0; display: grid; gap: 2px; padding-top: 7px; }
+.diagnostics-runtime-details dt { color: var(--text-subtle); font-size: 9px; }
+.diagnostics-runtime-details dd { margin: 0; color: var(--text-muted); font-size: 9px; font-weight: 600; }
+.diagnostics-runtime-details dd.ok { color: var(--success); }
+.diagnostics-runtime-details dd.warn { color: var(--warning); }
+.diagnostics-runtime-details dd.error { color: var(--danger); }
+@media (max-width: 720px) {
+  .diagnostics-summary { grid-template-columns: auto minmax(0, 1fr); }
+  .diagnostics-actions { grid-column: 1 / -1; justify-content: flex-start; }
+  .diagnostics-runtime-details { grid-template-columns: 1fr; }
+  .diagnostics-agent-details { grid-template-columns: 1fr; }
+}
 .remote-agent-settings { display: grid; gap: 14px; }
 .settings-option-row { min-width: 0; padding-bottom: 16px; display: flex; align-items: center; justify-content: space-between; gap: 20px; border-bottom: 1px solid var(--border); }
 .settings-option-row > div, .settings-information > div { min-width: 0; display: grid; gap: 5px; }
@@ -905,6 +968,11 @@ body.mux-split-resizing { cursor: col-resize; user-select: none; }
 .platform-win32 .app-icon-settings legend,
 .platform-win32 .app-icon-options label,
 .platform-win32 .diagnostic-export small,
+.platform-win32 .diagnostics-summary-copy strong,
+.platform-win32 .diagnostics-summary-copy span,
+.platform-win32 .diagnostics-check-heading strong,
+.platform-win32 .diagnostics-status,
+.platform-win32 .diagnostics-check-detail,
 .platform-win32 .range-control output,
 .platform-win32 .color-control span,
 .platform-win32 .connection-route small,

@@ -504,6 +504,7 @@ pub fn run() {
             tunnels_start,
             browser_tunnel_start,
             tunnels_stop,
+            diagnostics_run,
             diagnostics_export,
             state_get_sidebar_collapsed,
             state_set_sidebar_collapsed,

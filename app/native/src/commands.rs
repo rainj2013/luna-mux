@@ -33,6 +33,7 @@ use crate::{
     },
     control_service::{self, InProcessControlService, LunaControlService},
     database::Database,
+    doctor::{self, AgentCheckReport, DoctorManagedAgent},
     local_pty_backend::InProcessLocalPtyTerminalBackend,
     luna_mcp::{LunaMcpService, MCP_AUTHORIZATION_ENV},
     models::*,
@@ -3243,6 +3244,66 @@ pub fn transfers_resolve_conflict(
 #[tauri::command]
 pub fn transfers_clear_completed(state: State<AppState>) -> Result<(), String> {
     state.transfers.clear_completed()
+}
+
+#[tauri::command]
+pub async fn diagnostics_run(
+    state: State<'_, AppState>,
+    filter: Option<String>,
+) -> Result<AgentCheckReport, String> {
+    let filter = filter.filter(|value| !value.trim().is_empty());
+    let pane_titles = state
+        .db
+        .list_mux_panes(None)
+        .map(|panes| {
+            panes
+                .into_iter()
+                .map(|pane| (pane.id, pane.title))
+                .collect::<HashMap<_, _>>()
+        })
+        .unwrap_or_default();
+    let session_names = state
+        .db
+        .list_mux_sessions()
+        .map(|sessions| {
+            sessions
+                .into_iter()
+                .map(|session| (session.id, session.name))
+                .collect::<HashMap<_, _>>()
+        })
+        .unwrap_or_default();
+    let managed_agents = state
+        .agent_hooks
+        .snapshots()
+        .into_iter()
+        .map(|snapshot| {
+            let adapter = crate::agent_adapters::adapter_id_for_profile(
+                &snapshot.context.launch_profile_id,
+            )
+            .unwrap_or("unknown")
+            .to_string();
+            let pane_id = snapshot.context.pane_id;
+            let pane_title = pane_titles.get(&pane_id).cloned().unwrap_or_default();
+            let mux_session_id = snapshot.context.mux_session_id;
+            let session_name = session_names.get(&mux_session_id).cloned().unwrap_or_default();
+            DoctorManagedAgent {
+                agent_id: snapshot.context.agent_id,
+                adapter,
+                runtime_id: snapshot.context.runtime_id,
+                pane_id,
+                pane_title,
+                mux_session_id,
+                session_name,
+                status: format!("{:?}", snapshot.status),
+                last_activity: snapshot.last_activity,
+            }
+        })
+        .collect::<Vec<_>>();
+    tauri::async_runtime::spawn_blocking(move || {
+        doctor::run_report_with_agents(filter.as_deref(), &managed_agents)
+    })
+    .await
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]

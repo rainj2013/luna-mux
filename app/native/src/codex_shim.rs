@@ -442,6 +442,7 @@ pub fn install_wsl_manual_bootstrap(
 LUNA_MUX_AGENT_PROCESS_ID=\"$$-$(date +%s)\"\n\
 LUNA_MUX_AGENT_ADAPTER=\"codex\"\n\
 export LUNA_MUX_AGENT_PROCESS_ID LUNA_MUX_AGENT_ADAPTER\n\
+export WSLENV=\"LUNA_MUX_AGENT_ADAPTER/w:LUNA_MUX_AGENT_PROCESS_ID/w${{WSLENV:+:$WSLENV}}\"\n\
 printf '%s' '{{\"hook_event_name\":\"AgentProcessStart\"}}' | {forwarder} hook >/dev/null 2>&1 || true\n\
 {command} \"$@\"\n\
 luna_mux_codex_exit_code=$?\n\

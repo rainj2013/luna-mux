@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowRight, Bookmark as BookmarkIcon, Bot, Check, ChevronDown, ChevronRight, CircleHelp, CirclePlus, Columns2, Columns3, Copy, Database as DatabaseIcon, Download, Edit3, ExternalLink, Eye, EyeOff, FileInput, FileJson2, Folder, FolderOpen, FolderPlus, Globe2, Grid2x2, GripVertical, History as HistoryIcon, Image as ImageIcon, KeyRound, Languages, LayoutGrid, Maximize2, Minimize, Minus, Monitor, Moon, Network, Palette, PanelLeftClose, PanelLeftOpen, Play, Plus, Power, Rocket, RotateCcw, Rows2, Rows3, Search, Send, Server, Settings as SettingsIcon, ShieldAlert, Sparkles, Square, SquareTerminal, Star, Sun, Trash2, Upload, WandSparkles, X } from 'lucide-react'
-import { BUNDLED_TERMINAL_FONT, DEFAULT_AI_SETTINGS, DEFAULT_TERMINAL_SETTINGS, type AgentLaunchProfile, type AiCommandHistoryEntry, type AiCommandSuggestion, type AiProvider, type AiRawExchange, type AiRiskAssessment, type AiSettings, type AiSettingsInput, type AiShell, type AiThinkingMode, type AppEvent, type AppIconId, type AppIconSettings, type AppLanguage, type Bookmark, type BookmarkArchivePreview, type BookmarkArchiveSource, type BookmarkInput, type BrowserResource, type BrowserRuntime, type BrowserRuntimeStatus, type BrowserTunnel, type ChromeInstallation, type ConflictResolution, type ConnectInput, type DeploymentDiffEntry, type DeploymentProfile, type HostKeyPrompt, type LunaRemoteImportPreview, type LunaRemoteImportResult, type LunaRemoteSource, type ManagedAgentEvent, type ManagedAgentStatus, type MuxPane, type MuxSession, type MuxSplitNode, type PortForwardProfile, type SessionStatus, type SshConfigPreview, type TerminalRuntime, type TerminalRuntimeEvent, type TerminalSettings, type TerminalTarget, type TransferTask, type TunnelSummary, type UiTheme } from './types'
+import { ArrowRight, Bookmark as BookmarkIcon, Bot, Check, ChevronDown, ChevronRight, CircleHelp, CirclePlus, Columns2, Columns3, Copy, Database as DatabaseIcon, Download, Edit3, ExternalLink, Eye, EyeOff, FileInput, FileJson2, Folder, FolderOpen, FolderPlus, Globe2, Grid2x2, GripVertical, History as HistoryIcon, Image as ImageIcon, KeyRound, Languages, LayoutGrid, Maximize2, Minimize, Minus, Monitor, Moon, Network, Palette, PanelLeftClose, PanelLeftOpen, Play, Plus, Power, Rocket, RotateCcw, Rows2, Rows3, Search, Send, Server, Settings as SettingsIcon, ShieldAlert, Sparkles, Square, SquareTerminal, Star, Stethoscope, Sun, Trash2, Upload, WandSparkles, X } from 'lucide-react'
+import { BUNDLED_TERMINAL_FONT, DEFAULT_AI_SETTINGS, DEFAULT_TERMINAL_SETTINGS, type AgentLaunchProfile, type AiCommandHistoryEntry, type AiCommandSuggestion, type AiProvider, type AiRawExchange, type AiRiskAssessment, type AiSettings, type AiSettingsInput, type AiShell, type AiThinkingMode, type AppEvent, type AppIconId, type AppIconSettings, type AppLanguage, type Bookmark, type BookmarkArchivePreview, type BookmarkArchiveSource, type BookmarkInput, type BrowserResource, type BrowserRuntime, type BrowserRuntimeStatus, type BrowserTunnel, type ChromeInstallation, type ConflictResolution, type ConnectInput, type DeploymentDiffEntry, type DeploymentProfile, type DoctorCheck, type DoctorCheckStatus, type DoctorManagedAgent, type DoctorReport, type HostKeyPrompt, type LunaRemoteImportPreview, type LunaRemoteImportResult, type LunaRemoteSource, type ManagedAgentEvent, type ManagedAgentStatus, type MuxPane, type MuxSession, type MuxSplitNode, type PortForwardProfile, type SessionStatus, type SshConfigPreview, type TerminalRuntime, type TerminalRuntimeEvent, type TerminalSettings, type TerminalTarget, type TransferTask, type TunnelSummary, type UiTheme } from './types'
 import { TerminalPane, type TerminalPaneHandle } from './components/TerminalPane'
 import { SftpPane } from './components/SftpPane'
 import { HelpDialog } from './components/HelpDialog'
@@ -12,13 +12,14 @@ interface WorkspaceTab extends MuxPane { key: string; sessionId?: string; runtim
 interface AiCommandTarget { name: string; detail: string; runtimeId?: string; connected: boolean; remote: boolean; initialShell: AiShell }
 interface BrowserResourceState extends BrowserResource { runtime?: BrowserRuntime; tunnel?: BrowserTunnel; status: BrowserRuntimeStatus | 'stopped'; error?: string }
 interface ManagedAgentSummary { agentId: string; paneId: string; runtimeId: string; status: ManagedAgentStatus | 'starting' | 'stopped'; waitingReason?: string; timestamp?: string; eventCount: number; unread: boolean; hasStructuredEvents: boolean; latest?: ManagedAgentEvent; latestAttention?: ManagedAgentEvent }
+interface DiagnosticsRuntimeEnvironment { runtimeId: string; hook: string; mcp: string; tokens: string }
 type AgentAttentionTone = 'info' | 'warning' | 'error'
 interface ConnectionTarget { newSession?: boolean; tabKey?: string; launchAgentProfileId?: AgentLaunchProfile['id']; launchAgentLabel?: AgentLaunchProfile['label']; paneTitle?: string }
 interface SidebarContextMenu { x: number; y: number; group?: string; bookmark?: Bookmark }
 type MuxSidebarContextMenu = { x: number; y: number } & ({ session: MuxSession; pane?: never } | { pane: WorkspaceTab; session?: never })
 interface GroupDialogState { mode: 'create' | 'rename'; group?: string }
 interface MuxSessionDialogState { mode: 'create' | 'rename'; session?: MuxSession }
-type SettingsSection = 'appearance' | 'terminal' | 'ssh' | 'ai'
+type SettingsSection = 'appearance' | 'terminal' | 'diagnostics' | 'ssh' | 'ai'
 type SidebarPointerDrag = { pointerId: number; type: 'bookmark' | 'group'; value: string; startX: number; startY: number; active: boolean }
 type SidebarPointerDrop = { type: 'bookmark'; id: string; group: string; position: 'before' | 'after' } | { type: 'group'; group: string; position: 'before' | 'after' | 'inside' }
 type ConfirmationOptions = { title: string; message: string; detail?: string; kind: 'warning' | 'danger'; confirmLabel: string }
@@ -2257,9 +2258,12 @@ function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, u
       <div className="settings-nav-group" role="presentation"><span>{t('app.toolSettings')}</span>
         <button type="button" role="tab" aria-selected={section === 'ai'} className={section === 'ai' ? 'active' : ''} onClick={() => setSection('ai')}><Bot size={15} />{t('app.aiCommandAssistant')}</button>
       </div>
+      <div className="settings-nav-group" role="presentation"><span>{t('app.advanced')}</span>
+        <button type="button" role="tab" aria-selected={section === 'diagnostics'} className={section === 'diagnostics' ? 'active' : ''} onClick={() => setSection('diagnostics')}><Stethoscope size={15} />{t('app.diagnostics')}</button>
+      </div>
     </div>
     <div className={`settings-content ${section}`}>
-    {section === 'appearance' ? <><fieldset className="ui-theme-settings"><legend>{t('common.theme')}</legend><div className="theme-options" role="radiogroup" aria-label={t('common.theme')}>{themeOptions.map((option) => { const Icon = option.icon; return <button key={option.value} type="button" role="radio" aria-checked={theme === option.value} className={theme === option.value ? 'active' : ''} onClick={() => selectTheme(option.value)}><Icon size={17} /><span>{option.label}</span></button> })}</div></fieldset><fieldset className="ui-theme-settings"><legend>{t('common.language')}</legend><div className="theme-options" role="radiogroup" aria-label={t('common.language')}>{availableLanguages.map((option) => <button key={option.code} type="button" role="radio" aria-checked={language === option.code} className={language === option.code ? 'active' : ''} onClick={() => { setDialogLanguage(option.code); onLanguagePreview(option.code) }}><Languages size={17} /><span>{option.label}</span></button>)}</div></fieldset><fieldset className="app-icon-settings"><legend>{t('app.appIcon')}</legend><div className="app-icon-options">{appIcons.options.map((icon) => <label key={icon.id} className={appIcon === icon.id ? 'selected' : ''}><input type="radio" name="app-icon" checked={appIcon === icon.id} onChange={() => setAppIcon(icon.id)} /><img src={icon.dataUrl} alt="" /><span>{t(appIconMessageKeys[icon.id])}</span></label>)}</div></fieldset><section className="diagnostic-section"><strong>{t('app.diagnostics')}</strong><div className="diagnostic-export"><button type="button" className="secondary-button" onClick={async () => { try { const path = await window.api.diagnostics.export(); if (path) setDiagnosticPath(path) } catch (error) { onError(errorMessage(error)) } }}><FileInput size={15} />{t('app.exportDiagnostics')}</button>{diagnosticPath && <small title={diagnosticPath}>{diagnosticPath}</small>}</div></section></> : section === 'ssh' ? <div className="remote-agent-settings">
+    {section === 'appearance' ? <><fieldset className="ui-theme-settings"><legend>{t('common.theme')}</legend><div className="theme-options" role="radiogroup" aria-label={t('common.theme')}>{themeOptions.map((option) => { const Icon = option.icon; return <button key={option.value} type="button" role="radio" aria-checked={theme === option.value} className={theme === option.value ? 'active' : ''} onClick={() => selectTheme(option.value)}><Icon size={17} /><span>{option.label}</span></button> })}</div></fieldset><fieldset className="ui-theme-settings"><legend>{t('common.language')}</legend><div className="theme-options" role="radiogroup" aria-label={t('common.language')}>{availableLanguages.map((option) => <button key={option.code} type="button" role="radio" aria-checked={language === option.code} className={language === option.code ? 'active' : ''} onClick={() => { setDialogLanguage(option.code); onLanguagePreview(option.code) }}><Languages size={17} /><span>{option.label}</span></button>)}</div></fieldset><fieldset className="app-icon-settings"><legend>{t('app.appIcon')}</legend><div className="app-icon-options">{appIcons.options.map((icon) => <label key={icon.id} className={appIcon === icon.id ? 'selected' : ''}><input type="radio" name="app-icon" checked={appIcon === icon.id} onChange={() => setAppIcon(icon.id)} /><img src={icon.dataUrl} alt="" /><span>{t(appIconMessageKeys[icon.id])}</span></label>)}</div></fieldset><section className="diagnostic-section"><strong>{t('app.diagnostics')}</strong><div className="diagnostic-export"><button type="button" className="secondary-button" onClick={async () => { try { const path = await window.api.diagnostics.export(); if (path) setDiagnosticPath(path) } catch (error) { onError(errorMessage(error)) } }}><FileInput size={15} />{t('app.exportDiagnostics')}</button>{diagnosticPath && <small title={diagnosticPath}>{diagnosticPath}</small>}</div></section></> : section === 'diagnostics' ? <DiagnosticsPanel onError={onError} /> : section === 'ssh' ? <div className="remote-agent-settings">
       <div className="settings-option-row"><div><strong>{t('app.remoteAgentIntegration')}</strong><span>{t('app.remoteAgentIntegrationDescription')}</span></div><label className="switch-control"><input type="checkbox" checked={remoteAgentIntegration} onChange={(event) => void changeRemoteAgentIntegration(event.target.checked)} /><span aria-hidden="true" /></label></div>
       <div className="settings-information"><ShieldAlert size={17} /><div><strong>{remoteAgentIntegration ? t('app.remoteAgentIntegrationOn') : t('app.remoteAgentIntegrationOff')}</strong><span>{remoteAgentIntegration ? t('app.remoteAgentIntegrationOnDescription') : t('app.remoteAgentIntegrationOffDescription')}</span></div></div>
     </div> : section === 'ai' ? <div className="ai-settings">
@@ -2282,6 +2286,212 @@ function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, u
     </div>
     <div className="dialog-actions spread"><button type="button" className="secondary-button" onClick={reset}><RotateCcw size={15} />{t('app.restoreDefaults')}</button><div><button type="button" className="secondary-button" onClick={onClose}>{t('common.cancel')}</button><button className="primary-button" type="submit">{t('common.save')}</button></div></div>
   </form></Modal>
+}
+
+function parseRuntimeEnvironmentDetail(detail: string): DiagnosticsRuntimeEnvironment[] {
+  if (!detail || detail.includes('no luna-mux temp directory') || detail.includes('no persistent environment files') || detail.includes('active managed agents')) return []
+  return detail.split(' | ').map((entry) => {
+    const colon = entry.indexOf(':')
+    if (colon < 0) return null
+    const runtimeId = entry.slice(0, colon).trim()
+    const fields: Record<string, string> = {}
+    for (const part of entry.slice(colon + 1).split(',')) {
+      const equals = part.indexOf('=')
+      if (equals > 0) fields[part.slice(0, equals).trim()] = part.slice(equals + 1).trim()
+    }
+    return { runtimeId, hook: fields.hook_endpoint ?? '', mcp: fields.mcp_endpoint ?? '', tokens: fields.tokens ?? '' }
+  }).filter((entry): entry is DiagnosticsRuntimeEnvironment => Boolean(entry && entry.runtimeId))
+}
+
+function agentTypeLabel(adapter: string): string {
+  if (adapter === 'claude-code') return 'Claude Code'
+  if (adapter === 'codex') return 'Codex'
+  return adapter || 'Agent'
+}
+
+function formatActivity(value?: string | null): string {
+  if (!value) return '-'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  const datePart = [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, '0'),
+    String(date.getDate()).padStart(2, '0'),
+  ].join('-')
+  const timePart = [
+    String(date.getHours()).padStart(2, '0'),
+    String(date.getMinutes()).padStart(2, '0'),
+    String(date.getSeconds()).padStart(2, '0'),
+  ].join(':')
+  return datePart + ' ' + timePart
+}
+
+function readableDiagnosticDetail(name: string, detail: string): string {
+  if (name === 'local_agents') return detail.replace(/;\s*/g, '\n')
+  if (name === 'wsl_distributions') return detail.replace(/,\s*/g, '\n')
+  return detail
+}
+
+function DiagnosticsPanel({ onError }: { onError(message: string): void }): React.JSX.Element {
+  const { t } = useI18n()
+  const [report, setReport] = useState<DoctorReport | null>(null)
+  const [running, setRunning] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const [diagnosticPath, setDiagnosticPath] = useState('')
+  const [expandedAgents, setExpandedAgents] = useState<Record<string, boolean>>({})
+  const runDiagnostics = async (): Promise<void> => {
+    setRunning(true)
+    setCopied(false)
+    setExpandedAgents({})
+    try {
+      const next = await window.api.diagnostics.run()
+      setReport(next)
+    } catch (error) {
+      setReport(null)
+      onError(errorMessage(error))
+    } finally {
+      setRunning(false)
+    }
+  }
+  useEffect(() => {
+    void runDiagnostics()
+  }, [])
+  const copyReport = async (): Promise<void> => {
+    if (!report) return
+    try {
+      await window.api.system.writeClipboard(JSON.stringify(report, null, 2))
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1800)
+    } catch (error) { onError(errorMessage(error)) }
+  }
+  const exportDiagnostics = async (): Promise<void> => {
+    try {
+      const path = await window.api.diagnostics.export()
+      if (path) setDiagnosticPath(path)
+    } catch (error) { onError(errorMessage(error)) }
+  }
+  const statusIcon = (status: DoctorCheckStatus): React.JSX.Element => status === 'ok' ? <Check size={15} /> : status === 'warn' ? <ShieldAlert size={15} /> : <X size={15} />
+  const statusLabel = (status: DoctorCheckStatus): string => status === 'ok' ? t('app.diagnosticsStatusOk') : status === 'warn' ? t('app.diagnosticsStatusWarn') : t('app.diagnosticsStatusError')
+  const checkLabel = (name: string): string => {
+    if (name === 'executable') return t('app.diagnosticsCheckExecutable')
+    if (name === 'local_agents') return t('app.diagnosticsCheckLocalAgents')
+    if (name === 'runtime_env_files') return t('app.diagnosticsCheckRuntimeEnv')
+    if (name === 'managed_agents') return t('app.diagnosticsCheckManagedAgents')
+    if (name === 'wsl_distributions') return t('app.diagnosticsCheckWsl')
+    return name
+  }
+  const toggleAgent = (agentId: string): void => setExpandedAgents((current) => ({ ...current, [agentId]: !current[agentId] }))
+  const agentStatusLabel = (status: string): string => {
+    const value = status.toLowerCase()
+    if (value === 'working') return t('app.agentWorking')
+    if (value === 'waiting') return t('app.agentWaiting')
+    if (value === 'completed') return t('app.agentCompleted')
+    if (value === 'error') return t('app.agentError')
+    return status
+  }
+  const agentStatusTone = (status: string): string => {
+    const value = status.toLowerCase()
+    if (value === 'error') return 'error'
+    if (value === 'waiting') return 'warning'
+    if (value === 'completed') return 'ok'
+    return 'working'
+  }
+  const runtimeStatus = (value: string): DoctorCheckStatus => {
+    if (value === 'reachable') return 'ok'
+    if (!value || value === 'missing') return 'warn'
+    return 'error'
+  }
+  const runtimeStatusLabel = (value: string): string => {
+    if (value === 'reachable') return t('app.diagnosticsReachable')
+    if (!value || value === 'missing') return t('app.diagnosticsMissing')
+    return value
+  }
+  const renderCheckDetail = (check: DoctorCheck): React.JSX.Element => {
+    if (check.name === 'managed_agents') {
+      const agents = report?.managedAgents ?? []
+      if (agents.length === 0) return <code className="diagnostics-check-detail">{check.detail || t('app.diagnosticsNoDetail')}</code>
+      return <div className="diagnostics-agent-list">
+        {agents.map((agent) => {
+          const expanded = Boolean(expandedAgents[agent.agentId])
+          const paneLabel = agent.paneTitle || agent.sessionName || agent.paneId || '-'
+          return <div className="diagnostics-agent" key={agent.agentId}>
+            <button type="button" className="diagnostics-agent-summary" aria-expanded={expanded} onClick={() => toggleAgent(agent.agentId)}>
+              <span className="diagnostics-agent-primary">
+                <span className="diagnostics-agent-kind">{agentTypeLabel(agent.adapter)}</span>
+                <span className="diagnostics-agent-location" title={agent.paneId}>{paneLabel}</span>
+              </span>
+              <span className={'diagnostics-agent-status ' + agentStatusTone(agent.status)}>{agentStatusLabel(agent.status)}</span>
+              {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            </button>
+            {expanded && <dl className="diagnostics-agent-details">
+              <div><dt>{t('app.diagnosticsAgentType')}</dt><dd>{agentTypeLabel(agent.adapter)}</dd></div>
+              <div><dt>{t('app.diagnosticsAgentPane')}</dt><dd title={agent.paneId}>{agent.paneTitle || agent.paneId || '-'}</dd></div>
+              <div><dt>{t('app.diagnosticsAgentSession')}</dt><dd title={agent.muxSessionId}>{agent.sessionName || agent.muxSessionId || '-'}</dd></div>
+              <div><dt>{t('app.diagnosticsAgentLastActivity')}</dt><dd title={agent.lastActivity ?? ''}>{formatActivity(agent.lastActivity)}</dd></div>
+              <div><dt>{t('app.diagnosticsAgentId')}</dt><dd title={agent.agentId}>{agent.agentId}</dd></div>
+              <div><dt>{t('app.diagnosticsAgentRuntimeId')}</dt><dd title={agent.runtimeId}>{agent.runtimeId}</dd></div>
+            </dl>}
+          </div>
+        })}
+      </div>
+    }
+    if (check.name === 'runtime_env_files') {
+      const runtimes = parseRuntimeEnvironmentDetail(check.detail)
+      if (runtimes.length === 0) {
+        const fallback = check.detail.includes('active managed agents')
+          ? t('app.diagnosticsRuntimeEnvManagedAgents')
+          : check.detail.includes('no persistent runtime environment files')
+            ? t('app.diagnosticsRuntimeEnvNone')
+            : check.detail.includes('no luna-mux temp directory')
+              ? t('app.diagnosticsRuntimeEnvNoTemp')
+              : readableDiagnosticDetail(check.name, check.detail) || t('app.diagnosticsNoDetail')
+        return <span className="diagnostics-runtime-fallback">{fallback}</span>
+      }
+      return <div className="diagnostics-runtime-list">
+        {runtimes.map((runtime) => {
+          const tokenMissing = runtime.tokens === 'missing'
+          return <div className="diagnostics-runtime" key={runtime.runtimeId}>
+            <div className="diagnostics-runtime-heading"><strong>{t('app.diagnosticsRuntimeInstance')}</strong><code title={runtime.runtimeId}>{runtime.runtimeId}</code></div>
+            <dl className="diagnostics-runtime-details">
+              <div><dt>{t('app.diagnosticsHookEndpoint')}</dt><dd className={runtimeStatus(runtime.hook)}>{runtimeStatusLabel(runtime.hook)}</dd></div>
+              <div><dt>{t('app.diagnosticsMcpEndpoint')}</dt><dd className={runtimeStatus(runtime.mcp)}>{runtimeStatusLabel(runtime.mcp)}</dd></div>
+              <div><dt>{t('app.diagnosticsAuthorization')}</dt><dd className={tokenMissing ? 'warn' : 'ok'}>{tokenMissing ? t('app.diagnosticsMissing') : t('app.diagnosticsConfigured')}</dd></div>
+            </dl>
+          </div>
+        })}
+      </div>
+    }
+    return <code className="diagnostics-check-detail">{readableDiagnosticDetail(check.name, check.detail) || t('app.diagnosticsNoDetail')}</code>
+  }
+  const overallStatus: DoctorCheckStatus = report ? report.ok ? report.checks.some((check) => check.status === 'warn') ? 'warn' : 'ok' : 'error' : 'ok'
+  const overallLabel = report ? overallStatus === 'ok' ? t('app.diagnosticsAllGood') : overallStatus === 'warn' ? t('app.diagnosticsNeedsAttention') : t('app.diagnosticsHasErrors') : t('app.diagnosticsReady')
+  return <div className="diagnostics-panel">
+    <section className={report ? 'diagnostics-summary ' + overallStatus : 'diagnostics-summary idle'}>
+      <div className="diagnostics-summary-icon">{report ? statusIcon(overallStatus) : <Stethoscope size={15} />}</div>
+      <div className="diagnostics-summary-copy">
+        <strong>{overallLabel}</strong>
+        <span>{t('app.diagnosticsDescription')}</span>
+      </div>
+      <div className="diagnostics-actions">
+        <button type="button" className="secondary-button" disabled={running} onClick={() => void runDiagnostics()}><RotateCcw size={15} />{running ? t('app.diagnosticsRunning') : t('app.diagnosticsRerun')}</button>
+        <button type="button" className="secondary-button" disabled={!report} onClick={() => void copyReport()}>{copied ? <Check size={15} /> : <Copy size={15} />}{copied ? t('app.diagnosticsCopied') : t('app.diagnosticsCopyReport')}</button>
+        <button type="button" className="secondary-button" onClick={() => void exportDiagnostics()}><FileInput size={15} />{t('app.exportDiagnostics')}</button>
+      </div>
+    </section>
+    {diagnosticPath && <small className="diagnostics-path" title={diagnosticPath}>{diagnosticPath}</small>}
+    {running && !report && <div className="diagnostics-empty"><RotateCcw size={22} className="spin" /><span>{t('app.diagnosticsRunning')}</span></div>}
+    {!running && !report && <div className="diagnostics-empty"><button type="button" className="primary-button" onClick={() => void runDiagnostics()}><Stethoscope size={15} />{t('app.diagnosticsRun')}</button></div>}
+    {report && <section className="diagnostics-checks">
+      {report.checks.map((check) => <article key={check.name} className={'diagnostics-check ' + check.status}>
+        <div className="diagnostics-check-icon">{statusIcon(check.status)}</div>
+        <div className="diagnostics-check-main">
+          <div className="diagnostics-check-heading"><strong>{checkLabel(check.name)}</strong><span className={'diagnostics-status ' + check.status}>{statusLabel(check.status)}</span></div>
+          {check.name === 'runtime_env_files' && <span className="diagnostics-check-description">{t('app.diagnosticsRuntimeEnvDescription')}</span>}
+          {renderCheckDetail(check)}
+        </div>
+      </article>)}
+    </section>}
+  </div>
 }
 
 function GroupNameDialog({ mode, initialName, onClose, onSave }: { mode: 'create' | 'rename'; initialName: string; onClose(): void; onSave(name: string): void }): React.JSX.Element {

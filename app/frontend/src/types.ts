@@ -158,6 +158,18 @@ export interface AgentProfileAvailability {
   detail: string
 }
 
+export interface DoctorManagedAgent {
+  agentId: string
+  adapter: string
+  runtimeId: string
+  paneId: string
+  paneTitle: string
+  muxSessionId: string
+  sessionName: string
+  status: string
+  lastActivity?: string | null
+}
+
 export interface ManagedAgentEvent {
   sequence: number
   timestamp: string
@@ -598,6 +610,20 @@ export type ControlStateChangedEvent =
   | { type: 'muxPaneSaved'; payload: MuxPane }
   | { type: 'muxPaneCreated'; payload: { pane: MuxPane; session: MuxSession; start: boolean } }
 
+export type DoctorCheckStatus = 'ok' | 'warn' | 'error'
+
+export interface DoctorCheck {
+  name: string
+  status: DoctorCheckStatus
+  detail: string
+}
+
+export interface DoctorReport {
+  ok: boolean
+  checks: DoctorCheck[]
+  managedAgents?: DoctorManagedAgent[]
+}
+
 export interface AppApi {
   platform: Platform
   system: {
@@ -729,6 +755,7 @@ export interface AppApi {
     stop(sessionId: string, tunnelId: string): Promise<void>
   }
   diagnostics: {
+    run(filter?: string): Promise<DoctorReport>
     export(): Promise<string | null>
   }
   ai: {
