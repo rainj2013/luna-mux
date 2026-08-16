@@ -19,6 +19,7 @@ mod local_pty_backend;
 #[cfg(test)]
 mod local_pty_probe;
 mod luna_mcp;
+mod luna_mcp_proxy;
 mod models;
 mod product;
 mod sessions;
@@ -74,6 +75,7 @@ use tunnels::TunnelManager;
 
 pub use agent_hooks::try_run_hook_forwarder;
 pub use browser_runtime::try_run_mcp_browser;
+pub use luna_mcp_proxy::try_run_luna_mcp_proxy;
 
 #[cfg(target_os = "windows")]
 fn disable_browser_accelerator_keys(window: &tauri::WebviewWindow) -> Result<(), String> {

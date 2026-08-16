@@ -44,6 +44,7 @@ export default {
   "app.connected": "已连接",
   "app.connected2": "连接成功",
   "app.connecting": "连接中",
+  "app.loadingTerminalTargets": "正在探测可用终端…",
   "app.connection": "连接",
   "app.connectionBackupExportedValue": "连接备份已导出：{{value0}}",
   "app.connectionFailed": "连接失败",

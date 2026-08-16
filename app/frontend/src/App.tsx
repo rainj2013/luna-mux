@@ -161,7 +161,7 @@ export function App(): React.JSX.Element {
   const [muxSessionDialog, setMuxSessionDialog] = useState<MuxSessionDialogState | null>(null)
   const [paneRenameDialog, setPaneRenameDialog] = useState<WorkspaceTab | null>(null)
   const [connectionLibraryDialog, setConnectionLibraryDialog] = useState(false)
-  const [paneLauncher, setPaneLauncher] = useState<{ targets: TerminalTarget[] } | null>(null)
+  const [paneLauncher, setPaneLauncher] = useState<{ targets: TerminalTarget[]; loading: boolean } | null>(null)
   const [confirmation, setConfirmation] = useState<PendingConfirmation | null>(null)
   const [toast, setToast] = useState('')
   const [toastKind, setToastKind] = useState<'error' | 'success'>('error')
@@ -173,6 +173,7 @@ export function App(): React.JSX.Element {
   const suppressSidebarClickRef = useRef(false)
   const terminalPaneRefs = useRef(new Map<string, TerminalPaneHandle>())
   const browserResourceStartInFlightRef = useRef(new Set<string>())
+  const terminalTargetsCacheRef = useRef<TerminalTarget[] | null>(null)
 
   const showToast = (message: string, kind: 'error' | 'success' = 'error'): void => { setToastKind(kind); setToast(message); setTimeout(() => setToast(''), 4500) }
   const showError = (message: string): void => showToast(message)
@@ -199,35 +200,41 @@ export function App(): React.JSX.Element {
       next.delete(muxSessionId)
       return next
     })
+    setPaneLauncher({ targets: terminalTargetsCacheRef.current ?? [], loading: true })
     try {
       const runtimeTargets = await window.api.terminalRuntimes.targets()
       const targets = runtimeTargets.filter((item) => item.transport === 'localPty' || item.transport === 'ssh')
-      setPaneLauncher({ targets })
-    } catch (error) { showError(errorMessage(error)) }
+      terminalTargetsCacheRef.current = targets
+      setPaneLauncher((current) => current ? { targets, loading: false } : null)
+    } catch (error) {
+      setPaneLauncher((current) => current ? { ...current, loading: false } : null)
+      showError(errorMessage(error))
+    }
   }
   const persistSessionLayout = async (session: MuxSession, layout: MuxSplitNode | undefined): Promise<MuxSession> => {
     const saved = await window.api.muxSessions.save({ id: session.id, name: session.name, rootPath: session.rootPath, layout })
     setMuxSessions((current) => current.map((item) => item.id === saved.id ? saved : item))
     return saved
   }
-  const openLocalTerminal = async (targetId?: string, paneTitle = ''): Promise<void> => {
+  const openLocalTerminal = async (target?: TerminalTarget, paneTitle = ''): Promise<void> => {
+    let createdPaneKey: string | undefined
     try {
       const muxSession = muxSessions.find((session) => session.id === activeMuxSessionId)
       if (!muxSession) { showError(t('app.createSessionFirst')); return }
-      if (!targetId) { await openPaneLauncher(); return }
-      const localTargets = (await window.api.terminalRuntimes.targets()).filter((item) => item.transport === 'localPty')
-      const target = localTargets.find((item) => item.id === targetId)
-      if (!target) { showError(t('app.localTerminalUnavailable')); return }
+      if (!target) { await openPaneLauncher(); return }
+      if (target.transport !== 'localPty') { showError(t('app.localTerminalUnavailable')); return }
       setPaneLauncher(null)
       const title = paneTitle.trim() || target.label
       const savedPane = await window.api.muxPanes.save({ muxSessionId: muxSession.id, kind: 'terminal', title, targetId: target.id, cwd: muxSession.rootPath })
       const runtimeId = crypto.randomUUID()
       const pane: WorkspaceTab = { ...savedPane, key: savedPane.id, status: 'connecting' }
+      createdPaneKey = pane.key
       setTabs((current) => [...current, pane])
       const layout = insertPaneInLayout(layoutFromPanes(muxSession.layout, sessionTabs), activeKey || undefined, pane.id, 'horizontal')
       await persistSessionLayout(muxSession, layout)
       setActiveKey(pane.key)
       setWorkspaceView('terminal')
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
       const runtime = await window.api.terminalRuntimes.create({
         runtimeId,
         context: { muxSessionId: muxSession.id, paneId: pane.id, runtimeId },
@@ -239,7 +246,9 @@ export function App(): React.JSX.Element {
       })
       setTabs((current) => current.map((tab) => tab.key === pane.key ? { ...tab, runtimeId: runtime.runtimeId, status: runtime.status === 'running' ? 'connected' : runtime.status === 'error' ? 'error' : 'connecting', error: runtime.error } : tab))
     } catch (error) {
-      showError(errorMessage(error))
+      const message = errorMessage(error)
+      if (createdPaneKey) setTabs((current) => current.map((tab) => tab.key === createdPaneKey ? { ...tab, status: 'error', error: message } : tab))
+      showError(message)
     }
   }
   const startBrowserResource = async (resource: BrowserResourceState): Promise<void> => {
@@ -1401,13 +1410,13 @@ export function App(): React.JSX.Element {
       <div className="resource-library-footer"><span>{t('app.doubleClickTargetToAddPane')}</span><div><button className="text-button" onClick={() => void importConnectionArchive()}>{t('app.importConnectionBackup')}</button><button className="text-button" onClick={() => void importLunaRemoteDatabase()}>{t('app.importFromLunaRemote')}</button><button className="text-button" onClick={() => void exportConnectionArchive()}>{t('app.exportConnectionBackup')}</button></div></div>
     </div></Modal>}
     {groupDialog && <GroupNameDialog mode={groupDialog.mode} initialName={groupDialog.group ?? ''} onClose={() => setGroupDialog(null)} onSave={(name) => void saveGroup(name)} />}
-    {paneLauncher && <PaneLauncherDialog targets={paneLauncher.targets} onClose={() => setPaneLauncher(null)} onManageConnections={() => { setPaneLauncher(null); setConnectionLibraryDialog(true) }} onSelect={(target, paneTitle) => {
+    {paneLauncher && <PaneLauncherDialog targets={paneLauncher.targets} loading={paneLauncher.loading} onClose={() => setPaneLauncher(null)} onManageConnections={() => { setPaneLauncher(null); setConnectionLibraryDialog(true) }} onSelect={(target, paneTitle) => {
       if (target.transport === 'ssh') {
         const bookmark = bookmarkMap.get(target.id.replace(/^ssh-bookmark:/, ''))
         if (!bookmark) { showError(t('app.sshTargetUnavailable')); return }
         setPaneLauncher(null)
         openBookmark(bookmark, { newSession: true, paneTitle })
-      } else void openLocalTerminal(target.id, paneTitle)
+      } else void openLocalTerminal(target, paneTitle)
     }} />}
     {muxSessionDialog && <MuxSessionDialog mode={muxSessionDialog.mode} session={muxSessionDialog.session} onClose={() => setMuxSessionDialog(null)} onSave={(name, rootPath) => void saveMuxSession(name, rootPath)} />}
     {paneRenameDialog && <PaneNameDialog pane={paneRenameDialog} onClose={() => setPaneRenameDialog(null)} onSave={(title) => void renamePane(paneRenameDialog, title)} />}
@@ -2299,7 +2308,7 @@ function MuxSessionDialog({ mode, session, onClose, onSave }: { mode: 'create' |
   </form></Modal>
 }
 
-function PaneLauncherDialog({ targets, onClose, onManageConnections, onSelect }: { targets: TerminalTarget[]; onClose(): void; onManageConnections(): void; onSelect(target: TerminalTarget, paneTitle: string): void }): React.JSX.Element {
+function PaneLauncherDialog({ targets, loading, onClose, onManageConnections, onSelect }: { targets: TerminalTarget[]; loading: boolean; onClose(): void; onManageConnections(): void; onSelect(target: TerminalTarget, paneTitle: string): void }): React.JSX.Element {
   const { t } = useI18n()
   const [paneTitle, setPaneTitle] = useState('')
   const localTargets = targets.filter((target) => target.transport === 'localPty')
@@ -2307,8 +2316,9 @@ function PaneLauncherDialog({ targets, onClose, onManageConnections, onSelect }:
   const renderTarget = (target: TerminalTarget): React.JSX.Element => <button key={target.id} type="button" onClick={() => onSelect(target, paneTitle.trim())}>{target.transport === 'ssh' ? <Server size={18} /> : <SquareTerminal size={18} />}<span><strong>{target.label}</strong><small>{target.transport === 'ssh' ? t('app.sshEnvironment') : target.kind === 'wsl' ? t('app.wslEnvironment') : t('app.localEnvironment')}</small></span><ChevronRight size={16} /></button>
   return <Modal title={t('app.addPane')} onClose={onClose} className="pane-launcher-dialog"><div className="pane-launcher">
     <label className="pane-name-field">{t('app.paneName')}<input autoFocus value={paneTitle} onChange={(event) => setPaneTitle(event.target.value)} placeholder={t('app.paneNamePlaceholder')} /></label>
+    {loading && <div className="pane-target-loading"><span className="status-dot connecting" />{t('app.loadingTerminalTargets')}</div>}
     <section><header><span>{t('app.onThisComputer')}</span><small>{localTargets.length}</small></header><div className="local-target-list">{localTargets.map(renderTarget)}</div></section>
-    <section><header><span>{t('app.overSsh')}</span><button className="text-button" onClick={onManageConnections}>{t('app.manageSshTargets')}</button></header><div className="local-target-list">{sshTargets.map(renderTarget)}{sshTargets.length === 0 && <button type="button" className="empty-target" onClick={onManageConnections}><Server size={18} /><span><strong>{t('app.noSshTargets')}</strong><small>{t('app.addSshTargetToUse')}</small></span><ChevronRight size={16} /></button>}</div></section>
+    <section><header><span>{t('app.overSsh')}</span><button className="text-button" onClick={onManageConnections}>{t('app.manageSshTargets')}</button></header><div className="local-target-list">{sshTargets.map(renderTarget)}{sshTargets.length === 0 && !loading && <button type="button" className="empty-target" onClick={onManageConnections}><Server size={18} /><span><strong>{t('app.noSshTargets')}</strong><small>{t('app.addSshTargetToUse')}</small></span><ChevronRight size={16} /></button>}</div></section>
   </div></Modal>
 }
 

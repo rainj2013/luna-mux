@@ -44,6 +44,7 @@ export default {
   "app.connected": "Connected",
   "app.connected2": "Connected",
   "app.connecting": "Connecting",
+  "app.loadingTerminalTargets": "Discovering available terminals…",
   "app.connection": "Connection",
   "app.connectionBackupExportedValue": "Connection backup exported: {{value0}}",
   "app.connectionFailed": "Connection failed",

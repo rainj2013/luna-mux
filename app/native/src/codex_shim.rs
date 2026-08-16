@@ -284,12 +284,22 @@ pub fn managed_command(
     let mut overrides = vec![
         "features.network_proxy=true".to_string(),
         "network_proxy.domains.\"127.0.0.1\"=\"allow\"".to_string(),
-        format!("mcp_servers.luna_mux.url={}", toml_string(mcp_endpoint)),
-        format!(
-            "mcp_servers.luna_mux.bearer_token_env_var={}",
-            toml_string(MCP_AUTHORIZATION_ENV)
-        ),
     ];
+    if target_id.starts_with("local:wsl:") {
+        let proxy = hook_executable_for_target(&executable, target_id)?;
+        overrides.extend([
+            format!("mcp_servers.luna_mux.command={}", toml_string(&proxy)),
+            "mcp_servers.luna_mux.args=['mcp','luna']".into(),
+        ]);
+    } else {
+        overrides.extend([
+            format!("mcp_servers.luna_mux.url={}", toml_string(mcp_endpoint)),
+            format!(
+                "mcp_servers.luna_mux.bearer_token_env_var={}",
+                toml_string(MCP_AUTHORIZATION_ENV)
+            ),
+        ]);
+    }
     let local_browser_command = if target_id.starts_with("ssh-bookmark:") {
         None
     } else {
@@ -331,6 +341,7 @@ pub fn managed_command(
             ));
         }
         if !target_id.starts_with("ssh-bookmark:")
+            && !target_id.starts_with("local:wsl:")
             && let Some(override_value) = bundled_browser_skill_override()
         {
             overrides.push(override_value);
@@ -367,6 +378,51 @@ pub fn managed_command(
             shell_argument_quote(&format!("hooks.{event}={handler}"), target_id)
         )
     }))
+}
+
+#[cfg(windows)]
+pub fn install_wsl_manual_bootstrap(
+    context: &TerminalRuntimeContext,
+    target_id: &str,
+    mcp_endpoint: &str,
+) -> Result<String, String> {
+    if !target_id.starts_with("local:wsl:") {
+        return Err("WSL Codex 启动脚本只能安装到 WSL 终端".into());
+    }
+    let root = std::env::temp_dir()
+        .join("luna-mux")
+        .join(&context.runtime_id)
+        .join("bin");
+    fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+    let command = managed_command(
+        "command codex",
+        target_id,
+        true,
+        None,
+        mcp_endpoint,
+        None,
+        None,
+        &context.mux_session_id,
+        None,
+    )?;
+    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+    let forwarder = executable_command_quote(&hook_executable_for_target(&executable, target_id)?);
+    let script = format!(
+        "codex() (\n\
+LUNA_MUX_AGENT_PROCESS_ID=\"$$-$(date +%s)\"\n\
+LUNA_MUX_AGENT_ADAPTER=\"codex\"\n\
+export LUNA_MUX_AGENT_PROCESS_ID LUNA_MUX_AGENT_ADAPTER\n\
+printf '%s' '{{\"hook_event_name\":\"AgentProcessStart\"}}' | {forwarder} hook >/dev/null 2>&1 || true\n\
+{command} \"$@\"\n\
+luna_mux_codex_exit_code=$?\n\
+printf '%s' '{{\"hook_event_name\":\"AgentProcessExit\"}}' | {forwarder} hook >/dev/null 2>&1 || true\n\
+exit \"$luna_mux_codex_exit_code\"\n\
+)\n"
+    );
+    let path = root.join("wsl-bootstrap.sh");
+    fs::write(&path, script).map_err(|error| error.to_string())?;
+    let wsl_path = hook_executable_for_target(&path, target_id)?;
+    Ok(format!(". {}", shell_argument_quote(&wsl_path, target_id)))
 }
 
 pub(crate) fn hook_executable_for_target(

@@ -11,5 +11,8 @@ fn main() {
     if let Some(code) = luna_mux_lib::try_run_mcp_browser(&args) {
         std::process::exit(code);
     }
+    if let Some(code) = luna_mux_lib::try_run_luna_mcp_proxy(&args) {
+        std::process::exit(code);
+    }
     luna_mux_lib::run();
 }

@@ -158,8 +158,17 @@ impl InProcessLocalPtyTerminalBackend {
 
     #[cfg(windows)]
     fn discover_wsl_distributions() -> Vec<String> {
-        let Ok(output) = std::process::Command::new("wsl.exe")
-            .args(["--list", "--quiet"])
+        // Reading the per-user WSL registration is effectively instantaneous and
+        // does not wake the WSL service. `wsl.exe --list --quiet` can block for a
+        // long time while the service or a distribution is cold-starting.
+        let Ok(output) = std::process::Command::new("reg.exe")
+            .args([
+                "query",
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss",
+                "/s",
+                "/v",
+                "DistributionName",
+            ])
             .output()
         else {
             return Vec::new();
@@ -167,12 +176,7 @@ impl InProcessLocalPtyTerminalBackend {
         if !output.status.success() {
             return Vec::new();
         }
-        decode_windows_command_output(&output.stdout)
-            .lines()
-            .map(|line| line.trim().trim_matches('\0'))
-            .filter(|line| !line.is_empty())
-            .map(str::to_owned)
-            .collect()
+        parse_wsl_registry_output(&decode_windows_command_output(&output.stdout))
     }
 
     fn spawn_worker(
@@ -754,6 +758,19 @@ fn decode_windows_command_output(bytes: &[u8]) -> String {
     }
 }
 
+#[cfg(windows)]
+fn parse_wsl_registry_output(output: &str) -> Vec<String> {
+    let mut distributions = output
+        .lines()
+        .filter_map(|line| line.split_once("REG_SZ").map(|(_, value)| value.trim()))
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    distributions.sort_unstable();
+    distributions.dedup();
+    distributions
+}
+
 #[cfg(target_os = "macos")]
 pub(crate) fn macos_supported_shell() -> Option<String> {
     if let Ok(shell) = std::env::var("SHELL")
@@ -893,6 +910,15 @@ mod tests {
     }
 
     #[test]
+    fn parses_wsl_distributions_from_registry_output() {
+        let output = "    DistributionName    REG_SZ    Ubuntu 24.04\r\n    DistributionName    REG_SZ    Debian\r\n";
+        assert_eq!(
+            parse_wsl_registry_output(output),
+            ["Debian", "Ubuntu 24.04"]
+        );
+    }
+
+    #[test]
     fn powershell_loads_profiles_before_the_codex_bootstrap() {
         let mut request = request(None);
         request.launch_environment.insert(
@@ -988,10 +1014,19 @@ mod tests {
         request
             .launch_environment
             .insert("LUNA_MUX_HOOK_AUTHORIZATION".into(), "secret".into());
+        request.launch_environment.insert(
+            "LUNA_MUX_MCP_ENDPOINT".into(),
+            "http://127.0.0.1:1235/mcp".into(),
+        );
+        request
+            .launch_environment
+            .insert("LUNA_MUX_MCP_AUTHORIZATION".into(), "mcp-secret".into());
         let bridge = wsl_environment_bridge(&request);
         for name in [
             "LUNA_MUX_HOOK_ENDPOINT",
             "LUNA_MUX_HOOK_AUTHORIZATION",
+            "LUNA_MUX_MCP_ENDPOINT",
+            "LUNA_MUX_MCP_AUTHORIZATION",
             "LUNA_MUX_SESSION_ID",
             "LUNA_MUX_RUNTIME_ID",
             "LUNA_MUX_AGENT_ID",
@@ -999,5 +1034,6 @@ mod tests {
             assert!(bridge.split(':').any(|value| value == name));
         }
         assert!(!bridge.contains("secret"));
+        assert!(!bridge.contains("mcp-secret"));
     }
 }

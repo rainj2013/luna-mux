@@ -363,6 +363,25 @@ pub async fn terminal_runtime_create(
                     browser_cdp_port.expect("remote integration Browser port"),
                 ));
             } else {
+                #[cfg(windows)]
+                let wsl_bootstrap = if request.target_id.starts_with("local:wsl:") {
+                    match crate::codex_shim::install_wsl_manual_bootstrap(
+                        &context,
+                        &request.target_id,
+                        &mcp_endpoint,
+                    ) {
+                        Ok(command) => Some(command),
+                        Err(error) => {
+                            state.agent_hooks.revoke_token(&token);
+                            state.luna_mcp.revoke_token(&mcp_token);
+                            return Err(error);
+                        }
+                    }
+                } else {
+                    None
+                };
+                #[cfg(not(windows))]
+                let wsl_bootstrap: Option<String> = None;
                 request
                     .launch_environment
                     .insert("LUNA_MUX_HOOK_ENDPOINT".into(), endpoint);
@@ -375,6 +394,14 @@ pub async fn terminal_runtime_create(
                 request
                     .launch_environment
                     .insert(MCP_AUTHORIZATION_ENV.into(), mcp_token.clone());
+                if let Some(bootstrap) = wsl_bootstrap {
+                    request.command = Some(match request.command.take() {
+                        Some(command) if !command.trim().is_empty() => {
+                            format!("{bootstrap}; {command}")
+                        }
+                        _ => bootstrap,
+                    });
+                }
             }
             issued_hook_token = Some(token);
             issued_mcp_token = Some(mcp_token);
@@ -416,6 +443,12 @@ pub async fn terminal_runtime_create(
             remote_agent_launch =
                 Some((endpoint, token, mcp_endpoint, mcp_token, profile, context));
         } else {
+            request
+                .launch_environment
+                .insert("LUNA_MUX_HOOK_ENDPOINT".into(), endpoint.clone());
+            request
+                .launch_environment
+                .insert("LUNA_MUX_MCP_ENDPOINT".into(), mcp_endpoint.clone());
             // Native local shells load a runtime-scoped codex/claude shim below.
             // Keep the PTY's initial input short: injecting the full configuration
             // command through a canonical TTY can exceed MAX_CANON, truncate a
@@ -1133,6 +1166,17 @@ mod managed_agent_launch_tests {
         )
         .unwrap();
         assert_eq!(path, "/mnt/d/Program Files/Luna Mux/luna-mux.exe");
+        let command = codex_managed_command_with_hook(
+            "codex",
+            "local:wsl:Ubuntu",
+            true,
+            None,
+            "http://127.0.0.1:43128/mcp",
+        )
+        .unwrap();
+        assert!(command.contains("mcp_servers.luna_mux.command="));
+        assert!(command.contains("mcp_servers.luna_mux.args=['mcp','luna']"));
+        assert!(!command.contains("mcp_servers.luna_mux.url="));
     }
 
     #[test]
@@ -1340,8 +1384,13 @@ pub fn control_audit_clear(state: State<AppState>) -> Result<usize, String> {
 }
 
 #[tauri::command]
-pub fn terminal_targets_list(state: State<AppState>) -> Result<Vec<TerminalTarget>, String> {
-    state.terminal_backend.targets()
+pub async fn terminal_targets_list(
+    state: State<'_, AppState>,
+) -> Result<Vec<TerminalTarget>, String> {
+    let backend = state.terminal_backend.clone();
+    tauri::async_runtime::spawn_blocking(move || backend.targets())
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
