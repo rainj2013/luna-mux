@@ -14,6 +14,7 @@ mod control_contract;
 mod control_service;
 mod database;
 mod desktop;
+mod doctor;
 mod legacy_agent_hook_cleanup;
 mod local_pty_backend;
 #[cfg(test)]
@@ -22,7 +23,9 @@ mod luna_mcp;
 mod luna_mcp_proxy;
 mod models;
 mod product;
+mod runtime_env;
 mod sessions;
+mod shell_quoting;
 mod ssh_config;
 mod ssh_terminal_backend;
 mod terminal_backend;
@@ -75,6 +78,7 @@ use tunnels::TunnelManager;
 
 pub use agent_hooks::try_run_hook_forwarder;
 pub use browser_runtime::try_run_mcp_browser;
+pub use doctor::try_run_agent_check;
 pub use luna_mcp_proxy::try_run_luna_mcp_proxy;
 
 #[cfg(target_os = "windows")]
@@ -123,6 +127,7 @@ pub fn run() {
                 .path()
                 .app_data_dir()
                 .map_err(|error| error.to_string())?;
+            runtime_env::cleanup_stale_runtime_dirs();
             match legacy_agent_hook_cleanup::remove_legacy_persistent_hooks() {
                 Ok(Some(backup)) => eprintln!(
                     "Removed legacy Luna Mux Codex hooks; backup: {}",

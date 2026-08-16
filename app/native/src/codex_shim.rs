@@ -5,6 +5,10 @@ use std::{
 };
 
 use crate::{luna_mcp::MCP_AUTHORIZATION_ENV, terminal_runtime_contract::TerminalRuntimeContext};
+use crate::shell_quoting::{executable_command_quote, shell_argument_quote};
+#[cfg(any(not(windows), test))]
+#[allow(unused_imports)]
+use crate::shell_quoting::shell_quote;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SkillConfigEntry {
@@ -121,8 +125,9 @@ fn install_with_executable(
             .collect::<Vec<_>>()
             .join(",");
         let forwarder = executable.to_string_lossy().replace('\'', "''");
+        let quote_fn = powershell_native_arg_quote_script();
         let ps = format!(
-            "$overrides = @({overrides})\r\n\
+            "{quote_fn}$overrides = @({overrides})\r\n\
 $browserCdpPort = [Environment]::GetEnvironmentVariable('LUNA_MUX_BROWSER_CDP_PORT', 'Process')\r\n\
 if (![string]::IsNullOrWhiteSpace($browserCdpPort)) {{\r\n\
   $browserCdpPortToml = ConvertTo-Json ([string]$browserCdpPort) -Compress\r\n\
@@ -130,7 +135,6 @@ if (![string]::IsNullOrWhiteSpace($browserCdpPort)) {{\r\n\
 }}\r\n\
 $null = & '{forwarder}' mcp browser available 2>&1\r\n\
 if ($LASTEXITCODE -eq 0) {{ $overrides += @('mcp_servers.agent_browser.enabled=true') }}\r\n\
-$extra = foreach ($value in $overrides) {{ '--config'; $value }}\r\n\
 $lunaMuxProcessId = [guid]::NewGuid().ToString('N')\r\n\
 $lunaMuxPreviousProcessId = [Environment]::GetEnvironmentVariable('LUNA_MUX_AGENT_PROCESS_ID', 'Process')\r\n\
 $lunaMuxPreviousAdapter = [Environment]::GetEnvironmentVariable('LUNA_MUX_AGENT_ADAPTER', 'Process')\r\n\
@@ -139,8 +143,21 @@ $env:LUNA_MUX_AGENT_PROCESS_ID = $lunaMuxProcessId\r\n\
 $env:LUNA_MUX_AGENT_ADAPTER = 'codex'\r\n\
 try {{\r\n\
   '{{\"hook_event_name\":\"AgentProcessStart\"}}' | & '{forwarder}' hook | Out-Null\r\n\
-  & '{}' @extra @args\r\n\
-  $lunaMuxCodexExitCode = $LASTEXITCODE\r\n\
+  $lunaMuxCodexArguments = @()\r\n\
+  foreach ($value in $overrides) {{\r\n\
+    $lunaMuxCodexArguments += @('--config', $value)\r\n\
+  }}\r\n\
+  foreach ($value in $args) {{\r\n\
+    $lunaMuxCodexArguments += $value\r\n\
+  }}\r\n\
+  $lunaMuxCommandLine = (($lunaMuxCodexArguments | ForEach-Object {{ ConvertTo-LunaMuxNativeArg $_ }}) -join ' ')\r\n\
+  $psi = New-Object System.Diagnostics.ProcessStartInfo\r\n\
+  $psi.FileName = '{}'\r\n\
+  $psi.UseShellExecute = $false\r\n\
+  $psi.Arguments = $lunaMuxCommandLine\r\n\
+  $process = [System.Diagnostics.Process]::Start($psi)\r\n\
+  $process.WaitForExit()\r\n\
+  $lunaMuxCodexExitCode = $process.ExitCode\r\n\
 }} finally {{\r\n\
   '{{\"hook_event_name\":\"AgentProcessExit\"}}' | & '{forwarder}' hook | Out-Null\r\n\
   if ($null -eq $lunaMuxPreviousProcessId) {{ Remove-Item Env:LUNA_MUX_AGENT_PROCESS_ID -ErrorAction SilentlyContinue }} else {{ $env:LUNA_MUX_AGENT_PROCESS_ID = $lunaMuxPreviousProcessId }}\r\n\
@@ -364,7 +381,7 @@ pub fn managed_command(
         }
     };
     let hook_command_value = toml_string(&hook);
-    let handler = if target_id == "local:powershell" {
+    let handler = if crate::local_pty_backend::is_powershell_target(target_id) {
         let windows_hook_command_value = toml_string(&format!("& {hook}"));
         format!(
             "[{{hooks=[{{type=\"command\",command={hook_command_value},commandWindows={windows_hook_command_value}}}]}}]"
@@ -385,6 +402,7 @@ pub fn install_wsl_manual_bootstrap(
     context: &TerminalRuntimeContext,
     target_id: &str,
     mcp_endpoint: &str,
+    environment_file: Option<&str>,
 ) -> Result<String, String> {
     if !target_id.starts_with("local:wsl:") {
         return Err("WSL Codex 启动脚本只能安装到 WSL 终端".into());
@@ -394,6 +412,17 @@ pub fn install_wsl_manual_bootstrap(
         .join(&context.runtime_id)
         .join("bin");
     fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+    let env_source = environment_file
+        .map(Path::new)
+        .map(|path| hook_executable_for_target(path, target_id))
+        .transpose()?
+        .map(|path| {
+            format!(
+                "luna_mux_env_file={}\nif [ -r \"$luna_mux_env_file\" ]; then . \"$luna_mux_env_file\"; fi\n",
+                crate::shell_quoting::shell_quote(&path)
+            )
+        })
+        .unwrap_or_default();
     let command = managed_command(
         "command codex",
         target_id,
@@ -409,6 +438,7 @@ pub fn install_wsl_manual_bootstrap(
     let forwarder = executable_command_quote(&hook_executable_for_target(&executable, target_id)?);
     let script = format!(
         "codex() (\n\
+{env_source}\
 LUNA_MUX_AGENT_PROCESS_ID=\"$$-$(date +%s)\"\n\
 LUNA_MUX_AGENT_ADAPTER=\"codex\"\n\
 export LUNA_MUX_AGENT_PROCESS_ID LUNA_MUX_AGENT_ADAPTER\n\
@@ -441,16 +471,30 @@ pub(crate) fn hook_executable_for_target(
     Ok(value)
 }
 
-fn executable_command_quote(value: &str) -> String {
-    format!("\"{}\"", value.replace('"', "\\\""))
-}
-
-fn shell_argument_quote(value: &str, target_id: &str) -> String {
-    if target_id == "local:powershell" {
-        format!("'{}'", value.replace('\'', "''"))
+#[cfg(windows)]
+pub(crate) fn powershell_native_arg_quote_script() -> String {
+    r#"function ConvertTo-LunaMuxNativeArg {
+  param([string]$Value)
+  if ([string]::IsNullOrEmpty($Value)) { return '""' }
+  if ($Value -notmatch '[\s"]') { return $Value }
+  $quoted = '"'
+  $pending = 0
+  for ($i = 0; $i -lt $Value.Length; $i++) {
+    $ch = $Value[$i]
+    if ($ch -eq '\') {
+      $pending++
+    } elseif ($ch -eq '"') {
+      $quoted += ('\' * ($pending * 2 + 1)) + '"'
+      $pending = 0
     } else {
-        format!("'{}'", value.replace('\'', "'\"'\"'"))
+      if ($pending -gt 0) { $quoted += ('\' * $pending); $pending = 0 }
+      $quoted += $ch
     }
+  }
+  if ($pending -gt 0) { $quoted += ('\' * $pending) }
+  return $quoted + '"'
+}
+"#.replace('\n', "\r\n")
 }
 
 fn resolve_codex() -> Option<PathBuf> {
@@ -668,11 +712,6 @@ fn quote_path(path: &Path) -> String {
 fn toml_string(value: &str) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "\"\"".into())
 }
-#[cfg(not(windows))]
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\"'\"'"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -747,6 +786,12 @@ mod tests {
         if resolve_codex().is_none() {
             return;
         }
+        let Some(powershell) =
+            crate::local_pty_backend::windows_powershell5_executable()
+                .or_else(crate::local_pty_backend::windows_powershell7_executable)
+        else {
+            return;
+        };
         let runtime_id = format!("shim-test-{}", uuid::Uuid::new_v4());
         let context = TerminalRuntimeContext {
             mux_session_id: "session-1".into(),
@@ -775,10 +820,7 @@ mod tests {
         let root = install_with_executable(&context, Some("http://127.0.0.1:43128/mcp"), &helper)
             .expect("install Codex shim")
             .expect("installed Codex is available");
-        let output = Command::new(
-            crate::local_pty_backend::windows_powershell7_executable()
-                .expect("PowerShell 7 is installed for the shim test"),
-        )
+        let output = Command::new(&powershell)
         .args([
             "-NoLogo",
             "-NoProfile",
@@ -837,7 +879,7 @@ mod tests {
         assert!(!generated_shim.contains("agent_browser_tab_close"));
         assert!(!generated_shim.contains("agent_browser_window_new"));
         assert!(
-            generated_shim.contains("Luna Mux browser routing contract"),
+            generated_shim.contains("Luna Mux tool routing contract"),
             "generated shim did not add the Browser routing contract"
         );
 
@@ -855,10 +897,7 @@ mod tests {
             .to_string(),
         )
         .expect("rewrite stopped browser registry fixture");
-        let output_without_browser = Command::new(
-            crate::local_pty_backend::windows_powershell7_executable()
-                .expect("PowerShell 7 is installed for the shim test"),
-        )
+        let output_without_browser = Command::new(&powershell)
         .args([
             "-NoLogo",
             "-NoProfile",

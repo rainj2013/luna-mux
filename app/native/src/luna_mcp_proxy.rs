@@ -12,6 +12,8 @@ use rmcp::{
 
 use crate::luna_mcp::MCP_AUTHORIZATION_ENV;
 
+use std::time::Duration;
+
 #[derive(Clone)]
 struct LunaMcpStdioProxy {
     upstream: Peer<RoleClient>,
@@ -53,10 +55,28 @@ async fn run_proxy() -> Result<(), String> {
         .map_err(|_| "缺少 LUNA_MUX_MCP_ENDPOINT".to_string())?;
     let token = std::env::var(MCP_AUTHORIZATION_ENV)
         .map_err(|_| format!("缺少 {MCP_AUTHORIZATION_ENV}"))?;
-    let transport = StreamableHttpClientTransport::from_config(
-        StreamableHttpClientTransportConfig::with_uri(endpoint).auth_header(token),
-    );
-    let upstream = ().serve(transport).await.map_err(|error| error.to_string())?;
+    let mut upstream = None;
+    let mut last_error = String::new();
+    for attempt in 0..5u32 {
+        let transport = StreamableHttpClientTransport::from_config(
+            StreamableHttpClientTransportConfig::with_uri(endpoint.clone())
+                .auth_header(token.clone())
+                .reinit_on_expired_session(true),
+        );
+        match ().serve(transport).await {
+            Ok(service) => {
+                upstream = Some(service);
+                break;
+            }
+            Err(error) => {
+                last_error = error.to_string();
+                if attempt < 4 {
+                    tokio::time::sleep(Duration::from_millis(250 * (1 << attempt).min(2000))).await;
+                }
+            }
+        }
+    }
+    let upstream = upstream.ok_or_else(|| format!("Luna MCP proxy connect failed: {last_error}"))?;
     let peer = upstream.peer().clone();
     let peer_info = peer
         .peer_info()

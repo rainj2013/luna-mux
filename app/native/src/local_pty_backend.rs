@@ -31,6 +31,7 @@ use crate::{
 
 const LOCAL_TARGET_PREFIX: &str = "local:";
 const POWERSHELL_TARGET: &str = "local:powershell";
+const POWERSHELL5_TARGET: &str = "local:powershell5";
 const WSL_TARGET_PREFIX: &str = "local:wsl:";
 const MACOS_SHELL_TARGET: &str = "local:macos-shell";
 
@@ -86,11 +87,16 @@ impl InProcessLocalPtyTerminalBackend {
     fn command_for_request(
         request: &TerminalRuntimeCreateRequest,
     ) -> TerminalBackendResult<CommandBuilder> {
-        if request.target_id == POWERSHELL_TARGET {
+        if is_powershell_target(&request.target_id) {
             #[cfg(windows)]
             {
-                let executable = windows_powershell7_executable()
-                    .ok_or_else(|| "未找到 PowerShell 7（pwsh.exe）".to_string())?;
+                let executable = if request.target_id == POWERSHELL5_TARGET {
+                    windows_powershell5_executable()
+                        .ok_or_else(|| "未找到 Windows PowerShell 5.1（powershell.exe）".to_string())?
+                } else {
+                    windows_powershell7_executable()
+                        .ok_or_else(|| "未找到 PowerShell 7（pwsh.exe）".to_string())?
+                };
                 let mut command = CommandBuilder::new(executable);
                 command.args(["-NoLogo", "-NoExit"]);
                 if let Some(bootstrap) = request
@@ -99,11 +105,16 @@ impl InProcessLocalPtyTerminalBackend {
                     .or_else(|| request.launch_environment.get("LUNA_MUX_CODEX_BOOTSTRAP"))
                     .filter(|value| !value.trim().is_empty())
                 {
+                    let encoding = if request.target_id == POWERSHELL5_TARGET {
+                        "$OutputEncoding = [Console]::OutputEncoding = [Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false); & chcp.com 65001 | Out-Null; "
+                    } else {
+                        ""
+                    };
                     // Profiles are loaded explicitly so the bootstrap runs after fnm and
                     // other profile-managed PATH changes, while still preserving the
                     // standard PowerShell profile order.
                     let script = format!(
-                        "$lunaMuxProfilePaths = @($PROFILE.AllUsersAllHosts, $PROFILE.AllUsersCurrentHost, $PROFILE.CurrentUserAllHosts, $PROFILE.CurrentUserCurrentHost); foreach ($lunaMuxProfilePath in $lunaMuxProfilePaths) {{ if (Test-Path -LiteralPath $lunaMuxProfilePath) {{ . $lunaMuxProfilePath }} }}; Remove-Variable lunaMuxProfilePaths,lunaMuxProfilePath -ErrorAction SilentlyContinue; . '{}'",
+                        "{encoding}$lunaMuxProfilePaths = @($PROFILE.AllUsersAllHosts, $PROFILE.AllUsersCurrentHost, $PROFILE.CurrentUserAllHosts, $PROFILE.CurrentUserCurrentHost); foreach ($lunaMuxProfilePath in $lunaMuxProfilePaths) {{ if (Test-Path -LiteralPath $lunaMuxProfilePath) {{ . $lunaMuxProfilePath }} }}; Remove-Variable lunaMuxProfilePaths,lunaMuxProfilePath -ErrorAction SilentlyContinue; . '{}'",
                         bootstrap.replace('\'', "''")
                     );
                     command.args(["-NoProfile", "-Command", &script]);
@@ -335,21 +346,65 @@ impl InProcessLocalPtyTerminalBackend {
 }
 
 #[cfg(windows)]
+fn is_real_powershell7_executable(path: &std::path::Path) -> bool {
+    use std::os::windows::process::CommandExt;
+    std::process::Command::new(path)
+        .args(["-NoLogo", "-NoProfile", "-Command", "exit 0"])
+        .creation_flags(0x0800_0000)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+#[cfg(windows)]
 pub(crate) fn windows_powershell7_executable() -> Option<String> {
-    let from_path = std::env::var_os("PATH").and_then(|path| {
-        std::env::split_paths(&path)
-            .map(|directory| directory.join("pwsh.exe"))
-            .find(|candidate| candidate.is_file())
-    });
-    from_path
-        .or_else(|| first_command_path("pwsh.exe"))
+    std::env::var_os("ProgramFiles")
+        .map(PathBuf::from)
+        .map(|root| root.join("PowerShell").join("7").join("pwsh.exe"))
+        .filter(|candidate| is_real_powershell7_executable(candidate))
         .or_else(|| {
-            std::env::var_os("ProgramFiles")
+            std::env::var_os("PATH").and_then(|path| {
+                std::env::split_paths(&path)
+                    .map(|directory| directory.join("pwsh.exe"))
+                    .find(|candidate| is_real_powershell7_executable(candidate))
+            })
+        })
+        .or_else(|| {
+            first_command_path("pwsh.exe")
+                .filter(|candidate| is_real_powershell7_executable(candidate))
+        })
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
+#[cfg(windows)]
+pub(crate) fn windows_powershell5_executable() -> Option<String> {
+    std::env::var_os("PATH")
+        .and_then(|path| {
+            std::env::split_paths(&path)
+                .map(|directory| directory.join("powershell.exe"))
+                .find(|candidate| candidate.is_file())
+        })
+        .or_else(|| first_command_path("powershell.exe"))
+        .or_else(|| {
+            std::env::var_os("WINDIR")
+                .or_else(|| std::env::var_os("SystemRoot"))
                 .map(PathBuf::from)
-                .map(|root| root.join("PowerShell").join("7").join("pwsh.exe"))
+                .map(|root| {
+                    root.join("System32")
+                        .join("WindowsPowerShell")
+                        .join("v1.0")
+                        .join("powershell.exe")
+                })
                 .filter(|candidate| candidate.is_file())
         })
         .map(|path| path.to_string_lossy().into_owned())
+}
+
+pub(crate) fn is_powershell_target(target_id: &str) -> bool {
+    target_id == POWERSHELL_TARGET || target_id == POWERSHELL5_TARGET
 }
 
 #[cfg(windows)]
@@ -407,6 +462,15 @@ impl TerminalBackend for InProcessLocalPtyTerminalBackend {
                 targets.push(TerminalTarget {
                     id: POWERSHELL_TARGET.into(),
                     label: "PowerShell 7".into(),
+                    transport: TerminalTransport::LocalPty,
+                    kind: TerminalTargetKind::Powershell,
+                    capabilities: Self::capabilities(),
+                });
+            }
+            if windows_powershell5_executable().is_some() {
+                targets.push(TerminalTarget {
+                    id: POWERSHELL5_TARGET.into(),
+                    label: "PowerShell 5.1".into(),
                     transport: TerminalTransport::LocalPty,
                     kind: TerminalTargetKind::Powershell,
                     capabilities: Self::capabilities(),
@@ -480,7 +544,7 @@ impl TerminalBackend for InProcessLocalPtyTerminalBackend {
             request
                 .launch_environment
                 .insert("PATH".into(), joined.to_string_lossy().into_owned());
-            if request.target_id == POWERSHELL_TARGET {
+            if is_powershell_target(&request.target_id) {
                 request.launch_environment.insert(
                     "LUNA_MUX_AGENT_BOOTSTRAP".into(),
                     shim_dir
@@ -707,12 +771,18 @@ impl TerminalBackend for InProcessLocalPtyTerminalBackend {
                 libc::killpg(process_group_id, libc::SIGKILL);
             }
         }
-        record
+        let kill_result = record
             .killer
             .lock()
             .map_err(|_| "本地 child killer 锁已损坏")?
-            .kill()
-            .map_err(|error| error.to_string())
+            .kill();
+        #[cfg(windows)]
+        if let Err(error) = &kill_result {
+            if error.raw_os_error() == Some(0) {
+                return Ok(());
+            }
+        }
+        kill_result.map_err(|error| error.to_string())
     }
 
     fn read_output(
@@ -808,11 +878,19 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
+    fn powershell_test_target_id() -> &'static str {
+        if windows_powershell7_executable().is_some() {
+            POWERSHELL_TARGET
+        } else {
+            POWERSHELL5_TARGET
+        }
+    }
+
     fn request(command: Option<&str>) -> TerminalRuntimeCreateRequest {
         TerminalRuntimeCreateRequest {
             runtime_id: None,
             context: None,
-            target_id: POWERSHELL_TARGET.into(),
+            target_id: powershell_test_target_id().into(),
             title: Some("PTY test".into()),
             cwd: None,
             command: command.map(str::to_owned),

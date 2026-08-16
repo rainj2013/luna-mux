@@ -28,7 +28,7 @@ use tokio::{
 };
 use uuid::Uuid;
 
-use crate::{database::Database, models::*};
+use crate::{database::Database, models::*, shell_quoting::shell_quote};
 
 pub type SessionEventObserver = Arc<dyn Fn(AppEvent) + Send + Sync>;
 
@@ -1237,6 +1237,41 @@ impl SessionManager {
         file.shutdown().await.map_err(|error| error.to_string())?;
         Ok(path)
     }
+    pub async fn write_persistent_agent_environment_file(
+        &self,
+        id: &str,
+        runtime_id: &str,
+        hook_endpoint: &str,
+        hook_token: &str,
+        mcp_token: &str,
+        browser_credentials_file: Option<&str>,
+    ) -> Result<String, String> {
+        let runtime_root = self.remote_agent_runtime_root(id, runtime_id).await?;
+        let path = format!("{runtime_root}/agent.env");
+        let sftp = self.sftp(id).await?;
+        let contents = agent_environment_contents(
+            hook_endpoint,
+            hook_token,
+            mcp_token,
+            browser_credentials_file,
+        );
+        let mut metadata = FileAttributes::empty();
+        metadata.permissions = Some(0o600);
+        let mut file = sftp
+            .open_with_flags_and_attributes(
+                path.clone(),
+                OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::WRITE,
+                metadata,
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        file.write_all(contents.as_bytes())
+            .await
+            .map_err(|error| error.to_string())?;
+        file.shutdown().await.map_err(|error| error.to_string())?;
+        Ok(path)
+    }
+
     pub async fn cancel_remote_forward(
         &self,
         id: &str,
@@ -1652,10 +1687,6 @@ mod agent_hook_forwarder_tests {
         assert!(!BROWSER_MCP_PROXY.contains("lmxbm_"));
         assert!(!BROWSER_MCP_PROXY.contains("LUNA_MUX_BROWSER_CDP_PORT"));
     }
-}
-
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
 fn remote_interactive_shell_fallback(command: &str) -> String {

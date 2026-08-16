@@ -5,6 +5,9 @@
 
 fn main() {
     let args = std::env::args().collect::<Vec<_>>();
+    if let Some(code) = luna_mux_lib::try_run_agent_check(&args) {
+        std::process::exit(code);
+    }
     if let Some(code) = luna_mux_lib::try_run_hook_forwarder(&args) {
         std::process::exit(code);
     }

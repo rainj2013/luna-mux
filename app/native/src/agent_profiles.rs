@@ -1,5 +1,7 @@
 use serde::Serialize;
 
+use crate::shell_quoting::posix_shell_quote;
+
 pub const DEFAULT_CODEX_PROFILE_ID: &str = "codex.default";
 pub const DEFAULT_CLAUDE_CODE_PROFILE_ID: &str = "claude-code.default";
 
@@ -73,20 +75,24 @@ fn probe_command(command: &str, target_id: &str) -> Result<(bool, String), Strin
                 "--",
                 "sh",
                 "-lc",
-                &format!("command -v {}", posix_quote(command)),
+                &format!("command -v {}", posix_shell_quote(command)),
             ])
             .output()
-    } else if target_id == "local:powershell" {
-        std::process::Command::new(
+    } else if crate::local_pty_backend::is_powershell_target(target_id) {
+        let powershell = if target_id == "local:powershell5" {
+            crate::local_pty_backend::windows_powershell5_executable()
+                .ok_or_else(|| "未找到 Windows PowerShell 5.1（powershell.exe）".to_string())?
+        } else {
             crate::local_pty_backend::windows_powershell7_executable()
-                .ok_or_else(|| "未找到 PowerShell 7（pwsh.exe）".to_string())?,
-        )
+                .ok_or_else(|| "未找到 PowerShell 7（pwsh.exe）".to_string())?
+        };
+        std::process::Command::new(powershell)
             .args([
                 "-NoLogo",
                 "-Command",
                 &format!(
                     "$value = Get-Command -ErrorAction SilentlyContinue {}; if ($value) {{ $value.Source }} else {{ exit 127 }}",
-                    powershell_quote(command)
+                    crate::shell_quoting::powershell_quote(command)
                 ),
             ])
             .output()
@@ -100,7 +106,7 @@ fn probe_command(command: &str, target_id: &str) -> Result<(bool, String), Strin
             crate::local_pty_backend::macos_supported_shell()
                 .ok_or_else(|| "未找到受支持的 macOS Shell（zsh 或 bash）".to_string())?,
         )
-        .args(["-lc", &format!("command -v {}", posix_quote(command))])
+        .args(["-lc", &format!("command -v {}", posix_shell_quote(command))])
         .output()
     } else {
         return Err("Agent Profile 当前只支持本地终端目标".into());
@@ -121,15 +127,6 @@ fn probe_command(command: &str, target_id: &str) -> Result<(bool, String), Strin
     .trim()
     .to_string();
     Ok((output.status.success(), detail))
-}
-
-fn posix_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\"'\"'"))
-}
-
-#[cfg(windows)]
-fn powershell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
 }
 
 #[cfg(test)]

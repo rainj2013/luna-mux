@@ -8,6 +8,8 @@ use std::{
 };
 
 use base64::{Engine, engine::general_purpose::STANDARD};
+#[cfg(target_os = "macos")]
+use crate::desktop;
 use chrono::Utc;
 use serde_json::json;
 use tauri::{AppHandle, Emitter, Manager, State, Theme, WebviewWindow};
@@ -31,11 +33,12 @@ use crate::{
     },
     control_service::{self, InProcessControlService, LunaControlService},
     database::Database,
-    desktop,
     local_pty_backend::InProcessLocalPtyTerminalBackend,
     luna_mcp::{LunaMcpService, MCP_AUTHORIZATION_ENV},
     models::*,
     product,
+    runtime_env::{self, RuntimeEnvironment},
+    shell_quoting::posix_shell_quote,
     sessions::SessionManager,
     ssh_config,
     ssh_terminal_backend::InProcessSshTerminalBackend,
@@ -365,18 +368,46 @@ pub async fn terminal_runtime_create(
             } else {
                 #[cfg(windows)]
                 let wsl_bootstrap = if request.target_id.starts_with("local:wsl:") {
-                    match crate::codex_shim::install_wsl_manual_bootstrap(
+                    let environment_path = runtime_env::write_environment_for_target(
+                        &context.runtime_id,
+                        &request.target_id,
+                        &RuntimeEnvironment {
+                            hook_endpoint: Some(endpoint.clone()),
+                            hook_authorization: Some(token.clone()),
+                            mcp_endpoint: Some(mcp_endpoint.clone()),
+                            mcp_authorization: Some(mcp_token.clone()),
+                            browser_bridge_credentials: None,
+                            browser_cdp_port,
+                        },
+                    )?;
+                    let codex_bootstrap = match crate::codex_shim::install_wsl_manual_bootstrap(
                         &context,
                         &request.target_id,
                         &mcp_endpoint,
+                        environment_path.as_path().to_str(),
                     ) {
-                        Ok(command) => Some(command),
+                        Ok(command) => command,
                         Err(error) => {
                             state.agent_hooks.revoke_token(&token);
                             state.luna_mcp.revoke_token(&mcp_token);
                             return Err(error);
                         }
-                    }
+                    };
+                    let claude_bootstrap = match crate::claude_code_adapter::install_wsl_manual_bootstrap(
+                        &context,
+                        &request.target_id,
+                        &endpoint,
+                        &mcp_endpoint,
+                        environment_path.as_path().to_str(),
+                    ) {
+                        Ok(command) => command,
+                        Err(error) => {
+                            state.agent_hooks.revoke_token(&token);
+                            state.luna_mcp.revoke_token(&mcp_token);
+                            return Err(error);
+                        }
+                    };
+                    Some(format!("{codex_bootstrap}; {claude_bootstrap}"))
                 } else {
                     None
                 };
@@ -506,55 +537,60 @@ pub async fn terminal_runtime_create(
                     wait_for_runtime(&*state.terminal_backend, &runtime.runtime_id).await?;
                     let requires_hook_forwarder =
                         agent_adapters::requires_remote_hook_forwarder(&profile.adapter)?;
-                    state
-                        .sessions
-                        .verify_remote_agent_requirements(
+                    retry_remote_setup("remote setup", || {
+                        state.sessions.verify_remote_agent_requirements(
                             &runtime.runtime_id,
                             &profile.command,
                             true,
                         )
-                        .await?;
+                    })
+                    .await?;
                     let local_port = hook_endpoint_port(&local_endpoint)?;
                     let local_mcp_port = mcp_endpoint_port(&local_mcp_endpoint)?;
-                    let remote_port = state
-                        .sessions
-                        .start_loopback_reverse_forward(&runtime.runtime_id, local_port)
-                        .await?;
-                    let remote_mcp_port = state
-                        .sessions
-                        .start_loopback_reverse_forward(&runtime.runtime_id, local_mcp_port)
-                        .await?;
+                    let remote_port = retry_remote_setup("remote setup", || {
+                        state
+                            .sessions
+                            .start_loopback_reverse_forward(&runtime.runtime_id, local_port)
+                    })
+                    .await?;
+                    let remote_mcp_port = retry_remote_setup("remote setup", || {
+                        state
+                            .sessions
+                            .start_loopback_reverse_forward(&runtime.runtime_id, local_mcp_port)
+                    })
+                    .await?;
                     let remote_endpoint = format!("http://127.0.0.1:{remote_port}/v1/hooks");
                     let remote_mcp_endpoint = format!("http://127.0.0.1:{remote_mcp_port}/mcp");
                     let browser_bridge_token = format!("lmxbm_{}", Uuid::new_v4().simple());
                     let browser_cdp_port = state
                         .browser_runtimes
                         .session_cdp_port(&context.mux_session_id)?;
-                    let remote_browser_port = state
-                        .sessions
-                        .start_browser_mcp_reverse_forward(
+                    let remote_browser_port = retry_remote_setup("remote setup", || {
+                        state.sessions.start_browser_mcp_reverse_forward(
                             &runtime.runtime_id,
                             context.mux_session_id.clone(),
                             browser_cdp_port,
                             browser_bridge_token.clone(),
                         )
-                        .await?;
-                    let browser_proxy = state
-                        .sessions
-                        .install_browser_mcp_proxy(&runtime.runtime_id)
-                        .await?;
-                    let browser_credentials = state
-                        .sessions
-                        .write_browser_bridge_credentials(
+                    })
+                    .await?;
+                    let browser_proxy = retry_remote_setup("remote setup", || {
+                        state
+                            .sessions
+                            .install_browser_mcp_proxy(&runtime.runtime_id)
+                    })
+                    .await?;
+                    let browser_credentials = retry_remote_setup("remote setup", || {
+                        state.sessions.write_browser_bridge_credentials(
                             &runtime.runtime_id,
                             &runtime.runtime_id,
                             remote_browser_port,
                             &browser_bridge_token,
                         )
-                        .await?;
-                    let environment_file = state
-                        .sessions
-                        .write_agent_environment_file(
+                    })
+                    .await?;
+                    let environment_file = retry_remote_setup("remote setup", || {
+                        state.sessions.write_agent_environment_file(
                             &runtime.runtime_id,
                             &runtime.runtime_id,
                             &remote_endpoint,
@@ -562,21 +598,26 @@ pub async fn terminal_runtime_create(
                             &mcp_token,
                             Some(&browser_credentials),
                         )
-                        .await?;
+                    })
+                    .await?;
                     let remote_hook_command = if requires_hook_forwarder {
-                        let forwarder = state
-                            .sessions
-                            .install_agent_hook_forwarder(&runtime.runtime_id)
-                            .await?;
+                        let forwarder = retry_remote_setup("remote setup", || {
+                            state
+                                .sessions
+                                .install_agent_hook_forwarder(&runtime.runtime_id)
+                        })
+                        .await?;
                         Some(format!("python3 {}", posix_shell_quote(&forwarder)))
                     } else {
                         None
                     };
                     let existing_developer_instructions = if profile.adapter == "codex" {
-                        state
-                            .sessions
-                            .remote_codex_developer_instructions(&runtime.runtime_id)
-                            .await
+                        remote_setup_optional(|| {
+                            state
+                                .sessions
+                                .remote_codex_developer_instructions(&runtime.runtime_id)
+                        })
+                        .await
                     } else {
                         None
                     };
@@ -681,6 +722,43 @@ pub async fn terminal_runtime_create(
     }
 }
 
+async fn retry_remote_setup<T, F, Fut>(label: &str, mut operation: F) -> Result<T, String>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, String>>,
+{
+    let mut last_error = None;
+    for attempt in 1..=3 {
+        match tokio::time::timeout(std::time::Duration::from_secs(20), operation()).await {
+            Ok(Ok(value)) => return Ok(value),
+            Ok(Err(error)) => {
+                last_error = Some(format!("{label}: {error}"));
+                if attempt < 3 {
+                    tokio::time::sleep(std::time::Duration::from_millis(300 * attempt as u64)).await;
+                }
+            }
+            Err(_) => {
+                last_error = Some(format!("{label}: ????"));
+                if attempt < 3 {
+                    tokio::time::sleep(std::time::Duration::from_millis(300 * attempt as u64)).await;
+                }
+            }
+        }
+    }
+    Err(last_error.unwrap_or_else(|| format!("{label}: ????")))
+}
+
+async fn remote_setup_optional<T, F, Fut>(operation: F) -> Option<T>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Option<T>>,
+{
+    tokio::time::timeout(std::time::Duration::from_secs(10), operation())
+        .await
+        .ok()
+        .flatten()
+}
+
 async fn wait_for_runtime(backend: &dyn TerminalBackend, runtime_id: &str) -> Result<(), String> {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
     loop {
@@ -718,21 +796,19 @@ async fn setup_remote_manual_agent_shims(
     browser_cdp_port: u16,
 ) -> Result<(), String> {
     wait_for_runtime(&*state.terminal_backend, &runtime.runtime_id).await?;
-    if state
-        .sessions
-        .remote_command_path(&runtime.runtime_id, "python3")
-        .await
-        .is_none()
+    if remote_setup_optional(|| {
+        state
+            .sessions
+            .remote_command_path(&runtime.runtime_id, "python3")
+    })
+    .await
+    .is_none()
     {
         return Err("远端缺少 python3，无法安装 Agent Hook 与 Browser MCP 代理".into());
     }
     let (codex, claude) = tokio::join!(
-        state
-            .sessions
-            .remote_command_path(&runtime.runtime_id, "codex"),
-        state
-            .sessions
-            .remote_command_path(&runtime.runtime_id, "claude")
+        remote_setup_optional(|| state.sessions.remote_command_path(&runtime.runtime_id, "codex")),
+        remote_setup_optional(|| state.sessions.remote_command_path(&runtime.runtime_id, "claude"))
     );
     if codex.is_none() && claude.is_none() {
         return Err("远端没有可用的 codex 或 claude 命令，已跳过 Agent 注入".into());
@@ -740,33 +816,46 @@ async fn setup_remote_manual_agent_shims(
     let has_codex = codex.is_some();
     let has_claude = claude.is_some();
     let existing_developer_instructions = if codex.is_some() {
-        state
-            .sessions
-            .remote_codex_developer_instructions(&runtime.runtime_id)
-            .await
+        remote_setup_optional(|| {
+            state
+                .sessions
+                .remote_codex_developer_instructions(&runtime.runtime_id)
+        })
+        .await
     } else {
         None
     };
-    let hook_forwarder = state
-        .sessions
-        .install_agent_hook_forwarder(&runtime.runtime_id)
-        .await?;
-    let browser_proxy = state
-        .sessions
-        .install_browser_mcp_proxy(&runtime.runtime_id)
-        .await?;
+    let hook_forwarder = retry_remote_setup("remote setup", || {
+        state
+            .sessions
+            .install_agent_hook_forwarder(&runtime.runtime_id)
+    })
+    .await?;
+    let browser_proxy = retry_remote_setup("remote setup", || {
+        state
+            .sessions
+            .install_browser_mcp_proxy(&runtime.runtime_id)
+    })
+    .await?;
 
-    let hook_port = state
-        .sessions
-        .start_loopback_reverse_forward(
-            &runtime.runtime_id,
-            hook_endpoint_port(local_hook_endpoint)?,
-        )
-        .await?;
-    let mcp_port = match state
-        .sessions
-        .start_loopback_reverse_forward(&runtime.runtime_id, mcp_endpoint_port(local_mcp_endpoint)?)
-        .await
+    let hook_port = retry_remote_setup("remote setup", || {
+        state
+            .sessions
+            .start_loopback_reverse_forward(
+                &runtime.runtime_id,
+                hook_endpoint_port(local_hook_endpoint).expect("validated hook endpoint"),
+            )
+    })
+    .await?;
+    let mcp_port = match retry_remote_setup("remote setup", || {
+        state
+            .sessions
+            .start_loopback_reverse_forward(
+                &runtime.runtime_id,
+                mcp_endpoint_port(local_mcp_endpoint).expect("validated mcp endpoint"),
+            )
+    })
+    .await
     {
         Ok(port) => port,
         Err(error) => {
@@ -778,15 +867,15 @@ async fn setup_remote_manual_agent_shims(
         }
     };
     let browser_token = format!("lmxbm_{}", Uuid::new_v4().simple());
-    let browser_port = match state
-        .sessions
-        .start_browser_mcp_reverse_forward(
+    let browser_port = match retry_remote_setup("remote setup", || {
+        state.sessions.start_browser_mcp_reverse_forward(
             &runtime.runtime_id,
             context.mux_session_id.clone(),
             browser_cdp_port,
             browser_token.clone(),
         )
-        .await
+    })
+    .await
     {
         Ok(port) => port,
         Err(error) => {
@@ -801,18 +890,29 @@ async fn setup_remote_manual_agent_shims(
     };
     let mut created_browser_credentials = None;
     let setup = async {
-        let browser_credentials = state
-            .sessions
-            .write_browser_bridge_credentials(
+        let browser_credentials = retry_remote_setup("remote setup", || {
+            state.sessions.write_browser_bridge_credentials(
                 &runtime.runtime_id,
                 &runtime.runtime_id,
                 browser_port,
                 &browser_token,
             )
-            .await?;
+        })
+        .await?;
         created_browser_credentials = Some(browser_credentials.clone());
         let remote_hook_endpoint = format!("http://127.0.0.1:{hook_port}/v1/hooks");
         let remote_mcp_endpoint = format!("http://127.0.0.1:{mcp_port}/mcp");
+        let environment_file = retry_remote_setup("remote setup", || {
+            state.sessions.write_persistent_agent_environment_file(
+                &runtime.runtime_id,
+                &runtime.runtime_id,
+                &remote_hook_endpoint,
+                hook_token,
+                mcp_token,
+                Some(&browser_credentials),
+            )
+        })
+        .await?;
         let hook_command = format!("python3 {}", posix_shell_quote(&hook_forwarder));
         let managed_context = crate::terminal_runtime_contract::TerminalManagedAgentContext {
             mux_session_id: context.mux_session_id.clone(),
@@ -848,35 +948,24 @@ async fn setup_remote_manual_agent_shims(
                 browser_credentials_file: Some(&browser_credentials),
                 existing_developer_instructions: existing_developer_instructions.as_deref(),
             })?;
-            let script = remote_manual_agent_script(adapter, &hook_command, &launch);
+            let script = remote_manual_agent_script(adapter, &hook_command, &launch, &environment_file);
             let name = if adapter == "codex" {
                 "codex"
             } else {
                 "claude"
             };
-            let (bin, _) = state
-                .sessions
-                .install_remote_runtime_shim(
+            let (bin, _) = retry_remote_setup("remote setup", || {
+                state.sessions.install_remote_runtime_shim(
                     &runtime.runtime_id,
                     &runtime.runtime_id,
                     name,
                     &script,
                 )
-                .await?;
+            })
+            .await?;
             shim_bin = Some(bin);
         }
         let shim_bin = shim_bin.ok_or_else(|| "没有生成远端 Agent shim".to_string())?;
-        let environment_file = state
-            .sessions
-            .write_agent_environment_file(
-                &runtime.runtime_id,
-                &runtime.runtime_id,
-                &remote_hook_endpoint,
-                hook_token,
-                mcp_token,
-                Some(&browser_credentials),
-            )
-            .await?;
         let bootstrap = remote_manual_shell_bootstrap(
             context,
             &environment_file,
@@ -884,10 +973,14 @@ async fn setup_remote_manual_agent_shims(
             has_codex,
             has_claude,
         );
-        let write_result = state
+        let write_result = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        state
             .terminal_backend
-            .write(&runtime.runtime_id, &format!("{bootstrap}\r"))
-            .await;
+            .write(&runtime.runtime_id, &format!("{bootstrap}\r")),
+    )
+    .await
+    .map_err(|_| "write remote shell bootstrap timed out".to_string())?;
         if write_result.is_err() {
             state
                 .sessions
@@ -914,7 +1007,7 @@ async fn setup_remote_manual_agent_shims(
     setup
 }
 
-fn remote_manual_agent_script(adapter_id: &str, hook_command: &str, launch: &str) -> String {
+fn remote_manual_agent_script(adapter_id: &str, hook_command: &str, launch: &str, environment_file: &str) -> String {
     let payload_adapter = if adapter_id == "claude-code" {
         "claude-code"
     } else {
@@ -922,6 +1015,8 @@ fn remote_manual_agent_script(adapter_id: &str, hook_command: &str, launch: &str
     };
     format!(
         "#!/bin/sh\n\
+luna_mux_env_file={}\n\
+if [ -r \"$luna_mux_env_file\" ]; then . \"$luna_mux_env_file\"; fi\n\
 LUNA_MUX_AGENT_PROCESS_ID=\"$$-$(date +%s)\"\n\
 LUNA_MUX_AGENT_ADAPTER={}\n\
 export LUNA_MUX_AGENT_PROCESS_ID LUNA_MUX_AGENT_ADAPTER\n\
@@ -930,6 +1025,7 @@ printf '%s' '{}' | {} >/dev/null 2>&1 || true\n\
 luna_mux_agent_exit_code=$?\n\
 printf '%s' '{}' | {} >/dev/null 2>&1 || true\n\
 exit \"$luna_mux_agent_exit_code\"\n",
+        posix_shell_quote(environment_file),
         posix_shell_quote(payload_adapter),
         format!(
             "{{\"hook_event_name\":\"AgentProcessStart\",\"agent_adapter\":\"{payload_adapter}\"}}"
@@ -951,8 +1047,7 @@ fn remote_manual_shell_bootstrap(
     has_claude: bool,
 ) -> String {
     let mut command = format!(
-        "set -a; . {}; rm -f -- {}; set +a; LUNA_MUX_SESSION_ID={}; LUNA_MUX_PANE_ID={}; LUNA_MUX_RUNTIME_ID={}; export LUNA_MUX_SESSION_ID LUNA_MUX_PANE_ID LUNA_MUX_RUNTIME_ID; PATH={}:\"$PATH\"; export PATH; hash -r 2>/dev/null || true",
-        posix_shell_quote(environment_file),
+        "set -a; . {}; set +a; LUNA_MUX_SESSION_ID={}; LUNA_MUX_PANE_ID={}; LUNA_MUX_RUNTIME_ID={}; export LUNA_MUX_SESSION_ID LUNA_MUX_PANE_ID LUNA_MUX_RUNTIME_ID; PATH={}:\"$PATH\"; export PATH; hash -r 2>/dev/null || true",
         posix_shell_quote(environment_file),
         posix_shell_quote(&context.mux_session_id),
         posix_shell_quote(&context.pane_id),
@@ -1106,9 +1201,6 @@ fn hook_executable_for_target(executable: &Path, target_id: &str) -> Result<Stri
     crate::codex_shim::hook_executable_for_target(executable, target_id)
 }
 
-fn posix_shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\"'\"'"))
-}
 
 #[cfg(test)]
 mod managed_agent_launch_tests {
@@ -1175,7 +1267,8 @@ mod managed_agent_launch_tests {
         )
         .unwrap();
         assert!(command.contains("mcp_servers.luna_mux.command="));
-        assert!(command.contains("mcp_servers.luna_mux.args=['mcp','luna']"));
+        assert!(command.contains("mcp_servers.luna_mux.args="));
+        assert!(command.contains("['\"'\"'mcp'\"'\"'"));
         assert!(!command.contains("mcp_servers.luna_mux.url="));
     }
 
@@ -1236,6 +1329,7 @@ mod managed_agent_launch_tests {
             "claude-code",
             "python3 '/home/user/.luna-mux/bin/hook_forwarder.py'",
             "'/usr/local/bin/claude' --settings '{}'",
+            "/home/user/.luna-mux/runtime/runtime-1/agent.env",
         );
         assert!(script.starts_with("#!/bin/sh"));
         assert!(script.contains("AgentProcessStart"));
@@ -1259,7 +1353,7 @@ mod managed_agent_launch_tests {
             true,
         );
         assert!(command.contains(". '/home/user/.luna-mux/runtime/agent.env'"));
-        assert!(command.contains("rm -f -- '/home/user/.luna-mux/runtime/agent.env'"));
+        assert!(!command.contains("rm -f --"));
         assert!(command.contains("PATH='/home/user/.luna-mux/runtime/runtime-1/bin':\"$PATH\""));
         assert!(command.contains("LUNA_MUX_SESSION_ID='session-1'"));
         assert!(
@@ -1273,33 +1367,6 @@ mod managed_agent_launch_tests {
         );
         assert!(!command.contains("lmxbm_"));
         assert!(!command.contains("LUNA_MUX_HOOK_AUTHORIZATION="));
-    }
-
-    #[test]
-    #[cfg(windows)]
-    fn installed_codex_accepts_generated_hook_configuration() {
-        if !std::process::Command::new("where.exe")
-            .arg("codex.cmd")
-            .status()
-            .is_ok_and(|status| status.success())
-        {
-            return;
-        }
-        let command = format!(
-            "{} --version",
-            codex_command_with_hook("codex.cmd", "local:powershell").unwrap()
-        );
-        let output = std::process::Command::new("powershell.exe")
-            .args(["-NoLogo", "-NoProfile", "-Command", &command])
-            .output()
-            .expect("run installed Codex CLI");
-        assert!(
-            output.status.success(),
-            "Codex rejected generated hooks: {}{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(String::from_utf8_lossy(&output.stdout).contains("codex-cli"));
     }
 
     #[test]

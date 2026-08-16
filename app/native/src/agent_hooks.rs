@@ -637,11 +637,19 @@ async fn receive_hook(
         HookAuthorization::Agent { context, .. } => context.mux_session_id.as_str(),
         HookAuthorization::Bootstrap { context, .. } => context.mux_session_id.as_str(),
     };
-    if hook_response.is_none()
-        && is_agent_browser_tool(&payload)
-        && let Err(error) = service.ensure_browser(mux_session_id).await
-    {
-        hook_response = Some(browser_start_failure_response(&error));
+    if hook_response.is_none() && is_agent_browser_tool(&payload) {
+        let ensure = service.ensure_browser(mux_session_id);
+        match tokio::time::timeout(Duration::from_secs(20), ensure).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                hook_response = Some(browser_start_failure_response(&error));
+            }
+            Err(_) => {
+                hook_response = Some(browser_start_failure_response(
+                    "agent-browser warmup timed out after 20 seconds",
+                ));
+            }
+        }
     }
     let event = match authorization {
         HookAuthorization::Agent {
@@ -796,16 +804,14 @@ pub fn try_run_hook_forwarder(args: &[String]) -> Option<i32> {
         // does not manage. Those invocations must remain completely inert.
         return Some(0);
     };
-    let mut input = Vec::new();
-    if std::io::stdin()
-        .take((MAX_HOOK_BYTES + 1) as u64)
-        .read_to_end(&mut input)
-        .is_err()
-        || input.len() > MAX_HOOK_BYTES
-        || serde_json::from_slice::<Value>(&input).is_err()
+    let mut limited = std::io::stdin().take((MAX_HOOK_BYTES + 1) as u64);
+    let mut payload = match serde_json::Deserializer::from_reader(&mut limited)
+        .into_iter::<Value>()
+        .next()
     {
-        return Some(2);
-    }
+        Some(Ok(payload)) => payload,
+        _ => return Some(2),
+    };
     let process_id = std::env::var("LUNA_MUX_AGENT_PROCESS_ID")
         .ok()
         .filter(|value| !value.trim().is_empty())
@@ -818,26 +824,32 @@ pub fn try_run_hook_forwarder(args: &[String]) -> Option<i32> {
         .ok()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| agent_adapters::CODEX_ADAPTER_ID.into());
-    if let Ok(mut payload) = serde_json::from_slice::<Value>(&input)
-        && let Some(object) = payload.as_object_mut()
+    let input = {
+        if let Some(object) = payload.as_object_mut() {
+            if let Some(process_id) = process_id.as_ref() {
+                object.insert(
+                    "luna_mux_process_id".into(),
+                    Value::String(process_id.clone()),
+                );
+            }
+            object.insert("agent_adapter".into(), Value::String(adapter_id.clone()));
+        }
+        serde_json::to_vec(&payload).unwrap_or_default()
+    };
+    let client = match reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(3))
+        .timeout(Duration::from_secs(5))
+        .build()
     {
-        if let Some(process_id) = process_id.as_ref() {
-            object.insert(
-                "luna_mux_process_id".into(),
-                Value::String(process_id.clone()),
-            );
-        }
-        object.insert("agent_adapter".into(), Value::String(adapter_id.clone()));
-        if let Ok(serialized) = serde_json::to_vec(&payload) {
-            input = serialized;
-        }
-    }
+        Ok(client) => client,
+        Err(_) => return Some(0),
+    };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .ok()?;
     let result = runtime.block_on(async move {
-        let response = reqwest::Client::new()
+        let response = client
             .post(endpoint)
             .bearer_auth(token)
             .header(AGENT_ADAPTER_HEADER, adapter_id)
@@ -857,8 +869,9 @@ pub fn try_run_hook_forwarder(args: &[String]) -> Option<i32> {
             println!("{}", serde_json::to_string(&response).unwrap_or_default());
             0
         }
-        Ok(None) => 0,
-        Err(_) => 1,
+        // Fail open: Luna Mux tracking/browser routing must never block the
+        // agent when the local hook service is unreachable or restarts.
+        Ok(None) | Err(_) => 0,
     })
 }
 

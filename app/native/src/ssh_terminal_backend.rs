@@ -11,6 +11,7 @@ use crate::{
     database::Database,
     models::{AppEvent, ConnectInput, SessionStatus, SessionSummary},
     sessions::SessionManager,
+    shell_quoting::shell_quote,
     terminal_backend::{
         TerminalBackend, TerminalBackendResult, TerminalRuntimeEventSink,
         standard_terminal_capabilities,
@@ -370,10 +371,6 @@ fn initial_shell_input(cwd: Option<&str>, command: Option<&str>) -> Option<Strin
         (None, Some(command)) => Some(format!("{command}\r")),
         (None, None) => None,
     }
-}
-
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
 fn managed_agent_command(

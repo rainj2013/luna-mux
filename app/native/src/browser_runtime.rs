@@ -1,7 +1,6 @@
 use std::{
     collections::HashMap,
     future::Future,
-    io::Read,
     net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
@@ -1212,6 +1211,14 @@ pub(crate) async fn warm_agent_browser_session(
     let result = tokio::task::spawn_blocking(move || {
         let deadline = Instant::now() + Duration::from_secs(10);
         let run_probe = |arguments: &[&str], stage: &str| -> Result<(i32, String), String> {
+            let stdout_path = std::env::temp_dir()
+                .join(format!("luna-mux-ab-stdout-{}.log", Uuid::new_v4()));
+            let stderr_path = std::env::temp_dir()
+                .join(format!("luna-mux-ab-stderr-{}.log", Uuid::new_v4()));
+            let stdout = std::fs::File::create(&stdout_path)
+                .map_err(|error| format!("agent-browser {stage} log create failed: {error}"))?;
+            let stderr = std::fs::File::create(&stderr_path)
+                .map_err(|error| format!("agent-browser {stage} log create failed: {error}"))?;
             let mut command = Command::new(&binary);
             command
                 .args(arguments)
@@ -1219,8 +1226,8 @@ pub(crate) async fn warm_agent_browser_session(
                 .env("AGENT_BROWSER_SESSION", &scope)
                 .env("AGENT_BROWSER_NAMESPACE", &scope)
                 .stdin(Stdio::null())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped());
+                .stdout(Stdio::from(stdout))
+                .stderr(Stdio::from(stderr));
             configure_agent_browser_command(&mut command);
             let mut child = command
                 .spawn()
@@ -1228,21 +1235,20 @@ pub(crate) async fn warm_agent_browser_session(
             loop {
                 match child.try_wait() {
                     Ok(Some(status)) => {
-                        let mut output = String::new();
-                        if let Some(mut stdout) = child.stdout.take() {
-                            let _ = stdout.read_to_string(&mut output);
-                        }
-                        if let Some(mut stderr) = child.stderr.take() {
-                            let mut stderr_output = String::new();
-                            let _ = stderr.read_to_string(&mut stderr_output);
-                            if !stderr_output.trim().is_empty() {
-                                if !output.trim().is_empty() {
-                                    output.push_str("; ");
-                                }
-                                output.push_str(stderr_output.trim());
+                        let stdout_output =
+                            std::fs::read_to_string(&stdout_path).unwrap_or_default();
+                        let stderr_output =
+                            std::fs::read_to_string(&stderr_path).unwrap_or_default();
+                        let _ = std::fs::remove_file(&stdout_path);
+                        let _ = std::fs::remove_file(&stderr_path);
+                        let mut output = stdout_output.trim().to_string();
+                        if !stderr_output.trim().is_empty() {
+                            if !output.is_empty() {
+                                output.push_str("; ");
                             }
+                            output.push_str(stderr_output.trim());
                         }
-                        return Ok((status.code().unwrap_or(1), output.trim().to_string()));
+                        return Ok((status.code().unwrap_or(1), output));
                     }
                     Ok(None) if Instant::now() < deadline => {
                         std::thread::sleep(Duration::from_millis(20));
@@ -1250,9 +1256,13 @@ pub(crate) async fn warm_agent_browser_session(
                     Ok(None) => {
                         let _ = child.kill();
                         let _ = child.wait();
+                        let _ = std::fs::remove_file(&stdout_path);
+                        let _ = std::fs::remove_file(&stderr_path);
                         return Err(format!("agent-browser {stage}超时"));
                     }
                     Err(error) => {
+                        let _ = std::fs::remove_file(&stdout_path);
+                        let _ = std::fs::remove_file(&stderr_path);
                         return Err(format!("无法读取 agent-browser {stage}状态：{error}"));
                     }
                 }

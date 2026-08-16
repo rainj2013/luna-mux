@@ -581,7 +581,7 @@ export function App(): React.JSX.Element {
     runtimeId: activeTab.runtimeId,
     connected: activeTab.status === 'connected',
     remote: Boolean(activeBookmark),
-    initialShell: activeBookmark ? aiSettings.defaultShell : activeTab.targetId === 'local:macos-shell' ? 'macos' : activeTab.targetId === 'local:powershell' ? 'powerShell' : activeTab.targetId.startsWith('local:wsl:') ? 'linux' : aiSettings.defaultShell,
+    initialShell: activeBookmark ? aiSettings.defaultShell : activeTab.targetId === 'local:macos-shell' ? 'macos' : (activeTab.targetId === 'local:powershell' || activeTab.targetId === 'local:powershell5') ? 'powerShell' : activeTab.targetId.startsWith('local:wsl:') ? 'linux' : aiSettings.defaultShell,
   } : undefined
   const allAgents = useMemo(() => summarizeManagedAgents(tabs, managedAgentEvents, readAgentSequences, dismissedAgentAttentionSequences), [tabs, managedAgentEvents, readAgentSequences, dismissedAgentAttentionSequences])
   const agentAttentionByPane = useMemo(() => new Map(allAgents.flatMap((agent) => {
@@ -1871,7 +1871,7 @@ function MuxLayout({ node, panes, activePaneId, settings, backgroundImage, agent
           <button className="icon-button danger" title={t('app.closePane')} aria-label={t('app.closePane')} onClick={() => onClose(pane)}><X size={14} /></button>
         </div>
       </header>
-      <div className="terminal-region"><TerminalPane ref={(terminalPane) => { if (terminalPane) terminalPaneRefs.current.set(pane.key, terminalPane); else terminalPaneRefs.current.delete(pane.key) }} runtimeId={pane.runtimeId} connected={pane.status === 'connected'} visible={maximizedPaneId ? pane.id === maximizedPaneId : active} settings={settings} backgroundImage={backgroundImage} stoppedState={stoppedState} onAgentAction={() => onTerminalAgentAction(pane)} onStart={() => onReconnect(pane)} onOpenSettings={onOpenSettings} /></div>
+      <div className="terminal-region"><TerminalPane key={pane.key} ref={(terminalPane) => { if (terminalPane) terminalPaneRefs.current.set(pane.key, terminalPane); else terminalPaneRefs.current.delete(pane.key) }} runtimeId={pane.runtimeId} connected={pane.status === 'connected'} visible={maximizedPaneId ? pane.id === maximizedPaneId : active} settings={settings} backgroundImage={backgroundImage} stoppedState={stoppedState} onAgentAction={() => onTerminalAgentAction(pane)} onStart={() => onReconnect(pane)} onOpenSettings={onOpenSettings} /></div>
     </section>
   }
   const direction = node.direction
