@@ -174,21 +174,21 @@ hdiutil verify "app/native/target/release/bundle/dmg/Luna Mux_<version>_<arch>.d
 
 ### Windows
 
-构建 Windows x64 普通 NSIS 安装包。
+构建 Windows x64 标准 NSIS 安装包（推荐）。
 
 ```powershell
 npm run build:win
 ```
 
-普通包不内置 WebView2 bootstrapper 或 Runtime。目标机器缺少 WebView2 Runtime 时，安装程序会联网下载 bootstrapper。
+标准版不内置 WebView2 Runtime。Windows 10/11 通常已经具备 WebView2；目标机器缺少时，安装程序会联网下载 bootstrapper。
 
-构建包含 WebView2 Runtime 的离线包。
+构建内置 WebView2 Runtime 的兼容版。
 
 ```powershell
-npm run build:win:offline
+npm run build:win:webview2
 ```
 
-离线包体积更大，构建机首次打包仍需联网下载 Microsoft WebView2 离线安装器。发布前应在 Windows 真机验证普通包和离线包的安装、覆盖安装、卸载及重启恢复。
+兼容版体积更大，只适合系统缺少 WebView2 且安装时无法联网的场景。构建机首次打包仍需联网下载 Microsoft WebView2 离线安装器。`npm run build:win:offline` 作为旧命令的兼容别名继续保留。发布前应在 Windows 真机验证标准版和兼容版的安装、覆盖安装、卸载及重启恢复。
 
 ## GitHub Actions
 
@@ -196,8 +196,8 @@ npm run build:win:offline
 
 - macOS Intel x64 DMG
 - macOS Apple Silicon ARM64 DMG
-- Windows x64 联网安装包
-- Windows x64 WebView2 离线安装包
+- Windows x64 标准安装包（推荐，文件名不带额外版本后缀）
+- Windows x64 内置 WebView2 兼容安装包（`with-webview2`）
 
 在 GitHub 仓库的 Actions 页面中手动运行工作流时，构建结果会作为临时产物保存 14 天。推送以 `v` 开头的版本标签时，工作流还会创建同名 GitHub 发布版本，并上传全部安装包。
 

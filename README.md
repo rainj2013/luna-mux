@@ -103,7 +103,7 @@ Session、Pane 和 Browser Resource 会持久化；Terminal Runtime、Agent 进�
 | Codex Hook、Luna MCP、Browser MCP | 本地及真实 SSH 路径已验证 | PowerShell 路径已验证；WSL 待验收 |
 | Claude Code Adapter | 基础启动与注入已验证 | 等价端到端场景待补齐 |
 | Agent 通知 | 主题化应用内通知，可点击定位 Pane | 原生系统通知，待继续实机回归 |
-| 安装包 | 未签名 DMG | 未签名 NSIS 在线/离线安装包 |
+| 安装包 | 未签名 DMG | 未签名 NSIS 标准版/内置 WebView2 兼容版 |
 
 长期进度、验收证据和未完成项见 [开发进度](docs/DEVELOPMENT_PROGRESS.md) 与 [开发任务](docs/DEVELOPMENT_TASKS.md)。
 
@@ -141,10 +141,10 @@ npm run web:build
 npm run build:mac
 # 或在 Windows 上
 npm run build:win
-npm run build:win:offline
+npm run build:win:webview2
 ```
 
-GitHub Actions 可手动构建 macOS Intel、macOS Apple Silicon、Windows 在线和 Windows 离线安装包。推送 `v*` 标签时会创建 GitHub Release。当前构建使用 ad-hoc 或无签名方式，不需要付费开发者身份，但首次运行可能触发 macOS“隐私与安全性”确认或 Windows SmartScreen。
+GitHub Actions 可手动构建 macOS Intel、macOS Apple Silicon、Windows 标准版和内置 WebView2 兼容版。Windows 10/11 通常已经具备 WebView2，应优先下载体积更小的标准版；只有系统缺少 WebView2 且安装时无法联网时，才需要兼容版。推送 `v*` 标签时会创建 GitHub Release。当前构建使用 ad-hoc 或无签名方式，不需要付费开发者身份，但首次运行可能触发 macOS“隐私与安全性”确认或 Windows SmartScreen。
 
 ## 数据与安全
 

@@ -79,10 +79,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - variant: online
+          - variant: standard
             script: build:win
-          - variant: offline
-            script: build:win:offline
+            output_name: Luna-Mux_windows-x64-setup.exe
+          - variant: with-webview2
+            script: build:win:webview2
+            output_name: Luna-Mux_windows-x64-with-webview2-setup.exe
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -115,7 +117,7 @@ jobs:
             throw "Expected one NSIS installer, found $($files.Count)"
           }
           New-Item -ItemType Directory -Force "release-assets" | Out-Null
-          Copy-Item $files[0].FullName "release-assets/Luna-Mux_windows-x64-${{ matrix.variant }}-setup.exe"
+          Copy-Item $files[0].FullName "release-assets/${{ matrix.output_name }}"
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v7

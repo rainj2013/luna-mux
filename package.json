@@ -9,6 +9,7 @@
     "build": "tauri build",
     "build:mac": "tauri build --bundles dmg",
     "build:win": "tauri build --bundles nsis",
+    "build:win:webview2": "tauri build --bundles nsis --config app/native/tauri.windows-offline.conf.json",
     "build:win:offline": "tauri build --bundles nsis --config app/native/tauri.windows-offline.conf.json",
     "web:dev": "vite --host 127.0.0.1",
     "web:build": "vite build",

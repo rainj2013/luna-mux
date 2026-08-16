@@ -103,7 +103,7 @@ Sessions, Panes, and Browser Resources are persistent. Terminal Runtimes, agent 
 | Codex Hook, Luna MCP, Browser MCP | Local and real SSH paths validated | PowerShell path validated; WSL pending |
 | Claude Code Adapter | Basic launch and injection validated | Equivalent end-to-end scenarios pending |
 | Agent notifications | Theme-aware in-app notification with Pane routing | Native system notification; continued real-device regression pending |
-| Packages | Unsigned DMG | Unsigned online/offline NSIS installers |
+| Packages | Unsigned DMG | Unsigned standard/bundled-WebView2 NSIS installers |
 
 See [development progress](docs/DEVELOPMENT_PROGRESS.md) and the [long-term task list](docs/DEVELOPMENT_TASKS.md) for validation evidence and unfinished work.
 
@@ -141,10 +141,10 @@ Build desktop packages on their target platform:
 npm run build:mac
 # or on Windows
 npm run build:win
-npm run build:win:offline
+npm run build:win:webview2
 ```
 
-GitHub Actions can build macOS Intel, macOS Apple Silicon, Windows online, and Windows offline packages on demand. Pushing a `v*` tag publishes a GitHub Release. Current builds use ad-hoc or no signing, so no paid developer identity is required, but first launch may trigger a macOS Privacy & Security confirmation or Windows SmartScreen.
+GitHub Actions can build macOS Intel, macOS Apple Silicon, a standard Windows package, and a compatibility package with WebView2 bundled. Windows 10/11 normally already includes WebView2, so most users should download the smaller standard package. The bundled-WebView2 package is intended for machines that lack WebView2 and cannot download it during installation. Pushing a `v*` tag publishes a GitHub Release. Current builds use ad-hoc or no signing, so no paid developer identity is required, but first launch may trigger a macOS Privacy & Security confirmation or Windows SmartScreen.
 
 ## Data and security
 
