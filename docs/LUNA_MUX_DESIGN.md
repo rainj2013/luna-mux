@@ -15,22 +15,21 @@ Luna Mux 是面向 Coding Agent 的本地与远程终端工作台，形态接近
 - 以项目为中心、可持久化递归分屏的 Mux Session；
 - Coding Agent 状态、通知、应用控制和受控的跨 Pane/跨 Agent 协作；
 - Session 级受管 Chrome 资源及原生 `agent-browser` 自动化；
-- 从 Luna Remote 复用的 SSH、SFTP、文件传输、端口转发、凭据和终端能力。
+- 融合连接管理、SSH、SFTP、文件传输、端口转发、凭据和终端能力，并与 Luna Remote 保持相近的 UI 与使用体验。
 
 首版不会在 Luna Mux 退出后继续运行 Agent。终端后端保留未来接入守护进程的边界，但当前不实现后台 Session。
 
 ## 2. 仓库和产品边界
 
-Luna Mux 与 Luna Remote 是独立应用和独立仓库。
+Luna Mux 与 Luna Remote 是独立应用和独立仓库。两者不通过 Git 共同历史、上游 Remote、分支合并或提交同步来维护关系。
 
-- Luna Remote 是成熟实现的来源之一，不是 Luna Mux 的产品设计模板。
-- Luna Mux 保留 Luna Remote 的 Git 历史作为初始祖先。
-- `origin` 指向 Luna Mux，`upstream` 只用于拉取 Luna Remote。
-- 上游更新逐提交审阅和选择性移植，禁止整体合并主分支。
+- Luna Remote 是功能行为和交互体验的参考来源之一。
+- Luna Mux 融合连接管理、SSH、SFTP、隧道、传输、凭据处理和终端等能力，并保持相近的 UI 与使用习惯。
+- 需要参考 Luna Remote 的功能时，由 AI 阅读其当前代码和行为，再按照 Luna Mux 的领域模型与安全边界重新实现，不直接搬运提交。
 - 应用标识、数据库、凭据、设置、浏览器配置目录、构建和发布完全隔离。
 - Luna Remote 数据不会自动迁移；只有用户明确确认后，导入向导才读取稳定快照。
 
-复用以能力为单位。适合本产品的 SSH、SFTP、隧道、传输、凭据处理、终端渲染和平台修复可以保留；导航、标签语义、状态归属、数据关系和交互流程不承担兼容义务。
+功能融合以实际需求为单位。导航、状态归属、数据关系和交互流程以 Luna Mux 的 Session、Pane、Runtime、Agent 与 Browser Resource 模型为准；相同能力可以保留熟悉的界面和操作方式。
 
 通用代码逐步下沉到仓库内核心模块。产品功能可以依赖核心模块，核心模块不得反向依赖 Mux Session、Agent、Browser 或品牌代码。领域模型冲突时，以 Luna Mux 模型为准。
 
@@ -231,13 +230,13 @@ Windows 和 macOS 都是首版平台。里程碑只有在适用的双平台验�
 
 ## 6. 交付顺序
 
-1. 建立独立仓库、产品元数据、隔离身份、导入边界和上游流程。
+1. 建立独立仓库、产品元数据、隔离身份、数据导入边界和功能参考边界。
 2. 抽取 `TerminalBackend`，移除 `TerminalPane` 中的 SSH 假设。
 3. 加入 Windows PowerShell/WSL 与 macOS zsh/bash PTY，并统一终端行为。
 4. 用项目级 Mux Session 和持久递归分屏替换单终端标签模型。
 5. 加入 Agent Adapter、状态面板、事件转发和通知。
 6. 实现 Luna Control Service，再通过该边界提供 Luna MCP 和跨 Agent 操作。
 7. 加入 Session 级受管 Chrome、原生浏览器 MCP 和远程服务转发。
-8. 持续选择性移植上游修复并执行跨平台回归。
+8. 按需参考相关产品能力，由 AI 重新实现并执行跨平台回归。
 
 可执行任务和长期状态分别维护在 [DEVELOPMENT_TASKS.md](DEVELOPMENT_TASKS.md) 与 [DEVELOPMENT_PROGRESS.md](DEVELOPMENT_PROGRESS.md)。

@@ -9,14 +9,13 @@
 - 当前任务：M4.4、M5.1、M6.8——收尾真实 SSH 的 Hook/Luna MCP，以及 WSL 和 Claude Code 的 Browser MCP 端到端验收；远程 SSH Agent 浏览器操作已经通过。
 - 任务进度：65 项中 53 项完成（81.54%），8 项进行中，4 项待办。
 - 总体状态：Session/Pane 是产品外壳，每个 Pane 都是普通终端。`AgentAdapter` 注册表负责 Codex 与 Claude Code 的提供方差异；检测、面板、Luna MCP、Browser Resource、权限和审计保持共享。外部 Chrome 归 Session 所有，分发版浏览器 MCP 不依赖 Node 或 `npx`。
-- Luna Remote 基线提交：`7ccc61f0bb1ea7ffb74556c1fe207e802bfbfd2f`
 - 当前工作目录：`/Users/yangyujian/code/luna-mux`
 
 ## 已完成
 
 ### 产品、终端和工作区
 
-- 建立独立产品身份、数据库、凭据命名空间、图标、导入边界和只读上游同步流程。
+- 建立独立产品身份、仓库历史、数据库、凭据命名空间、图标和导入边界；Luna Remote 仅作为功能与体验参考，不建立 Git 同步关系。
 - 抽取统一 `TerminalBackend`，本地 PTY 与 SSH 共用 Runtime 契约、输出游标、流控和 React `TerminalPane`。
 - Windows PowerShell 7、本地 PTY、WSL 发现逻辑和 macOS zsh/bash 路径已进入组合后端；进程关闭和应用退出具备清理边界。
 - 建立持久化 `MuxSession`、`MuxPane`、递归 `MuxSplitNode` 和 SQLite 迁移；启动时恢复布局但不自动启动进程。
@@ -118,6 +117,7 @@
 | 日期 | 决策 |
 | --- | --- |
 | 2026-08-12 | Luna Mux 是独立产品和仓库，不是 Luna Remote 功能分支。 |
+| 2026-08-16 | Luna Mux 不维护 Luna Remote 的 Git 历史、上游 Remote 或提交同步；需要融合的功能由 AI 参考现有代码并按 Luna Mux 模型重新实现，同时保持相近的 UI 与使用体验。 |
 | 2026-08-12 | Windows 与 macOS 都是首版平台；签名与分发治理暂不纳入当前范围。 |
 | 2026-08-12 | 本地和 SSH 终端共用 `TerminalPane`，差异只通过能力表达。 |
 | 2026-08-12 | Agent 随应用退出；`TerminalBackend` 保留未来守护进程扩展点。 |
