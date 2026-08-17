@@ -1,4 +1,5 @@
 mod agent_adapters;
+mod agent_command;
 mod agent_hooks;
 mod agent_profiles;
 mod ai;

@@ -100,16 +100,26 @@ fn check_executable() -> AgentCheck {
 
 fn check_local_agents() -> AgentCheck {
     let mut available = Vec::new();
-    for command in ["codex", "claude"] {
-        if let Some(path) = find_command(command) {
-            available.push(format!("{command}={path}"));
+    let mut warnings = Vec::new();
+    let targets = crate::agent_command::default_local_target_ids();
+    for target_id in &targets {
+        let discovery = crate::agent_command::discover(&["codex", "claude"], target_id);
+        for (command, path) in discovery.paths {
+            available.push(format!("{command}[{target_id}]={}", path.to_string_lossy()));
+        }
+        if let Some(warning) = discovery.warning {
+            warnings.push(format!("{target_id}: {warning}"));
         }
     }
     if available.is_empty() {
         AgentCheck {
             name: "local_agents".into(),
             status: "warn".into(),
-            detail: "no agent executables found".into(),
+            detail: if warnings.is_empty() {
+                "no agent executables found in local terminal environments".into()
+            } else {
+                format!("no agent executables found; {}", warnings.join(" | "))
+            },
         }
     } else {
         AgentCheck {
@@ -404,44 +414,6 @@ fn decode_wsl_stdout(bytes: &[u8]) -> String {
         }
     }
     String::from_utf16_lossy(&units)
-}
-
-fn find_command(command: &str) -> Option<String> {
-    #[cfg(windows)]
-    {
-        let candidates: &[&str] = match command {
-            "codex" => &["codex.cmd", "codex.exe"],
-            "claude" => &["claude.cmd", "claude.exe"],
-            _ => &[],
-        };
-        for candidate in candidates {
-            let output = Command::new("where.exe").arg(candidate).output().ok()?;
-            if output.status.success() {
-                let path = String::from_utf8_lossy(&output.stdout)
-                    .lines()
-                    .map(str::trim)
-                    .find(|line| !line.is_empty())?
-                    .to_string();
-                return Some(path);
-            }
-        }
-        None
-    }
-    #[cfg(not(windows))]
-    {
-        let output = Command::new("sh")
-            .args(["-lc", &format!("command -v {}", crate::shell_quoting::posix_shell_quote(command))])
-            .output()
-            .ok()?;
-        output.status.success().then(|| {
-            String::from_utf8_lossy(&output.stdout)
-                .lines()
-                .map(str::trim)
-                .find(|line| !line.is_empty())
-                .unwrap_or_default()
-                .to_string()
-        })
-    }
 }
 
 #[cfg(test)]

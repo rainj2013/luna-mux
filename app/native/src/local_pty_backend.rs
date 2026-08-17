@@ -105,16 +105,14 @@ impl InProcessLocalPtyTerminalBackend {
                     .or_else(|| request.launch_environment.get("LUNA_MUX_CODEX_BOOTSTRAP"))
                     .filter(|value| !value.trim().is_empty())
                 {
-                    let encoding = if request.target_id == POWERSHELL5_TARGET {
-                        "$OutputEncoding = [Console]::OutputEncoding = [Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false); & chcp.com 65001 | Out-Null; "
-                    } else {
-                        ""
-                    };
                     // Profiles are loaded explicitly so the bootstrap runs after fnm and
                     // other profile-managed PATH changes, while still preserving the
                     // standard PowerShell profile order.
                     let script = format!(
-                        "{encoding}$lunaMuxProfilePaths = @($PROFILE.AllUsersAllHosts, $PROFILE.AllUsersCurrentHost, $PROFILE.CurrentUserAllHosts, $PROFILE.CurrentUserCurrentHost); foreach ($lunaMuxProfilePath in $lunaMuxProfilePaths) {{ if (Test-Path -LiteralPath $lunaMuxProfilePath) {{ . $lunaMuxProfilePath }} }}; Remove-Variable lunaMuxProfilePaths,lunaMuxProfilePath -ErrorAction SilentlyContinue; . '{}'",
+                        "{}; . '{}'",
+                        crate::agent_command::powershell_profile_load_script(
+                            request.target_id == POWERSHELL5_TARGET,
+                        ),
                         bootstrap.replace('\'', "''")
                     );
                     command.args(["-NoProfile", "-Command", &script]);
@@ -527,6 +525,7 @@ impl TerminalBackend for InProcessLocalPtyTerminalBackend {
             && let Some(context) = request.context.as_ref()
             && let Some(shim_dir) = crate::agent_adapters::install_runtime_shims(
                 context,
+                &request.target_id,
                 request
                     .launch_environment
                     .get("LUNA_MUX_HOOK_ENDPOINT")
@@ -574,6 +573,28 @@ impl TerminalBackend for InProcessLocalPtyTerminalBackend {
                         user_zdotdir.to_string_lossy().into_owned(),
                     );
                 }
+            }
+            #[cfg(target_os = "macos")]
+            if request.target_id == MACOS_SHELL_TARGET
+                && macos_supported_shell().is_some_and(|shell| {
+                    std::path::Path::new(&shell)
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        == Some("bash")
+                })
+            {
+                let bootstrap = format!(
+                    ". {}",
+                    crate::shell_quoting::posix_shell_quote(
+                        &shim_dir.join("bootstrap.sh").to_string_lossy()
+                    )
+                );
+                request.command = Some(match request.command.take() {
+                    Some(command) if !command.trim().is_empty() => {
+                        format!("{bootstrap}; {command}")
+                    }
+                    _ => bootstrap,
+                });
             }
         }
         let mut command = Self::command_for_request(&request)?;

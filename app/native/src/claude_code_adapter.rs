@@ -1,7 +1,6 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    process::Command,
 };
 
 use serde_json::{Map, Value, json};
@@ -30,9 +29,16 @@ pub fn install(
     context: &TerminalRuntimeContext,
     hook_endpoint: Option<&str>,
     mcp_endpoint: Option<&str>,
+    resolved_command: Option<&Path>,
 ) -> Result<Option<PathBuf>, String> {
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
-    install_with_executable(context, hook_endpoint, mcp_endpoint, &executable)
+    install_with_executable(
+        context,
+        hook_endpoint,
+        mcp_endpoint,
+        &executable,
+        resolved_command,
+    )
 }
 
 fn install_with_executable(
@@ -40,8 +46,9 @@ fn install_with_executable(
     hook_endpoint: Option<&str>,
     mcp_endpoint: Option<&str>,
     executable: &Path,
+    resolved_command: Option<&Path>,
 ) -> Result<Option<PathBuf>, String> {
-    let Some(real) = resolve_claude() else {
+    let Some(real) = resolved_command.map(Path::to_path_buf) else {
         return Ok(None);
     };
     let root = std::env::temp_dir()
@@ -69,6 +76,11 @@ fn install_with_executable(
     {
         let forwarder = executable.to_string_lossy().replace('\'', "''");
         let quote_fn = crate::codex_shim::powershell_native_arg_quote_script();
+        let process_invocation = crate::codex_shim::powershell_command_invocation(
+            &real,
+            "lunaMuxClaudeArguments",
+            "lunaMuxClaudeExitCode",
+        );
         let ps = format!(
             "{quote_fn}$settings = '{}'\r\n\
 $mcpWithoutBrowser = '{}'\r\n\
@@ -89,14 +101,7 @@ try {{\r\n\
   foreach ($value in $args) {{\r\n\
     $lunaMuxClaudeArguments += $value\r\n\
   }}\r\n\
-  $lunaMuxCommandLine = (($lunaMuxClaudeArguments | ForEach-Object {{ ConvertTo-LunaMuxNativeArg $_ }}) -join ' ')\r\n\
-  $psi = New-Object System.Diagnostics.ProcessStartInfo\r\n\
-  $psi.FileName = '{}'\r\n\
-  $psi.UseShellExecute = $false\r\n\
-  $psi.Arguments = $lunaMuxCommandLine\r\n\
-  $process = [System.Diagnostics.Process]::Start($psi)\r\n\
-  $process.WaitForExit()\r\n\
-  $lunaMuxClaudeExitCode = $process.ExitCode\r\n\
+{process_invocation}\
 }} finally {{\r\n\
   '{{\"hook_event_name\":\"AgentProcessExit\",\"agent_adapter\":\"claude-code\"}}' | & '{forwarder}' hook | Out-Null\r\n\
   if ($null -eq $lunaMuxPreviousProcessId) {{ Remove-Item Env:LUNA_MUX_AGENT_PROCESS_ID -ErrorAction SilentlyContinue }} else {{ $env:LUNA_MUX_AGENT_PROCESS_ID = $lunaMuxPreviousProcessId }}\r\n\
@@ -107,7 +112,6 @@ $global:LASTEXITCODE = $lunaMuxClaudeExitCode\r\n",
             powershell_literal(&mcp_without_browser),
             powershell_literal(&mcp_with_browser),
             powershell_literal(LUNA_MUX_BROWSER_INSTRUCTIONS),
-            real.to_string_lossy().replace('\'', "''"),
         );
         fs::write(root.join("claude.ps1"), ps).map_err(|error| error.to_string())?;
         let shim = root.join("claude.ps1");
@@ -381,39 +385,6 @@ fn mcp_config_json(
     serde_json::to_string(&json!({ "mcpServers": servers })).map_err(|error| error.to_string())
 }
 
-fn resolve_claude() -> Option<PathBuf> {
-    #[cfg(windows)]
-    {
-        for command in ["claude.exe", "claude.cmd"] {
-            let output = Command::new("where.exe").arg(command).output().ok()?;
-            if output.status.success()
-                && let Some(path) = first_existing_path(&output.stdout)
-            {
-                return Some(path);
-            }
-        }
-        None
-    }
-    #[cfg(not(windows))]
-    {
-        let output = Command::new("which").arg("claude").output().ok()?;
-        output
-            .status
-            .success()
-            .then(|| first_existing_path(&output.stdout))
-            .flatten()
-    }
-}
-
-fn first_existing_path(output: &[u8]) -> Option<PathBuf> {
-    String::from_utf8_lossy(output)
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(PathBuf::from)
-        .find(|path| path.is_file())
-}
-
 #[cfg(windows)]
 fn append_powershell_bootstrap(root: &Path, contribution: &str) -> Result<(), String> {
     let path = root.join("bootstrap.ps1");
@@ -478,6 +449,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
     fn managed_command_uses_wsl_command_hooks_and_stdio_luna_mux() {
         let launch = ManagedAgentLaunch {
             profile: &crate::agent_profiles::AgentLaunchProfile {
