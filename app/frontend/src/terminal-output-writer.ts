@@ -64,7 +64,8 @@ export function createTerminalOutputWriter(term: Terminal): TerminalOutputWriter
 
   const privateBuffer = (): PrivateBuffer | undefined => internals._core?._bufferService?.buffer
   const synchronizedOutput = (): boolean => Boolean(internals._core?.coreService?.decPrivateModes?.synchronizedOutput)
-  const pinned = (): boolean => writeInProgress || settleTimer !== 0 || synchronizedOutput()
+  const interactive = (): boolean => performance.now() < interactiveUntil
+  const pinned = (): boolean => synchronizedOutput() || (!interactive() && (writeInProgress || settleTimer !== 0))
   const clampX = (value: number): number => Math.max(0, Math.min(term.cols - 1, value))
   const clampY = (value: number): number => Math.max(0, Math.min(term.rows - 1, value))
   const settleDelay = (): number => {
@@ -204,10 +205,9 @@ export function createTerminalOutputWriter(term: Terminal): TerminalOutputWriter
       writeInProgress = false
       if (!disposed) {
         const buffer = privateBuffer()
-        const interactive = performance.now() < interactiveUntil
         const safeTextAtCommittedColumn = !unsafeBatch && buffer?.x === committedX && !synchronizedOutput()
         const ordinaryText = !unsafeBatch && settleTimer === 0 && !synchronizedOutput()
-        if (interactive || safeTextAtCommittedColumn || ordinaryText) commitNow()
+        if (interactive() || safeTextAtCommittedColumn || ordinaryText) commitNow()
         else armSettle(settleDelay())
       }
       for (const write of writes) write.callback?.()

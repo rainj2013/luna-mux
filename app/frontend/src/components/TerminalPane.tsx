@@ -1,6 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import { Terminal, type IBufferLine } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
+import { SerializeAddon } from '@xterm/addon-serialize'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { ChevronDown, ChevronUp, ClipboardPaste, Copy, Palette, Play, Search, X } from 'lucide-react'
@@ -18,6 +19,16 @@ const terminalSelectionTheme = {
 }
 interface TerminalSearchMatch { row: number; col: number; length: number }
 interface PendingImePunctuation { text: string; createdAt: number; timer: number }
+interface TerminalSnapshot { runtimeId?: string; outputCursor: number; cols: number; rows: number; serialized: string }
+
+const terminalSnapshots = new Map<string, TerminalSnapshot>()
+const discardedTerminalSnapshots = new Set<string>()
+const mountedTerminalPanes = new Set<string>()
+
+export function discardTerminalSnapshot(paneId: string): void {
+  terminalSnapshots.delete(paneId)
+  if (mountedTerminalPanes.has(paneId)) discardedTerminalSnapshots.add(paneId)
+}
 
 const fullWidthPunctuationPattern = /^[\u00b7\u2014\u2018\u2019\u201c\u201d\u2026\u3000-\u303f\uff01-\uff0f\uff1a-\uff20\uff3b-\uff40\uff5b-\uff65\uffe5]+$/u
 
@@ -73,6 +84,8 @@ export interface TerminalPaneHandle {
 }
 
 interface TerminalPaneProps {
+  paneId: string
+  targetId: string
   runtimeId?: string
   connected: boolean
   visible: boolean
@@ -84,11 +97,12 @@ interface TerminalPaneProps {
     actionLabel: string
   }
   onAgentAction?: () => void
+  onRuntimeError?: (runtimeId: string, message: string) => void
   onStart?: () => void
   onOpenSettings?: () => void
 }
 
-export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function TerminalPane({ runtimeId, connected, visible, settings, backgroundImage, stoppedState, onAgentAction, onStart, onOpenSettings }, ref): React.JSX.Element {
+export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function TerminalPane({ paneId, targetId, runtimeId, connected, visible, settings, backgroundImage, stoppedState, onAgentAction, onRuntimeError, onStart, onOpenSettings }, ref): React.JSX.Element {
   const { t } = useI18n()
   const container = useRef<HTMLDivElement>(null)
   const terminal = useRef<Terminal | null>(null)
@@ -99,11 +113,18 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
   const webglAddon = useRef<WebglAddon | null>(null)
   const outputWriter = useRef<TerminalOutputWriter | null>(null)
   const runtimeIdRef = useRef(runtimeId)
+  const targetIdRef = useRef(targetId)
+  targetIdRef.current = targetId
+  const pasteClipboardRef = useRef<() => Promise<void>>(async () => undefined)
   const onAgentActionRef = useRef(onAgentAction)
   onAgentActionRef.current = onAgentAction
+  const onRuntimeErrorRef = useRef(onRuntimeError)
+  onRuntimeErrorRef.current = onRuntimeError
+  const reportedInputErrorRuntimeId = useRef('')
   const connectedRef = useRef(connected)
   const boundRuntimeId = useRef<string | undefined>(undefined)
   const outputCursor = useRef(0)
+  const renderedOutputCursor = useRef(0)
   const [started, setStarted] = useState(Boolean(runtimeId))
   const [searchOpen, setSearchOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -127,6 +148,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     if (boundRuntimeId.current) term.writeln(`\r\n\x1b[90m--- ${t('terminal.newRuntimeEstablished')} ---\x1b[0m\r\n`)
     boundRuntimeId.current = runtimeId
     outputCursor.current = 0
+    renderedOutputCursor.current = 0
     requestAnimationFrame(() => {
       fitAddon.current?.fit()
       void window.api.terminalRuntimes.resize(runtimeId, term.cols, term.rows)
@@ -151,17 +173,29 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
 
   useEffect(() => {
     if (!shouldRenderTerminal || !container.current || terminal.current) return
+    const snapshot = terminalSnapshots.get(paneId)
+    const restorableSnapshot = snapshot && snapshot.runtimeId === runtimeIdRef.current ? snapshot : undefined
     const term = new Terminal({
       cursorBlink: true, convertEol: false, allowTransparency: true, fontFamily: settings.fontFamily,
       fontSize: settings.fontSize, lineHeight: 1.25, scrollback: 5000,
+      ...(restorableSnapshot ? { cols: restorableSnapshot.cols, rows: restorableSnapshot.rows } : {}),
       theme: { background: rendererBackground, foreground: settings.foregroundColor, cursor: '#78d64b', ...terminalSelectionTheme }
     })
     const fit = new FitAddon()
+    const serialize = new SerializeAddon()
     fitAddon.current = fit
     term.loadAddon(fit)
+    term.loadAddon(serialize)
     term.loadAddon(new WebLinksAddon((_event, uri) => { void window.api.system.openExternal(uri).catch((error) => console.warn('Failed to open terminal link', error)) }))
+    if (restorableSnapshot) {
+      outputCursor.current = restorableSnapshot.outputCursor
+      renderedOutputCursor.current = restorableSnapshot.outputCursor
+      term.write(restorableSnapshot.serialized)
+      terminalSnapshots.delete(paneId)
+    }
     term.open(container.current)
     fit.fit()
+    mountedTerminalPanes.add(paneId)
     terminal.current = term
     const writer = createTerminalOutputWriter(term)
     outputWriter.current = writer
@@ -172,7 +206,15 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     let lastTerminalInput = { data: '', timestamp: 0 }
     const pendingImePunctuation = new Set<PendingImePunctuation>()
 
+    const reportRuntimeInputError = (failedRuntimeId: string, error: unknown): void => {
+      if (reportedInputErrorRuntimeId.current === failedRuntimeId) return
+      reportedInputErrorRuntimeId.current = failedRuntimeId
+      const message = error instanceof Error ? error.message : String(error)
+      onRuntimeErrorRef.current?.(failedRuntimeId, message)
+    }
+
     const writeTerminalInput = (data: string): void => {
+      writer.markInteractive(data === '\r' || data === '\n')
       lastTerminalInput = { data, timestamp: performance.now() }
       for (const pending of pendingImePunctuation) {
         if (!data.includes(pending.text)) continue
@@ -180,10 +222,29 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
         pendingImePunctuation.delete(pending)
         break
       }
-      if (connectedRef.current && runtimeIdRef.current) {
-        void window.api.terminalRuntimes.write(runtimeIdRef.current, data)
+      const activeRuntimeId = runtimeIdRef.current
+      if (connectedRef.current && activeRuntimeId) {
+        void window.api.terminalRuntimes.write(activeRuntimeId, data).catch((error) => reportRuntimeInputError(activeRuntimeId, error))
       }
     }
+
+    const pasteClipboard = async (): Promise<void> => {
+      try {
+        const content = await window.api.system.readClipboard()
+        if (disposed) return
+        writer.markInteractive()
+        if (content.type === 'text') {
+          term.paste(content.text)
+        } else if (content.type === 'image' && targetIdRef.current.startsWith('local:')) {
+          writeTerminalInput('\x16')
+        }
+      } catch (error) {
+        console.warn('Failed to paste into terminal', error)
+      } finally {
+        if (!disposed) term.focus()
+      }
+    }
+    pasteClipboardRef.current = pasteClipboard
 
     term.attachCustomKeyEventHandler((event) => {
       const commandKey = window.api.platform === 'darwin' ? event.metaKey : event.ctrlKey
@@ -202,11 +263,10 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
       if (commandKey && event.key.toLowerCase() === 'v' && event.type === 'keydown') {
         event.preventDefault()
         event.stopPropagation()
-        void window.api.system.readClipboard().then((text) => { writer.markInteractive(); term.paste(text) }).catch((error) => console.warn('Failed to paste into terminal', error))
+        void pasteClipboard()
         return false
       }
       if (event.type === 'keydown' && (event.key === 'Enter' || event.key === 'Escape' || (event.ctrlKey && event.key.toLowerCase() === 'c'))) onAgentActionRef.current?.()
-      if (event.type === 'keydown') writer.markInteractive(event.key === 'Enter')
       return true
     })
     const input = term.onData(writeTerminalInput)
@@ -236,7 +296,8 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
           pendingImePunctuation.delete(pending)
           if (disposed || !connectedRef.current || !runtimeIdRef.current) return
           writer.markInteractive()
-          void window.api.terminalRuntimes.write(runtimeIdRef.current, text)
+          const activeRuntimeId = runtimeIdRef.current
+          if (activeRuntimeId) void window.api.terminalRuntimes.write(activeRuntimeId, text).catch((error) => reportRuntimeInputError(activeRuntimeId, error))
         }, 32)
       }
       pendingImePunctuation.add(pending)
@@ -263,33 +324,54 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     textarea?.addEventListener('input', recoverDroppedImePunctuationFromInput)
     textarea?.addEventListener('compositionend', recoverDroppedImePunctuationFromComposition, true)
     const resize = term.onResize(({ cols, rows }) => { if (runtimeIdRef.current) void window.api.terminalRuntimes.resize(runtimeIdRef.current, cols, rows) })
-    const stop = window.api.onTerminalRuntimeEvent((event: TerminalRuntimeEvent) => {
-      if (event.type !== 'output' || event.payload.runtimeId !== runtimeIdRef.current) return
-      if (event.payload.endCursor <= outputCursor.current) return
-      const length = event.payload.data.length
-      outputCursor.current = event.payload.endCursor
+    let catchingUp = true
+    const queuedOutput: Array<Extract<TerminalRuntimeEvent, { type: 'output' }>['payload']> = []
+    const writeOutput = (payload: Extract<TerminalRuntimeEvent, { type: 'output' }>['payload']): void => {
+      if (payload.endCursor <= outputCursor.current) return
+      const length = payload.data.length
+      outputCursor.current = payload.endCursor
       pendingOutput += length
       if (!paused && pendingOutput >= terminalHighWaterMark) {
         paused = true
-        void window.api.terminalRuntimes.flow(event.payload.runtimeId, true)
+        void window.api.terminalRuntimes.flow(payload.runtimeId, true)
       }
-      writer.write(event.payload.data, () => {
+      writer.write(payload.data, () => {
+        if (runtimeIdRef.current === payload.runtimeId) renderedOutputCursor.current = Math.max(renderedOutputCursor.current, payload.endCursor)
         pendingOutput = Math.max(0, pendingOutput - length)
         if (paused && pendingOutput <= terminalLowWaterMark && runtimeIdRef.current) {
           paused = false
           void window.api.terminalRuntimes.flow(runtimeIdRef.current, false)
         }
       })
+    }
+    const stop = window.api.onTerminalRuntimeEvent((event: TerminalRuntimeEvent) => {
+      if (event.type !== 'output' || event.payload.runtimeId !== runtimeIdRef.current) return
+      if (catchingUp) queuedOutput.push(event.payload)
+      else writeOutput(event.payload)
     })
-    const catchUp = runtimeIdRef.current
-      ? window.api.terminalRuntimes.readOutput(runtimeIdRef.current, outputCursor.current, terminalHighWaterMark)
-          .then((result) => {
-            if (disposed || result.runtimeId !== runtimeIdRef.current || !result.data || result.nextCursor <= outputCursor.current) return
+    const catchUp = (async (): Promise<void> => {
+      const catchUpRuntimeId = runtimeIdRef.current
+      try {
+        if (catchUpRuntimeId) {
+          const result = await window.api.terminalRuntimes.readOutput(catchUpRuntimeId, outputCursor.current, terminalHighWaterMark)
+          if (!disposed && result.runtimeId === runtimeIdRef.current && result.data && result.nextCursor > outputCursor.current) {
             outputCursor.current = result.nextCursor
-            writer.write(result.data)
-          })
-          .catch(() => undefined)
-      : Promise.resolve()
+            writer.write(result.data, () => {
+              if (runtimeIdRef.current === result.runtimeId) renderedOutputCursor.current = Math.max(renderedOutputCursor.current, result.nextCursor)
+            })
+          }
+        }
+      } catch {
+        // Live events below still keep the terminal current if the bounded replay is unavailable.
+      } finally {
+        catchingUp = false
+        if (!disposed) {
+          queuedOutput.sort((left, right) => left.startCursor - right.startCursor)
+          for (const output of queuedOutput) writeOutput(output)
+        }
+        queuedOutput.length = 0
+      }
+    })()
     const observer = new ResizeObserver(() => {
       if (container.current?.offsetParent) requestAnimationFrame(() => {
         fit.fit()
@@ -297,9 +379,25 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
       })
     })
     observer.observe(container.current)
-    term.focus()
+    if (visible) term.focus()
     return () => {
       disposed = true
+      if (pasteClipboardRef.current === pasteClipboard) pasteClipboardRef.current = async () => undefined
+      mountedTerminalPanes.delete(paneId)
+      if (discardedTerminalSnapshots.delete(paneId)) terminalSnapshots.delete(paneId)
+      else {
+        try {
+          terminalSnapshots.set(paneId, {
+            runtimeId: runtimeIdRef.current,
+            outputCursor: renderedOutputCursor.current,
+            cols: term.cols,
+            rows: term.rows,
+            serialized: serialize.serialize({ scrollback: 5000 })
+          })
+        } catch {
+          terminalSnapshots.delete(paneId)
+        }
+      }
       if (paused && runtimeIdRef.current) void window.api.terminalRuntimes.flow(runtimeIdRef.current, false)
       for (const pending of pendingImePunctuation) window.clearTimeout(pending.timer)
       pendingImePunctuation.clear()
@@ -310,7 +408,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
       void catchUp
       webglAddon.current = null; outputWriter.current = null; terminal.current = null; fitAddon.current = null
     }
-  }, [shouldRenderTerminal])
+  }, [paneId, shouldRenderTerminal])
 
   useEffect(() => {
     const term = terminal.current
@@ -325,11 +423,13 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     const term = terminal.current
     const element = container.current
     if (!term || !element) return
-    if (!visible) {
+    const useWebgl = visible && window.api.platform !== 'darwin'
+    if (!useWebgl) {
       webglAddon.current?.dispose()
       webglAddon.current = null
       element.dataset.renderer = 'dom'
       outputWriter.current?.wrapRenderer()
+      if (visible) requestAnimationFrame(() => { fitAddon.current?.fit(); term.focus() })
       return
     }
     if (!webglAddon.current) {
@@ -435,7 +535,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     <div className="terminal" ref={container} />
     {contextMenu && <div className="sidebar-context-menu terminal-context-menu" role="menu" style={{ left: contextMenu.x, top: contextMenu.y }} onPointerDown={(event) => event.stopPropagation()}>
       <button role="menuitem" disabled={!contextMenu.hasSelection} onClick={() => { const text = terminal.current?.getSelection(); setContextMenu(null); if (text) void window.api.system.writeClipboard(text).catch((error) => console.warn('Failed to copy terminal selection', error)) }}><Copy size={15} />{t('common.copy')}</button>
-      <button role="menuitem" onClick={() => { setContextMenu(null); void window.api.system.readClipboard().then((text) => { outputWriter.current?.markInteractive(); terminal.current?.paste(text); terminal.current?.focus() }).catch((error) => console.warn('Failed to paste into terminal', error)) }}><ClipboardPaste size={15} />{t('terminal.paste')}</button>
+      <button role="menuitem" onClick={() => { setContextMenu(null); void pasteClipboardRef.current() }}><ClipboardPaste size={15} />{t('terminal.paste')}</button>
       <button role="menuitem" onClick={() => { setContextMenu(null); setSearchOpen(true) }}><Search size={15} />{t('terminal.search')}</button>
       <div className="context-menu-separator" />
       <button role="menuitem" onClick={() => { setContextMenu(null); onOpenSettings?.() }}><Palette size={15} />{t('terminal.appearanceSettings')}</button>

@@ -624,11 +624,16 @@ export interface DoctorReport {
   managedAgents?: DoctorManagedAgent[]
 }
 
+export type ClipboardContent =
+  | { type: 'text'; text: string }
+  | { type: 'image' }
+  | { type: 'empty' }
+
 export interface AppApi {
   platform: Platform
   system: {
     openExternal(url: string): Promise<void>
-    readClipboard(): Promise<string>
+    readClipboard(): Promise<ClipboardContent>
     writeClipboard(text: string): Promise<void>
     minimizeWindow(): Promise<void>
     toggleMaximizeWindow(): Promise<void>
