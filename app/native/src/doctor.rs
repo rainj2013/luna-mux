@@ -3,7 +3,6 @@
     fs,
     net::{SocketAddr, TcpStream},
     path::Path,
-    process::Command,
     time::Duration,
 };
 
@@ -77,9 +76,8 @@ fn run(filter: Option<&str>, managed_agents: &[DoctorManagedAgent]) -> Vec<Agent
     checks.push(check_local_agents());
     checks.push(check_runtime_environment_files(filter, managed_agents));
     checks.push(check_managed_agents(filter, managed_agents));
-    if cfg!(windows) {
-        checks.push(check_wsl_distributions(filter));
-    }
+    #[cfg(windows)]
+    checks.push(check_wsl_distributions(filter));
     checks
 }
 
@@ -100,16 +98,26 @@ fn check_executable() -> AgentCheck {
 
 fn check_local_agents() -> AgentCheck {
     let mut available = Vec::new();
-    for command in ["codex", "claude"] {
-        if let Some(path) = find_command(command) {
-            available.push(format!("{command}={path}"));
+    let mut warnings = Vec::new();
+    let targets = crate::agent_command::default_local_target_ids();
+    for target_id in &targets {
+        let discovery = crate::agent_command::discover(&["codex", "claude"], target_id);
+        for (command, path) in discovery.paths {
+            available.push(format!("{command}[{target_id}]={}", path.to_string_lossy()));
+        }
+        if let Some(warning) = discovery.warning {
+            warnings.push(format!("{target_id}: {warning}"));
         }
     }
     if available.is_empty() {
         AgentCheck {
             name: "local_agents".into(),
             status: "warn".into(),
-            detail: "no agent executables found".into(),
+            detail: if warnings.is_empty() {
+                "no agent executables found in local terminal environments".into()
+            } else {
+                format!("no agent executables found; {}", warnings.join(" | "))
+            },
         }
     } else {
         AgentCheck {
@@ -352,8 +360,12 @@ fn endpoint_status(endpoint: &str) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
+#[cfg(windows)]
 fn check_wsl_distributions(filter: Option<&str>) -> AgentCheck {
-    let output = match Command::new("wsl.exe").args(["--list", "--quiet"]).output() {
+    let output = match crate::local_pty_backend::windows_no_window_command("wsl.exe")
+        .args(["--list", "--quiet"])
+        .output()
+    {
         Ok(output) => output,
         Err(error) => {
             return AgentCheck {
@@ -367,16 +379,10 @@ fn check_wsl_distributions(filter: Option<&str>) -> AgentCheck {
         return AgentCheck {
             name: "wsl_distributions".into(),
             status: "warn".into(),
-            detail: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            detail: wsl_failure_detail(&output.stderr, &output.stdout),
         };
     }
-    let raw = decode_wsl_stdout(&output.stdout);
-    let distributions = raw
-        .split('\0')
-        .map(|value| value.trim().replace('\r', ""))
-        .filter(|value| !value.is_empty())
-        .filter(|value| filter.is_none_or(|filter| value.contains(filter)))
-        .collect::<Vec<_>>();
+    let distributions = parse_wsl_distributions(&output.stdout, filter);
     if distributions.is_empty() {
         AgentCheck {
             name: "wsl_distributions".into(),
@@ -392,61 +398,64 @@ fn check_wsl_distributions(filter: Option<&str>) -> AgentCheck {
     }
 }
 
-fn decode_wsl_stdout(bytes: &[u8]) -> String {
-    let bytes = bytes
-        .strip_prefix(&[0xff, 0xfe])
-        .or_else(|| bytes.strip_prefix(&[0xfe, 0xff]))
-        .unwrap_or(bytes);
-    let mut units = Vec::with_capacity(bytes.len() / 2);
-    for chunk in bytes.chunks(2) {
-        if chunk.len() == 2 {
-            units.push(u16::from_le_bytes([chunk[0], chunk[1]]));
-        }
-    }
-    String::from_utf16_lossy(&units)
+#[cfg(windows)]
+fn parse_wsl_distributions(bytes: &[u8], filter: Option<&str>) -> Vec<String> {
+    crate::local_pty_backend::decode_windows_command_output(bytes)
+        .split(|character| matches!(character, '\r' | '\n' | '\0'))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .filter(|value| filter.is_none_or(|filter| value.contains(filter)))
+        .map(str::to_owned)
+        .collect()
 }
 
-fn find_command(command: &str) -> Option<String> {
-    #[cfg(windows)]
-    {
-        let candidates: &[&str] = match command {
-            "codex" => &["codex.cmd", "codex.exe"],
-            "claude" => &["claude.cmd", "claude.exe"],
-            _ => &[],
-        };
-        for candidate in candidates {
-            let output = Command::new("where.exe").arg(candidate).output().ok()?;
-            if output.status.success() {
-                let path = String::from_utf8_lossy(&output.stdout)
-                    .lines()
-                    .map(str::trim)
-                    .find(|line| !line.is_empty())?
-                    .to_string();
-                return Some(path);
-            }
-        }
-        None
+#[cfg(windows)]
+fn wsl_failure_detail(stderr: &[u8], stdout: &[u8]) -> String {
+    let stderr = crate::local_pty_backend::decode_windows_command_output(stderr);
+    let detail = stderr.trim();
+    if !detail.is_empty() {
+        return normalize_wsl_detail(detail);
     }
-    #[cfg(not(windows))]
-    {
-        let output = Command::new("sh")
-            .args(["-lc", &format!("command -v {}", crate::shell_quoting::posix_shell_quote(command))])
-            .output()
-            .ok()?;
-        output.status.success().then(|| {
-            String::from_utf8_lossy(&output.stdout)
-                .lines()
-                .map(str::trim)
-                .find(|line| !line.is_empty())
-                .unwrap_or_default()
-                .to_string()
-        })
-    }
+    let stdout = crate::local_pty_backend::decode_windows_command_output(stdout);
+    normalize_wsl_detail(stdout.trim())
+}
+
+#[cfg(windows)]
+fn normalize_wsl_detail(detail: &str) -> String {
+    detail
+        .lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    fn utf16le(value: &str) -> Vec<u8> {
+        value.encode_utf16().flat_map(u16::to_le_bytes).collect()
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn decodes_utf16_wsl_install_guidance() {
+        let message = "适用于 Linux 的 Windows 子系统未安装。请运行 wsl.exe --install\r\r\n有关详细信息";
+        assert_eq!(
+            wsl_failure_detail(&utf16le(message), &[]),
+            "适用于 Linux 的 Windows 子系统未安装。请运行 wsl.exe --install\n有关详细信息"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn parses_utf16_wsl_distributions_by_line() {
+        assert_eq!(
+            parse_wsl_distributions(&utf16le("Ubuntu\r\nDebian\r\n"), None),
+            ["Ubuntu", "Debian"]
+        );
+    }
 
     #[test]
     fn active_managed_agents_suppress_missing_env_file_warning() {

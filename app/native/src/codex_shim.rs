@@ -1,8 +1,9 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    process::Command,
 };
+#[cfg(test)]
+use std::process::Command;
 
 use crate::{luna_mcp::MCP_AUTHORIZATION_ENV, terminal_runtime_contract::TerminalRuntimeContext};
 use crate::shell_quoting::{executable_command_quote, shell_argument_quote};
@@ -47,17 +48,38 @@ Luna Mux browser resource contract:
 pub fn install(
     context: &TerminalRuntimeContext,
     mcp_endpoint: Option<&str>,
+    resolved_command: Option<&Path>,
 ) -> Result<Option<PathBuf>, String> {
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
-    install_with_executable(context, mcp_endpoint, &executable)
+    install_with_paths(context, mcp_endpoint, &executable, resolved_command)
 }
 
+#[cfg(test)]
 fn install_with_executable(
     context: &TerminalRuntimeContext,
     mcp_endpoint: Option<&str>,
     executable: &Path,
 ) -> Result<Option<PathBuf>, String> {
-    let Some(real) = resolve_codex() else {
+    let target_id = crate::agent_command::default_local_target_ids()
+        .into_iter()
+        .next()
+        .unwrap_or_default();
+    let discovery = crate::agent_command::discover(&["codex"], &target_id);
+    install_with_paths(
+        context,
+        mcp_endpoint,
+        executable,
+        discovery.paths.get("codex").map(PathBuf::as_path),
+    )
+}
+
+fn install_with_paths(
+    context: &TerminalRuntimeContext,
+    mcp_endpoint: Option<&str>,
+    executable: &Path,
+    resolved_command: Option<&Path>,
+) -> Result<Option<PathBuf>, String> {
+    let Some(real) = resolved_command.map(normalize_codex_executable) else {
         return Ok(None);
     };
     let root = std::env::temp_dir()
@@ -126,6 +148,11 @@ fn install_with_executable(
             .join(",");
         let forwarder = executable.to_string_lossy().replace('\'', "''");
         let quote_fn = powershell_native_arg_quote_script();
+        let process_invocation = powershell_command_invocation(
+            &real,
+            "lunaMuxCodexArguments",
+            "lunaMuxCodexExitCode",
+        );
         let ps = format!(
             "{quote_fn}$overrides = @({overrides})\r\n\
 $browserCdpPort = [Environment]::GetEnvironmentVariable('LUNA_MUX_BROWSER_CDP_PORT', 'Process')\r\n\
@@ -150,21 +177,13 @@ try {{\r\n\
   foreach ($value in $args) {{\r\n\
     $lunaMuxCodexArguments += $value\r\n\
   }}\r\n\
-  $lunaMuxCommandLine = (($lunaMuxCodexArguments | ForEach-Object {{ ConvertTo-LunaMuxNativeArg $_ }}) -join ' ')\r\n\
-  $psi = New-Object System.Diagnostics.ProcessStartInfo\r\n\
-  $psi.FileName = '{}'\r\n\
-  $psi.UseShellExecute = $false\r\n\
-  $psi.Arguments = $lunaMuxCommandLine\r\n\
-  $process = [System.Diagnostics.Process]::Start($psi)\r\n\
-  $process.WaitForExit()\r\n\
-  $lunaMuxCodexExitCode = $process.ExitCode\r\n\
+{process_invocation}\
 }} finally {{\r\n\
   '{{\"hook_event_name\":\"AgentProcessExit\"}}' | & '{forwarder}' hook | Out-Null\r\n\
   if ($null -eq $lunaMuxPreviousProcessId) {{ Remove-Item Env:LUNA_MUX_AGENT_PROCESS_ID -ErrorAction SilentlyContinue }} else {{ $env:LUNA_MUX_AGENT_PROCESS_ID = $lunaMuxPreviousProcessId }}\r\n\
   if ($null -eq $lunaMuxPreviousAdapter) {{ Remove-Item Env:LUNA_MUX_AGENT_ADAPTER -ErrorAction SilentlyContinue }} else {{ $env:LUNA_MUX_AGENT_ADAPTER = $lunaMuxPreviousAdapter }}\r\n\
 }}\r\n\
 $global:LASTEXITCODE = $lunaMuxCodexExitCode\r\n",
-            real.to_string_lossy().replace('\'', "''"),
         );
         fs::write(root.join("codex.ps1"), ps).map_err(|error| error.to_string())?;
         // PowerShell profiles (notably fnm) may rewrite PATH after the shell starts.
@@ -255,12 +274,20 @@ unset LUNA_MUX_USER_ZDOTDIR\n",
         source_user_file(".zlogin")
     );
     let mut bootstrap = String::new();
+    let mut posix_bootstrap = String::new();
     for name in ["codex", "claude"] {
         let shim = root.join(name);
         if shim.is_file() {
             bootstrap.push_str(&format!(
                 "unalias {name} 2>/dev/null\n\
 function {name} {{\n\
+  {} \"$@\"\n\
+}}\n",
+                shell_quote(&shim.to_string_lossy())
+            ));
+            posix_bootstrap.push_str(&format!(
+                "unalias {name} 2>/dev/null || true\n\
+{name}() {{\n\
   {} \"$@\"\n\
 }}\n",
                 shell_quote(&shim.to_string_lossy())
@@ -273,6 +300,7 @@ function {name} {{\n\
         (".zshrc", zshrc),
         (".zlogin", zlogin),
         ("bootstrap.zsh", bootstrap),
+        ("bootstrap.sh", posix_bootstrap),
     ] {
         fs::write(root.join(name), contents).map_err(|error| error.to_string())?;
     }
@@ -472,7 +500,7 @@ pub(crate) fn hook_executable_for_target(
     Ok(value)
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 pub(crate) fn powershell_native_arg_quote_script() -> String {
     r#"function ConvertTo-LunaMuxNativeArg {
   param([string]$Value)
@@ -492,39 +520,63 @@ pub(crate) fn powershell_native_arg_quote_script() -> String {
       $quoted += $ch
     }
   }
-  if ($pending -gt 0) { $quoted += ('\' * $pending) }
+  if ($pending -gt 0) { $quoted += ('\' * ($pending * 2)) }
   return $quoted + '"'
 }
 "#.replace('\n', "\r\n")
 }
 
-fn resolve_codex() -> Option<PathBuf> {
+#[cfg(any(windows, test))]
+pub(crate) fn powershell_command_invocation(
+    executable: &Path,
+    arguments_variable: &str,
+    exit_code_variable: &str,
+) -> String {
+    let executable = executable.to_string_lossy().replace('\'', "''");
+    let native = Path::new(executable.as_str())
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "exe" | "com"
+            )
+        });
+    if native {
+        format!(
+            "  $lunaMuxCommandLine = ((${arguments_variable} | ForEach-Object {{ ConvertTo-LunaMuxNativeArg $_ }}) -join ' ')\r\n\
+  $psi = New-Object System.Diagnostics.ProcessStartInfo\r\n\
+  $psi.FileName = '{executable}'\r\n\
+  $psi.UseShellExecute = $false\r\n\
+  $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden\r\n\
+  $psi.Arguments = $lunaMuxCommandLine\r\n\
+  $process = [System.Diagnostics.Process]::Start($psi)\r\n\
+  $process.WaitForExit()\r\n\
+  ${exit_code_variable} = $process.ExitCode\r\n"
+        )
+    } else {
+        format!(
+            "  & '{executable}' @{arguments_variable}\r\n\
+  ${exit_code_variable} = $LASTEXITCODE\r\n"
+        )
+    }
+}
+
+fn normalize_codex_executable(path: &Path) -> PathBuf {
     #[cfg(windows)]
     {
-        if let Ok(output) = Command::new("where.exe").arg("codex.exe").output()
-            && output.status.success()
-            && let Some(path) = first_existing_path(&output.stdout)
+        if path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("cmd"))
         {
-            return Some(path);
-        }
-
-        let output = Command::new("where.exe").arg("codex.cmd").output().ok()?;
-        if !output.status.success() {
-            return None;
-        }
-        let (package, target) = if cfg!(target_arch = "aarch64") {
-            ("codex-win32-arm64", "aarch64-pc-windows-msvc")
-        } else {
-            ("codex-win32-x64", "x86_64-pc-windows-msvc")
-        };
-        return String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .filter_map(|line| {
-                let launcher = canonicalize_windows_path(Path::new(line));
-                let bin = launcher.parent()?;
-                [
+            let (package, target) = if cfg!(target_arch = "aarch64") {
+                ("codex-win32-arm64", "aarch64-pc-windows-msvc")
+            } else {
+                ("codex-win32-x64", "x86_64-pc-windows-msvc")
+            };
+            let launcher = canonicalize_windows_path(path);
+            if let Some(bin) = launcher.parent()
+                && let Some(native) = [
                     bin.join("node_modules")
                         .join("@openai")
                         .join("codex")
@@ -545,26 +597,23 @@ fn resolve_codex() -> Option<PathBuf> {
                 ]
                 .into_iter()
                 .find(|candidate| candidate.is_file())
-            })
-            .next();
-    }
-    #[cfg(not(windows))]
-    {
-        let output = Command::new("which").arg("codex").output().ok()?;
-        if !output.status.success() {
-            return None;
+            {
+                return native;
+            }
         }
-        first_existing_path(&output.stdout)
     }
+    path.to_path_buf()
 }
 
-fn first_existing_path(output: &[u8]) -> Option<PathBuf> {
-    String::from_utf8_lossy(output)
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(PathBuf::from)
-        .find(|path| path.is_file())
+#[cfg(test)]
+fn resolve_codex() -> Option<PathBuf> {
+    let target_id = crate::agent_command::default_local_target_ids()
+        .into_iter()
+        .next()?;
+    crate::agent_command::discover(&["codex"], &target_id)
+        .paths
+        .remove("codex")
+        .map(|path| normalize_codex_executable(&path))
 }
 
 fn bundled_browser_skill_override() -> Option<String> {
@@ -779,6 +828,34 @@ mod tests {
         assert!(merged.contains("A named session creates a separate page"));
         assert!(merged.contains("the user does not need to prescribe tool-level steps"));
         assert!(merged.contains("Create a new tab or window only when"));
+    }
+
+    #[test]
+    fn powershell_invocation_supports_native_and_cmd_agents() {
+        let quote_function = powershell_native_arg_quote_script();
+        assert!(
+            quote_function.contains("('\\' * ($pending * 2))"),
+            "trailing backslashes must be escaped before the closing quote"
+        );
+
+        let native = powershell_command_invocation(
+            Path::new(r"C:\Tools\codex.exe"),
+            "agentArguments",
+            "agentExitCode",
+        );
+        assert!(native.contains("ProcessStartInfo"));
+        assert!(native.contains("ProcessWindowStyle]::Hidden"));
+        assert!(native.contains("$agentArguments | ForEach-Object"));
+        assert!(native.contains("$agentExitCode = $process.ExitCode"));
+
+        let launcher = powershell_command_invocation(
+            Path::new(r"C:\Users\Test User\bin\claude.cmd"),
+            "agentArguments",
+            "agentExitCode",
+        );
+        assert!(launcher.contains(r"& 'C:\Users\Test User\bin\claude.cmd' @agentArguments"));
+        assert!(launcher.contains("$agentExitCode = $LASTEXITCODE"));
+        assert!(!launcher.contains("ProcessStartInfo"));
     }
 
     #[test]
@@ -998,6 +1075,29 @@ mod macos_tests {
             stdout.contains(&format!("zdotdir:{}", user_home.display())),
             "{stdout}"
         );
+
+        let bash_output = Command::new("/bin/bash")
+            .args([
+                "--noprofile",
+                "--norc",
+                "-c",
+                &format!(
+                    ". {}; type codex; codex marker; type claude; claude marker",
+                    shell_quote(&startup_root.join("bootstrap.sh").to_string_lossy())
+                ),
+            ])
+            .output()
+            .unwrap();
+        let bash_stdout = String::from_utf8_lossy(&bash_output.stdout);
+        assert!(
+            bash_output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&bash_output.stderr)
+        );
+        assert!(bash_stdout.contains("codex is a function"), "{bash_stdout}");
+        assert!(bash_stdout.contains("shim-codex:marker"), "{bash_stdout}");
+        assert!(bash_stdout.contains("claude is a function"), "{bash_stdout}");
+        assert!(bash_stdout.contains("shim-claude:marker"), "{bash_stdout}");
 
         let _ = fs::remove_dir_all(root);
     }

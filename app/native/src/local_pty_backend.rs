@@ -1,4 +1,6 @@
 #[cfg(windows)]
+use std::os::windows::process::CommandExt;
+#[cfg(windows)]
 use std::path::PathBuf;
 use std::{
     collections::HashMap,
@@ -34,6 +36,9 @@ const POWERSHELL_TARGET: &str = "local:powershell";
 const POWERSHELL5_TARGET: &str = "local:powershell5";
 const WSL_TARGET_PREFIX: &str = "local:wsl:";
 const MACOS_SHELL_TARGET: &str = "local:macos-shell";
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 struct RuntimeRecord {
     runtime: Mutex<TerminalRuntime>,
@@ -105,16 +110,14 @@ impl InProcessLocalPtyTerminalBackend {
                     .or_else(|| request.launch_environment.get("LUNA_MUX_CODEX_BOOTSTRAP"))
                     .filter(|value| !value.trim().is_empty())
                 {
-                    let encoding = if request.target_id == POWERSHELL5_TARGET {
-                        "$OutputEncoding = [Console]::OutputEncoding = [Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false); & chcp.com 65001 | Out-Null; "
-                    } else {
-                        ""
-                    };
                     // Profiles are loaded explicitly so the bootstrap runs after fnm and
                     // other profile-managed PATH changes, while still preserving the
                     // standard PowerShell profile order.
                     let script = format!(
-                        "{encoding}$lunaMuxProfilePaths = @($PROFILE.AllUsersAllHosts, $PROFILE.AllUsersCurrentHost, $PROFILE.CurrentUserAllHosts, $PROFILE.CurrentUserCurrentHost); foreach ($lunaMuxProfilePath in $lunaMuxProfilePaths) {{ if (Test-Path -LiteralPath $lunaMuxProfilePath) {{ . $lunaMuxProfilePath }} }}; Remove-Variable lunaMuxProfilePaths,lunaMuxProfilePath -ErrorAction SilentlyContinue; . '{}'",
+                        "{}; . '{}'",
+                        crate::agent_command::powershell_profile_load_script(
+                            request.target_id == POWERSHELL5_TARGET,
+                        ),
                         bootstrap.replace('\'', "''")
                     );
                     command.args(["-NoProfile", "-Command", &script]);
@@ -172,7 +175,7 @@ impl InProcessLocalPtyTerminalBackend {
         // Reading the per-user WSL registration is effectively instantaneous and
         // does not wake the WSL service. `wsl.exe --list --quiet` can block for a
         // long time while the service or a distribution is cold-starting.
-        let Ok(output) = std::process::Command::new("reg.exe")
+        let Ok(output) = windows_no_window_command("reg.exe")
             .args([
                 "query",
                 r"HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss",
@@ -347,10 +350,8 @@ impl InProcessLocalPtyTerminalBackend {
 
 #[cfg(windows)]
 fn is_real_powershell7_executable(path: &std::path::Path) -> bool {
-    use std::os::windows::process::CommandExt;
-    std::process::Command::new(path)
+    windows_no_window_command(path)
         .args(["-NoLogo", "-NoProfile", "-Command", "exit 0"])
-        .creation_flags(0x0800_0000)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -409,7 +410,7 @@ pub(crate) fn is_powershell_target(target_id: &str) -> bool {
 
 #[cfg(windows)]
 fn first_command_path(command: &str) -> Option<PathBuf> {
-    let output = std::process::Command::new("where.exe")
+    let output = windows_no_window_command("where.exe")
         .arg(command)
         .output()
         .ok()?;
@@ -420,6 +421,15 @@ fn first_command_path(command: &str) -> Option<PathBuf> {
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .find(|candidate| candidate.is_file())
+}
+
+#[cfg(windows)]
+pub(crate) fn windows_no_window_command(
+    program: impl AsRef<std::ffi::OsStr>,
+) -> std::process::Command {
+    let mut command = std::process::Command::new(program);
+    command.creation_flags(CREATE_NO_WINDOW);
+    command
 }
 
 fn wsl_environment_bridge(request: &TerminalRuntimeCreateRequest) -> String {
@@ -527,6 +537,7 @@ impl TerminalBackend for InProcessLocalPtyTerminalBackend {
             && let Some(context) = request.context.as_ref()
             && let Some(shim_dir) = crate::agent_adapters::install_runtime_shims(
                 context,
+                &request.target_id,
                 request
                     .launch_environment
                     .get("LUNA_MUX_HOOK_ENDPOINT")
@@ -574,6 +585,28 @@ impl TerminalBackend for InProcessLocalPtyTerminalBackend {
                         user_zdotdir.to_string_lossy().into_owned(),
                     );
                 }
+            }
+            #[cfg(target_os = "macos")]
+            if request.target_id == MACOS_SHELL_TARGET
+                && macos_supported_shell().is_some_and(|shell| {
+                    std::path::Path::new(&shell)
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        == Some("bash")
+                })
+            {
+                let bootstrap = format!(
+                    ". {}",
+                    crate::shell_quoting::posix_shell_quote(
+                        &shim_dir.join("bootstrap.sh").to_string_lossy()
+                    )
+                );
+                request.command = Some(match request.command.take() {
+                    Some(command) if !command.trim().is_empty() => {
+                        format!("{bootstrap}; {command}")
+                    }
+                    _ => bootstrap,
+                });
             }
         }
         let mut command = Self::command_for_request(&request)?;
@@ -759,8 +792,11 @@ impl TerminalBackend for InProcessLocalPtyTerminalBackend {
         record.paused.store(false, Ordering::Release);
         #[cfg(windows)]
         if let Some(process_id) = record.process_id {
-            let _ = std::process::Command::new("taskkill")
+            let _ = windows_no_window_command("taskkill")
                 .args(["/PID", &process_id.to_string(), "/T", "/F"])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
                 .status();
         }
         #[cfg(target_os = "macos")]
@@ -807,7 +843,7 @@ impl TerminalBackend for InProcessLocalPtyTerminalBackend {
 }
 
 #[cfg(windows)]
-fn decode_windows_command_output(bytes: &[u8]) -> String {
+pub(crate) fn decode_windows_command_output(bytes: &[u8]) -> String {
     let looks_utf16 = bytes.len() >= 2
         && bytes.len().is_multiple_of(2)
         && bytes

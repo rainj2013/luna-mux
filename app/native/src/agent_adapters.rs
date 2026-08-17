@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::{
     agent_profiles::{
@@ -35,6 +35,7 @@ trait AgentAdapter: Sync {
         context: &TerminalRuntimeContext,
         hook_endpoint: Option<&str>,
         mcp_endpoint: Option<&str>,
+        resolved_command: Option<&Path>,
     ) -> Result<Option<PathBuf>, String>;
     fn managed_command(&self, launch: &ManagedAgentLaunch<'_>) -> Result<String, String>;
 }
@@ -70,8 +71,9 @@ impl AgentAdapter for CodexAdapter {
         context: &TerminalRuntimeContext,
         _hook_endpoint: Option<&str>,
         mcp_endpoint: Option<&str>,
+        resolved_command: Option<&Path>,
     ) -> Result<Option<PathBuf>, String> {
-        crate::codex_shim::install(context, mcp_endpoint)
+        crate::codex_shim::install(context, mcp_endpoint, resolved_command)
     }
 
     fn managed_command(&self, launch: &ManagedAgentLaunch<'_>) -> Result<String, String> {
@@ -113,8 +115,14 @@ impl AgentAdapter for ClaudeCodeAdapter {
         context: &TerminalRuntimeContext,
         hook_endpoint: Option<&str>,
         mcp_endpoint: Option<&str>,
+        resolved_command: Option<&Path>,
     ) -> Result<Option<PathBuf>, String> {
-        crate::claude_code_adapter::install(context, hook_endpoint, mcp_endpoint)
+        crate::claude_code_adapter::install(
+            context,
+            hook_endpoint,
+            mcp_endpoint,
+            resolved_command,
+        )
     }
 
     fn managed_command(&self, launch: &ManagedAgentLaunch<'_>) -> Result<String, String> {
@@ -167,12 +175,23 @@ pub fn requires_remote_hook_forwarder(adapter_id: &str) -> Result<bool, String> 
 
 pub fn install_runtime_shims(
     context: &TerminalRuntimeContext,
+    target_id: &str,
     hook_endpoint: Option<&str>,
     mcp_endpoint: Option<&str>,
 ) -> Result<Option<PathBuf>, String> {
+    let discovery = crate::agent_command::discover(&["codex", "claude"], target_id);
+    if let Some(warning) = discovery.warning.as_deref() {
+        eprintln!("Unable to inspect Agent commands for {target_id}: {warning}");
+    }
     let mut installed_root = None;
     for adapter in adapters() {
-        if let Some(root) = adapter.install_manual_shim(context, hook_endpoint, mcp_endpoint)? {
+        let profile = adapter.profile();
+        if let Some(root) = adapter.install_manual_shim(
+            context,
+            hook_endpoint,
+            mcp_endpoint,
+            discovery.paths.get(&profile.command).map(PathBuf::as_path),
+        )? {
             installed_root = Some(root);
         }
     }
