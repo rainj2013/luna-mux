@@ -423,11 +423,13 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     const term = terminal.current
     const element = container.current
     if (!term || !element) return
-    if (!visible) {
+    const useWebgl = visible && window.api.platform !== 'darwin'
+    if (!useWebgl) {
       webglAddon.current?.dispose()
       webglAddon.current = null
       element.dataset.renderer = 'dom'
       outputWriter.current?.wrapRenderer()
+      if (visible) requestAnimationFrame(() => { fitAddon.current?.fit(); term.focus() })
       return
     }
     if (!webglAddon.current) {
