@@ -99,10 +99,13 @@ export function createTerminalOutputWriter(term: Terminal): TerminalOutputWriter
     committedX = buffer.x
     committedY = buffer.y
     committedHidden = Boolean(internals._core?.coreService?.isCursorHidden)
+    const forceInteractiveRefresh = interactive()
     requestAnimationFrame(() => {
       if (disposed || pinned()) return
       originalHandleCursorMove?.()
-      if (previousX !== committedX || previousY !== committedY || previousHidden !== committedHidden) refreshCursorRows(previousY, committedY)
+      if (forceInteractiveRefresh || previousX !== committedX || previousY !== committedY || previousHidden !== committedHidden) {
+        refreshCursorRows(previousY, committedY)
+      }
     })
   }
 
