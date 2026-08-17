@@ -548,6 +548,7 @@ pub(crate) fn powershell_command_invocation(
   $psi = New-Object System.Diagnostics.ProcessStartInfo\r\n\
   $psi.FileName = '{executable}'\r\n\
   $psi.UseShellExecute = $false\r\n\
+  $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden\r\n\
   $psi.Arguments = $lunaMuxCommandLine\r\n\
   $process = [System.Diagnostics.Process]::Start($psi)\r\n\
   $process.WaitForExit()\r\n\
@@ -843,6 +844,7 @@ mod tests {
             "agentExitCode",
         );
         assert!(native.contains("ProcessStartInfo"));
+        assert!(native.contains("ProcessWindowStyle]::Hidden"));
         assert!(native.contains("$agentArguments | ForEach-Object"));
         assert!(native.contains("$agentExitCode = $process.ExitCode"));
 

@@ -1,4 +1,6 @@
 #[cfg(windows)]
+use std::os::windows::process::CommandExt;
+#[cfg(windows)]
 use std::path::PathBuf;
 use std::{
     collections::HashMap,
@@ -34,6 +36,9 @@ const POWERSHELL_TARGET: &str = "local:powershell";
 const POWERSHELL5_TARGET: &str = "local:powershell5";
 const WSL_TARGET_PREFIX: &str = "local:wsl:";
 const MACOS_SHELL_TARGET: &str = "local:macos-shell";
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 struct RuntimeRecord {
     runtime: Mutex<TerminalRuntime>,
@@ -170,7 +175,7 @@ impl InProcessLocalPtyTerminalBackend {
         // Reading the per-user WSL registration is effectively instantaneous and
         // does not wake the WSL service. `wsl.exe --list --quiet` can block for a
         // long time while the service or a distribution is cold-starting.
-        let Ok(output) = std::process::Command::new("reg.exe")
+        let Ok(output) = windows_no_window_command("reg.exe")
             .args([
                 "query",
                 r"HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss",
@@ -345,10 +350,8 @@ impl InProcessLocalPtyTerminalBackend {
 
 #[cfg(windows)]
 fn is_real_powershell7_executable(path: &std::path::Path) -> bool {
-    use std::os::windows::process::CommandExt;
-    std::process::Command::new(path)
+    windows_no_window_command(path)
         .args(["-NoLogo", "-NoProfile", "-Command", "exit 0"])
-        .creation_flags(0x0800_0000)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -407,7 +410,7 @@ pub(crate) fn is_powershell_target(target_id: &str) -> bool {
 
 #[cfg(windows)]
 fn first_command_path(command: &str) -> Option<PathBuf> {
-    let output = std::process::Command::new("where.exe")
+    let output = windows_no_window_command("where.exe")
         .arg(command)
         .output()
         .ok()?;
@@ -418,6 +421,13 @@ fn first_command_path(command: &str) -> Option<PathBuf> {
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .find(|candidate| candidate.is_file())
+}
+
+#[cfg(windows)]
+fn windows_no_window_command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
+    let mut command = std::process::Command::new(program);
+    command.creation_flags(CREATE_NO_WINDOW);
+    command
 }
 
 fn wsl_environment_bridge(request: &TerminalRuntimeCreateRequest) -> String {

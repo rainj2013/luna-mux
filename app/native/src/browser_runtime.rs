@@ -19,6 +19,8 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungsten
 use uuid::Uuid;
 
 const AGENT_BROWSER_TOOLS: &str = "core,network,debug,tabs";
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 #[cfg(not(windows))]
 const AGENT_BROWSER_SOCKET_DIR: &str = "/tmp/luna-mux-ab";
 
@@ -1113,7 +1115,9 @@ fn resolve_agent_browser_binary() -> Result<PathBuf, String> {
     }
 
     #[cfg(windows)]
-    let discovered = Command::new("where.exe")
+    let mut discovery_command = Command::new("where.exe");
+    configure_agent_browser_command(&mut discovery_command);
+    let discovered = discovery_command
         .arg("agent-browser.exe")
         .output()
         .ok()
@@ -1156,7 +1160,11 @@ fn configure_agent_browser_command(command: &mut Command) {
 }
 
 #[cfg(windows)]
-fn configure_agent_browser_command(_command: &mut Command) {}
+fn configure_agent_browser_command(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+
+    command.creation_flags(CREATE_NO_WINDOW);
+}
 
 fn agent_browser_scope(mux_session_id: &str) -> String {
     #[cfg(windows)]
@@ -2077,6 +2085,8 @@ mod tests {
         sync::mpsc as std_mpsc,
         time::Duration,
     };
+    #[cfg(windows)]
+    use std::process::Command;
 
     use futures::{SinkExt, StreamExt};
     use serde_json::{Value, json};
@@ -2138,8 +2148,22 @@ mod tests {
         assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 4);
     }
 
-    #[cfg(target_os = "windows")]
-    use super::parse_version_parts;
+    #[cfg(windows)]
+    use super::{configure_agent_browser_command, parse_version_parts};
+
+    #[cfg(windows)]
+    #[test]
+    fn agent_browser_commands_preserve_piped_output_without_a_console_window() {
+        let mut command = Command::new("cmd.exe");
+        configure_agent_browser_command(&mut command);
+        let output = command
+            .args(["/d", "/s", "/c", "echo luna-mux"])
+            .output()
+            .expect("run a hidden console command");
+
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "luna-mux");
+    }
 
     #[test]
     fn normalizes_local_development_urls() {
