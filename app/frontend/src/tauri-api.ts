@@ -16,22 +16,28 @@ const send = (command: string, args?: Record<string, unknown>): void => {
 
 const readClipboardContent = async (): Promise<import('./types').ClipboardContent> => {
   try {
-    const text = await readText()
-    if (text) return { type: 'text', text }
-  } catch {
-    // Image-only clipboard contents commonly make text reads reject.
-  }
-  try {
     const image = await readImage()
     try {
       const { width, height } = await image.size()
-      return width > 0 && height > 0 ? { type: 'image' } : { type: 'empty' }
+      if (width > 0 && height > 0) return { type: 'image' }
     } finally {
       await image.close()
     }
   } catch {
-    return { type: 'empty' }
+    // File drops and text-only clipboard contents commonly make image reads reject.
   }
+  try {
+    if (await call<boolean>('system_clipboard_has_image_file')) return { type: 'image' }
+  } catch {
+    // Keep text paste available if native file-drop inspection is unavailable.
+  }
+  try {
+    const text = await readText()
+    if (text) return { type: 'text', text }
+  } catch {
+    // Unsupported clipboard formats are treated as empty.
+  }
+  return { type: 'empty' }
 }
 
 export async function createTauriApi(): Promise<AppApi> {
