@@ -3,7 +3,6 @@
     fs,
     net::{SocketAddr, TcpStream},
     path::Path,
-    process::Command,
     time::Duration,
 };
 
@@ -77,9 +76,8 @@ fn run(filter: Option<&str>, managed_agents: &[DoctorManagedAgent]) -> Vec<Agent
     checks.push(check_local_agents());
     checks.push(check_runtime_environment_files(filter, managed_agents));
     checks.push(check_managed_agents(filter, managed_agents));
-    if cfg!(windows) {
-        checks.push(check_wsl_distributions(filter));
-    }
+    #[cfg(windows)]
+    checks.push(check_wsl_distributions(filter));
     checks
 }
 
@@ -362,8 +360,12 @@ fn endpoint_status(endpoint: &str) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
+#[cfg(windows)]
 fn check_wsl_distributions(filter: Option<&str>) -> AgentCheck {
-    let output = match Command::new("wsl.exe").args(["--list", "--quiet"]).output() {
+    let output = match crate::local_pty_backend::windows_no_window_command("wsl.exe")
+        .args(["--list", "--quiet"])
+        .output()
+    {
         Ok(output) => output,
         Err(error) => {
             return AgentCheck {
@@ -377,16 +379,10 @@ fn check_wsl_distributions(filter: Option<&str>) -> AgentCheck {
         return AgentCheck {
             name: "wsl_distributions".into(),
             status: "warn".into(),
-            detail: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            detail: wsl_failure_detail(&output.stderr, &output.stdout),
         };
     }
-    let raw = decode_wsl_stdout(&output.stdout);
-    let distributions = raw
-        .split('\0')
-        .map(|value| value.trim().replace('\r', ""))
-        .filter(|value| !value.is_empty())
-        .filter(|value| filter.is_none_or(|filter| value.contains(filter)))
-        .collect::<Vec<_>>();
+    let distributions = parse_wsl_distributions(&output.stdout, filter);
     if distributions.is_empty() {
         AgentCheck {
             name: "wsl_distributions".into(),
@@ -402,23 +398,64 @@ fn check_wsl_distributions(filter: Option<&str>) -> AgentCheck {
     }
 }
 
-fn decode_wsl_stdout(bytes: &[u8]) -> String {
-    let bytes = bytes
-        .strip_prefix(&[0xff, 0xfe])
-        .or_else(|| bytes.strip_prefix(&[0xfe, 0xff]))
-        .unwrap_or(bytes);
-    let mut units = Vec::with_capacity(bytes.len() / 2);
-    for chunk in bytes.chunks(2) {
-        if chunk.len() == 2 {
-            units.push(u16::from_le_bytes([chunk[0], chunk[1]]));
-        }
+#[cfg(windows)]
+fn parse_wsl_distributions(bytes: &[u8], filter: Option<&str>) -> Vec<String> {
+    crate::local_pty_backend::decode_windows_command_output(bytes)
+        .split(|character| matches!(character, '\r' | '\n' | '\0'))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .filter(|value| filter.is_none_or(|filter| value.contains(filter)))
+        .map(str::to_owned)
+        .collect()
+}
+
+#[cfg(windows)]
+fn wsl_failure_detail(stderr: &[u8], stdout: &[u8]) -> String {
+    let stderr = crate::local_pty_backend::decode_windows_command_output(stderr);
+    let detail = stderr.trim();
+    if !detail.is_empty() {
+        return normalize_wsl_detail(detail);
     }
-    String::from_utf16_lossy(&units)
+    let stdout = crate::local_pty_backend::decode_windows_command_output(stdout);
+    normalize_wsl_detail(stdout.trim())
+}
+
+#[cfg(windows)]
+fn normalize_wsl_detail(detail: &str) -> String {
+    detail
+        .lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    fn utf16le(value: &str) -> Vec<u8> {
+        value.encode_utf16().flat_map(u16::to_le_bytes).collect()
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn decodes_utf16_wsl_install_guidance() {
+        let message = "适用于 Linux 的 Windows 子系统未安装。请运行 wsl.exe --install\r\r\n有关详细信息";
+        assert_eq!(
+            wsl_failure_detail(&utf16le(message), &[]),
+            "适用于 Linux 的 Windows 子系统未安装。请运行 wsl.exe --install\n有关详细信息"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn parses_utf16_wsl_distributions_by_line() {
+        assert_eq!(
+            parse_wsl_distributions(&utf16le("Ubuntu\r\nDebian\r\n"), None),
+            ["Ubuntu", "Debian"]
+        );
+    }
 
     #[test]
     fn active_managed_agents_suppress_missing_env_file_warning() {

@@ -424,7 +424,9 @@ fn first_command_path(command: &str) -> Option<PathBuf> {
 }
 
 #[cfg(windows)]
-fn windows_no_window_command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
+pub(crate) fn windows_no_window_command(
+    program: impl AsRef<std::ffi::OsStr>,
+) -> std::process::Command {
     let mut command = std::process::Command::new(program);
     command.creation_flags(CREATE_NO_WINDOW);
     command
@@ -838,7 +840,7 @@ impl TerminalBackend for InProcessLocalPtyTerminalBackend {
 }
 
 #[cfg(windows)]
-fn decode_windows_command_output(bytes: &[u8]) -> String {
+pub(crate) fn decode_windows_command_output(bytes: &[u8]) -> String {
     let looks_utf16 = bytes.len() >= 2
         && bytes.len().is_multiple_of(2)
         && bytes
