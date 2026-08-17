@@ -1115,14 +1115,16 @@ fn resolve_agent_browser_binary() -> Result<PathBuf, String> {
     }
 
     #[cfg(windows)]
-    let mut discovery_command = Command::new("where.exe");
-    configure_agent_browser_command(&mut discovery_command);
-    let discovered = discovery_command
-        .arg("agent-browser.exe")
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .and_then(|output| first_existing_path(&output.stdout));
+    let discovered = {
+        let mut discovery_command = Command::new("where.exe");
+        configure_agent_browser_command(&mut discovery_command);
+        discovery_command
+            .arg("agent-browser.exe")
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .and_then(|output| first_existing_path(&output.stdout))
+    };
     #[cfg(not(windows))]
     let discovered = Command::new("which")
         .arg("agent-browser")
