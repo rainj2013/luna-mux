@@ -214,7 +214,6 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     }
 
     const writeTerminalInput = (data: string): void => {
-      writer.markInteractive(data === '\r' || data === '\n')
       lastTerminalInput = { data, timestamp: performance.now() }
       for (const pending of pendingImePunctuation) {
         if (!data.includes(pending.text)) continue
@@ -267,6 +266,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
         return false
       }
       if (event.type === 'keydown' && (event.key === 'Enter' || event.key === 'Escape' || (event.ctrlKey && event.key.toLowerCase() === 'c'))) onAgentActionRef.current?.()
+      if (event.type === 'keydown') writer.markInteractive(event.key === 'Enter')
       return true
     })
     const input = term.onData(writeTerminalInput)
@@ -423,13 +423,11 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     const term = terminal.current
     const element = container.current
     if (!term || !element) return
-    const useWebgl = visible && window.api.platform !== 'darwin'
-    if (!useWebgl) {
+    if (!visible) {
       webglAddon.current?.dispose()
       webglAddon.current = null
       element.dataset.renderer = 'dom'
       outputWriter.current?.wrapRenderer()
-      if (visible) requestAnimationFrame(() => { fitAddon.current?.fit(); term.focus() })
       return
     }
     if (!webglAddon.current) {

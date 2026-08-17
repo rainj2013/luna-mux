@@ -36,6 +36,8 @@ const POWERSHELL_TARGET: &str = "local:powershell";
 const POWERSHELL5_TARGET: &str = "local:powershell5";
 const WSL_TARGET_PREFIX: &str = "local:wsl:";
 const MACOS_SHELL_TARGET: &str = "local:macos-shell";
+const XTERM_256COLOR: &str = "xterm-256color";
+const TRUECOLOR: &str = "truecolor";
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -348,6 +350,14 @@ impl InProcessLocalPtyTerminalBackend {
     }
 }
 
+fn configure_terminal_environment(command: &mut CommandBuilder, target_id: &str) {
+    if target_id == MACOS_SHELL_TARGET {
+        // Finder-launched applications do not inherit TERM from a parent terminal.
+        command.env("TERM", XTERM_256COLOR);
+        command.env("COLORTERM", TRUECOLOR);
+    }
+}
+
 #[cfg(windows)]
 fn is_real_powershell7_executable(path: &std::path::Path) -> bool {
     windows_no_window_command(path)
@@ -613,6 +623,7 @@ impl TerminalBackend for InProcessLocalPtyTerminalBackend {
         for (key, value) in &request.launch_environment {
             command.env(key, value);
         }
+        configure_terminal_environment(&mut command, &request.target_id);
         if let Some(agent) = &request.managed_agent {
             command.env("LUNA_MUX_SESSION_ID", &agent.mux_session_id);
             command.env("LUNA_MUX_PANE_ID", &agent.pane_id);
@@ -907,6 +918,115 @@ fn supported_macos_shell(shell: &str) -> bool {
         .file_name()
         .and_then(|name| name.to_str())
         .is_some_and(|name| matches!(name, "zsh" | "bash"))
+}
+
+#[cfg(test)]
+mod terminal_environment_tests {
+    use std::ffi::OsStr;
+    #[cfg(target_os = "macos")]
+    use std::time::Duration;
+
+    use super::*;
+
+    #[test]
+    fn macos_shell_uses_the_emulated_terminal_capabilities() {
+        let mut command = CommandBuilder::new("zsh");
+        command.env("TERM", "dumb");
+
+        configure_terminal_environment(&mut command, MACOS_SHELL_TARGET);
+
+        assert_eq!(command.get_env("TERM"), Some(OsStr::new(XTERM_256COLOR)));
+        assert_eq!(command.get_env("COLORTERM"), Some(OsStr::new(TRUECOLOR)));
+    }
+
+    #[test]
+    fn powershell_and_wsl_keep_their_platform_environment() {
+        for target_id in [POWERSHELL_TARGET, POWERSHELL5_TARGET, "local:wsl:Ubuntu"] {
+            let mut command = CommandBuilder::new("shell");
+            command.env("TERM", "platform-default");
+            command.env("COLORTERM", "platform-color");
+
+            configure_terminal_environment(&mut command, target_id);
+
+            assert_eq!(
+                command.get_env("TERM"),
+                Some(OsStr::new("platform-default"))
+            );
+            assert_eq!(
+                command.get_env("COLORTERM"),
+                Some(OsStr::new("platform-color"))
+            );
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn macos_zsh_backspace_emits_cursor_controls_without_a_parent_term() {
+        let Some(shell) = macos_supported_shell() else {
+            return;
+        };
+        if std::path::Path::new(&shell)
+            .file_name()
+            .and_then(|name| name.to_str())
+            != Some("zsh")
+        {
+            return;
+        }
+
+        let zdotdir = std::env::temp_dir().join(format!("luna-mux-zsh-test-{}", Uuid::new_v4()));
+        std::fs::create_dir(&zdotdir).expect("create empty ZDOTDIR");
+        let mut launch_environment = std::collections::BTreeMap::new();
+        launch_environment.insert("TERM".into(), "dumb".into());
+        launch_environment.insert("ZDOTDIR".into(), zdotdir.to_string_lossy().into_owned());
+        let request = TerminalRuntimeCreateRequest {
+            runtime_id: None,
+            context: None,
+            target_id: MACOS_SHELL_TARGET.into(),
+            title: Some("zsh backspace test".into()),
+            cwd: None,
+            command: None,
+            authentication: None,
+            managed_agent: None,
+            launch_environment,
+            cols: 80,
+            rows: 24,
+        };
+        let backend = InProcessLocalPtyTerminalBackend::new();
+        let runtime = backend.create(request).await.expect("start zsh PTY");
+
+        std::thread::sleep(Duration::from_millis(150));
+        let prompt = backend
+            .read_output(&runtime.runtime_id, 0, 64 * 1024)
+            .expect("read initial zsh prompt");
+        backend
+            .write(&runtime.runtime_id, "abc\u{7f}")
+            .await
+            .expect("write text and Backspace");
+
+        let mut output = String::new();
+        let mut cursor = prompt.next_cursor;
+        for _ in 0..20 {
+            std::thread::sleep(Duration::from_millis(25));
+            let next = backend
+                .read_output(&runtime.runtime_id, cursor, 64 * 1024)
+                .expect("read zsh echo");
+            output.push_str(&next.data);
+            cursor = next.next_cursor;
+            if output.contains("\u{8} \u{8}") {
+                break;
+            }
+        }
+
+        backend
+            .close(&runtime.runtime_id)
+            .await
+            .expect("close zsh PTY");
+        let _ = std::fs::remove_dir(&zdotdir);
+        assert!(
+            output.contains("\u{8} \u{8}"),
+            "zsh did not emit a visual erase sequence: {output:?}"
+        );
+    }
 }
 
 #[cfg(all(test, windows))]
