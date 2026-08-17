@@ -14,6 +14,7 @@
     "core:window:allow-close",
     "core:window:allow-hide",
     "clipboard-manager:allow-read-text",
+    "clipboard-manager:allow-read-image",
     "clipboard-manager:allow-write-text",
     "dialog:allow-open",
     "dialog:allow-save",

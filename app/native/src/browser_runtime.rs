@@ -1606,7 +1606,7 @@ fn process_exists(process_id: u32) -> bool {
 
 #[cfg(target_os = "windows")]
 fn close_process_tree(child: &mut Child) {
-    let _ = Command::new("taskkill")
+    let _ = crate::local_pty_backend::windows_no_window_command("taskkill")
         .args(["/PID", &child.id().to_string(), "/T", "/F"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())

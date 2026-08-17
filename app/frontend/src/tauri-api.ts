@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { readText, writeText } from '@tauri-apps/plugin-clipboard-manager'
+import { readImage, readText, writeText } from '@tauri-apps/plugin-clipboard-manager'
 import type { AiSettingsInput, AiShell, AppApi, AppEvent, AppIconId, AppLanguage, BookmarkInput, BrowserRuntimeEvent, ConnectInput, ConflictResolution, ControlStateChangedEvent, DeploymentProfile, LunaRemoteImportSelection, ManagedAgentEvent, ManagedAgentNotificationActivation, NativeMenuLabels, Platform, PortForwardProfile, TerminalSettings, TransferRequest, UiTheme } from './types'
 import type { TerminalRuntimeEvent } from './terminal-runtime-contract'
 
@@ -12,6 +12,26 @@ const call = <T>(command: string, args?: Record<string, unknown>): Promise<T> =>
 
 const send = (command: string, args?: Record<string, unknown>): void => {
   void call(command, args).catch((error) => console.warn(`Tauri command ${command} failed`, error))
+}
+
+const readClipboardContent = async (): Promise<import('./types').ClipboardContent> => {
+  try {
+    const text = await readText()
+    if (text) return { type: 'text', text }
+  } catch {
+    // Image-only clipboard contents commonly make text reads reject.
+  }
+  try {
+    const image = await readImage()
+    try {
+      const { width, height } = await image.size()
+      return width > 0 && height > 0 ? { type: 'image' } : { type: 'empty' }
+    } finally {
+      await image.close()
+    }
+  } catch {
+    return { type: 'empty' }
+  }
 }
 
 export async function createTauriApi(): Promise<AppApi> {
@@ -30,7 +50,7 @@ export async function createTauriApi(): Promise<AppApi> {
     platform,
     system: {
       openExternal: (url) => call('system_open_external', { value: url }),
-      readClipboard: () => readText(),
+      readClipboard: readClipboardContent,
       writeClipboard: (text) => writeText(text.slice(0, 4 * 1024 * 1024)),
       minimizeWindow: () => currentWindow.minimize(),
       toggleMaximizeWindow: () => currentWindow.toggleMaximize(),

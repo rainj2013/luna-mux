@@ -792,8 +792,11 @@ impl TerminalBackend for InProcessLocalPtyTerminalBackend {
         record.paused.store(false, Ordering::Release);
         #[cfg(windows)]
         if let Some(process_id) = record.process_id {
-            let _ = std::process::Command::new("taskkill")
+            let _ = windows_no_window_command("taskkill")
                 .args(["/PID", &process_id.to_string(), "/T", "/F"])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
                 .status();
         }
         #[cfg(target_os = "macos")]
