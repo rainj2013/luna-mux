@@ -214,6 +214,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     }
 
     const writeTerminalInput = (data: string): void => {
+      writer.markInteractive(data === '\r' || data === '\n')
       lastTerminalInput = { data, timestamp: performance.now() }
       for (const pending of pendingImePunctuation) {
         if (!data.includes(pending.text)) continue
@@ -266,7 +267,6 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
         return false
       }
       if (event.type === 'keydown' && (event.key === 'Enter' || event.key === 'Escape' || (event.ctrlKey && event.key.toLowerCase() === 'c'))) onAgentActionRef.current?.()
-      if (event.type === 'keydown') writer.markInteractive(event.key === 'Enter')
       return true
     })
     const input = term.onData(writeTerminalInput)
