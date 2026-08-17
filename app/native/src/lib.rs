@@ -1,10 +1,12 @@
 mod agent_adapters;
+mod agent_command;
 mod agent_hooks;
 mod agent_profiles;
 mod ai;
 mod app_icon;
 mod browser_runtime;
 mod claude_code_adapter;
+mod clipboard;
 mod codex_shim;
 mod commands;
 mod composite_terminal_backend;
@@ -53,6 +55,7 @@ use browser_runtime::{
     BrowserRuntimeCreateRequest, BrowserRuntimeManager, BrowserRuntimeStatus, BrowserWarmupGate,
     warm_agent_browser_session,
 };
+use clipboard::system_clipboard_has_image_file;
 use commands::*;
 use composite_terminal_backend::CompositeTerminalBackend;
 use control_adapter::AuthenticatedControlAdapter;
@@ -408,6 +411,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             platform,
             system_open_external,
+            system_clipboard_has_image_file,
             browser_chrome_discover,
             browser_runtime_create,
             browser_runtimes_list,
