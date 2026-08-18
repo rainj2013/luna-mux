@@ -1904,7 +1904,7 @@ function MuxLayout({ node, panes, bookmarks, activePaneId, settings, backgroundI
     const attentionTone = agentAttentionByPane.get(pane.id)
     const bookmark = pane.bookmarkId ? bookmarks.get(pane.bookmarkId) : undefined
     const jumpBookmark = bookmark?.jumpBookmarkId ? bookmarks.get(bookmark.jumpBookmarkId) : undefined
-    const canEnterCredentials = Boolean(bookmark && (bookmark.authType !== 'agent' || jumpBookmark?.authType !== 'agent'))
+    const canEnterCredentials = Boolean(bookmark && (bookmark.authType !== 'agent' || (jumpBookmark && jumpBookmark.authType !== 'agent')))
     const authenticationFailure = canEnterCredentials && isSshAuthenticationFailure(pane.error)
     const stoppedState = pane.bookmarkId
       ? pane.error

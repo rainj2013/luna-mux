@@ -27,7 +27,7 @@ const mountedTerminalPanes = new Set<string>()
 
 function shouldOpenTerminalLink(event: MouseEvent): boolean {
   if (event.button !== 0) return false
-  const commandClick = event.ctrlKey || (window.api.platform === 'darwin' && event.metaKey)
+  const commandClick = window.api.platform === 'darwin' ? event.metaKey : event.ctrlKey
   return commandClick ? event.detail === 1 : event.detail === 2
 }
 
