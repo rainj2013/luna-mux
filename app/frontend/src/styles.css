@@ -378,6 +378,8 @@ body.mux-split-resizing { cursor: col-resize; user-select: none; }
 .terminal-shell { position: relative; width: 100%; height: 100%; overflow: hidden; }
 .terminal { position: relative; z-index: 1; width: 100%; height: 100%; background-color: transparent; }
 .terminal .xterm { height: 100%; }
+.terminal .xterm.luna-ime-composing .xterm-helper-textarea,
+.terminal .xterm.luna-ime-composing .composition-view { left: var(--luna-ime-anchor-left) !important; top: var(--luna-ime-anchor-top) !important; }
 .terminal .xterm-viewport { background-color: transparent !important; scrollbar-color: #4b5158 transparent; }
 .terminal-search { position: absolute; z-index: 5; top: 8px; right: 20px; height: 34px; padding: 2px 3px 2px 9px; display: flex; align-items: center; gap: 4px; color: var(--text-muted); background: var(--surface); border: 1px solid var(--border-strong); border-radius: 6px; box-shadow: 0 4px 14px var(--shadow); }
 .terminal-search input { width: min(240px, 28vw); height: 27px; padding: 0 5px; border: 0; outline: 0; }

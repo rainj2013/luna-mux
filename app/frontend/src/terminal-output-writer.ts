@@ -20,6 +20,7 @@ interface PrivateRenderer {
 
 interface PrivateRenderService {
   handleCursorMove(): void
+  dimensions?: { css?: { cell?: { width: number; height: number } } }
   _renderer?: { value?: PrivateRenderer }
 }
 
@@ -39,6 +40,7 @@ interface TerminalInternals {
 export interface TerminalOutputWriter {
   write(data: string, callback?: () => void): void
   markInteractive(submitting?: boolean): void
+  setComposing(active: boolean): void
   wrapRenderer(): void
   dispose(): void
 }
@@ -58,13 +60,14 @@ export function createTerminalOutputWriter(term: Terminal): TerminalOutputWriter
   let unsafeBatch = false
   let interactiveUntil = 0
   let settleTimer = 0
+  let composing = false
   let committedX = term.buffer.active.cursorX
   let committedY = term.buffer.active.cursorY
   let committedHidden = Boolean(internals._core?.coreService?.isCursorHidden)
 
   const privateBuffer = (): PrivateBuffer | undefined => internals._core?._bufferService?.buffer
   const synchronizedOutput = (): boolean => Boolean(internals._core?.coreService?.decPrivateModes?.synchronizedOutput)
-  const pinned = (): boolean => writeInProgress || settleTimer !== 0 || synchronizedOutput()
+  const pinned = (): boolean => composing || writeInProgress || settleTimer !== 0 || synchronizedOutput()
   const clampX = (value: number): number => Math.max(0, Math.min(term.cols - 1, value))
   const clampY = (value: number): number => Math.max(0, Math.min(term.rows - 1, value))
   const settleDelay = (): number => {
@@ -73,6 +76,28 @@ export function createTerminalOutputWriter(term: Terminal): TerminalOutputWriter
 
   const renderService = internals._core?._renderService
   const originalHandleCursorMove = renderService?.handleCursorMove.bind(renderService)
+  const clearCompositionAnchor = (): void => {
+    const element = term.element
+    if (!element) return
+    element.classList.remove('luna-ime-composing')
+    element.style.removeProperty('--luna-ime-anchor-left')
+    element.style.removeProperty('--luna-ime-anchor-top')
+  }
+  const pinCompositionAnchor = (): void => {
+    const element = term.element
+    if (!element) return
+    const cell = renderService?.dimensions?.css?.cell
+    const textarea = term.textarea
+    const left = cell && cell.width > 0
+      ? `${clampX(committedX) * cell.width}px`
+      : textarea?.style.left || '0px'
+    const top = cell && cell.height > 0
+      ? `${clampY(committedY) * cell.height}px`
+      : textarea?.style.top || '0px'
+    element.style.setProperty('--luna-ime-anchor-left', left)
+    element.style.setProperty('--luna-ime-anchor-top', top)
+    element.classList.add('luna-ime-composing')
+  }
   let guardedHandleCursorMove: (() => void) | undefined
   if (renderService && originalHandleCursorMove) {
     guardedHandleCursorMove = () => {
@@ -106,6 +131,7 @@ export function createTerminalOutputWriter(term: Terminal): TerminalOutputWriter
   }
 
   const commitNow = (): void => {
+    if (composing) return
     if (settleTimer) window.clearTimeout(settleTimer)
     settleTimer = 0
     commit()
@@ -116,6 +142,7 @@ export function createTerminalOutputWriter(term: Terminal): TerminalOutputWriter
     settleTimer = window.setTimeout(() => {
       settleTimer = 0
       if (disposed) return
+      if (composing) return
       if (writeInProgress || synchronizedOutput()) {
         armSettle(16)
         return
@@ -207,8 +234,10 @@ export function createTerminalOutputWriter(term: Terminal): TerminalOutputWriter
         const interactive = performance.now() < interactiveUntil
         const safeTextAtCommittedColumn = !unsafeBatch && buffer?.x === committedX && !synchronizedOutput()
         const ordinaryText = !unsafeBatch && settleTimer === 0 && !synchronizedOutput()
-        if (interactive || safeTextAtCommittedColumn || ordinaryText) commitNow()
-        else armSettle(settleDelay())
+        if (!composing) {
+          if (interactive || safeTextAtCommittedColumn || ordinaryText) commitNow()
+          else armSettle(settleDelay())
+        }
       }
       for (const write of writes) write.callback?.()
       scheduleFlush()
@@ -229,9 +258,25 @@ export function createTerminalOutputWriter(term: Terminal): TerminalOutputWriter
     markInteractive(submitting = false) {
       interactiveUntil = submitting ? 0 : performance.now() + 500
     },
+    setComposing(active) {
+      if (disposed || composing === active) return
+      if (active) {
+        if (settleTimer) window.clearTimeout(settleTimer)
+        settleTimer = 0
+        composing = true
+        pinCompositionAnchor()
+        return
+      }
+      composing = false
+      clearCompositionAnchor()
+      if (writeInProgress || synchronizedOutput()) armSettle(16)
+      else commitNow()
+    },
     wrapRenderer,
     dispose() {
       disposed = true
+      composing = false
+      clearCompositionAnchor()
       if (scheduledFrame) cancelAnimationFrame(scheduledFrame)
       if (scheduledTimer) window.clearTimeout(scheduledTimer)
       if (settleTimer) window.clearTimeout(settleTimer)

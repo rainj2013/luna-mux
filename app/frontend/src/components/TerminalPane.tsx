@@ -349,9 +349,30 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     const recoverDroppedImePunctuationFromComposition = (rawEvent: Event): void => {
       queueDroppedImePunctuation((rawEvent as CompositionEvent).data)
     }
+    let compositionReleaseTimer = 0
+    const startImeComposition = (): void => {
+      if (compositionReleaseTimer) window.clearTimeout(compositionReleaseTimer)
+      compositionReleaseTimer = 0
+      writer.setComposing(true)
+    }
+    const finishImeComposition = (): void => {
+      if (compositionReleaseTimer) window.clearTimeout(compositionReleaseTimer)
+      compositionReleaseTimer = window.setTimeout(() => {
+        compositionReleaseTimer = 0
+        writer.setComposing(false)
+      }, 0)
+    }
+    const cancelImeComposition = (): void => {
+      if (compositionReleaseTimer) window.clearTimeout(compositionReleaseTimer)
+      compositionReleaseTimer = 0
+      writer.setComposing(false)
+    }
     textarea?.addEventListener('beforeinput', rememberImeTextareaBeforeInput)
     textarea?.addEventListener('input', recoverDroppedImePunctuationFromInput)
+    textarea?.addEventListener('compositionstart', startImeComposition)
     textarea?.addEventListener('compositionend', recoverDroppedImePunctuationFromComposition, true)
+    textarea?.addEventListener('compositionend', finishImeComposition)
+    textarea?.addEventListener('blur', cancelImeComposition)
     const resize = term.onResize(({ cols, rows }) => { if (runtimeIdRef.current) void window.api.terminalRuntimes.resize(runtimeIdRef.current, cols, rows) })
     let catchingUp = true
     const queuedOutput: Array<Extract<TerminalRuntimeEvent, { type: 'output' }>['payload']> = []
@@ -433,7 +454,11 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
       pendingImePunctuation.clear()
       textarea?.removeEventListener('beforeinput', rememberImeTextareaBeforeInput)
       textarea?.removeEventListener('input', recoverDroppedImePunctuationFromInput)
+      textarea?.removeEventListener('compositionstart', startImeComposition)
       textarea?.removeEventListener('compositionend', recoverDroppedImePunctuationFromComposition, true)
+      textarea?.removeEventListener('compositionend', finishImeComposition)
+      textarea?.removeEventListener('blur', cancelImeComposition)
+      cancelImeComposition()
       stop(); observer.disconnect(); input.dispose(); resize.dispose(); writer.dispose(); webglAddon.current?.dispose(); term.dispose()
       void catchUp
       webglAddon.current = null; outputWriter.current = null; terminal.current = null; fitAddon.current = null
