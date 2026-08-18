@@ -2,7 +2,13 @@
   !insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
 
   IfFileExists "$INSTDIR\agent-browser.exe" 0 luna_mux_sidecar_done
-    nsExec::ExecToStack `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -Command "& { param([string]$$target); $$target = ((@($$target) + @($$args)) -join ' '); $$target = [IO.Path]::GetFullPath($$target); for ($$attempt = 0; $$attempt -lt 8; $$attempt++) { $$running = @(Get-Process -Name agent-browser -ErrorAction SilentlyContinue | Where-Object { try { [IO.Path]::GetFullPath($$_.Path) -eq $$target } catch { $$false } }); if ($$running.Count -eq 0) { exit 0 }; foreach ($$process in $$running) { Stop-Process -Id $$process.Id -Force -ErrorAction SilentlyContinue }; Start-Sleep -Milliseconds 250 }; exit 1 }" "$INSTDIR\agent-browser.exe"`
+    ${If} ${RunningX64}
+      ; NSIS is 32-bit, so Sysnative is required to inspect a 64-bit process path.
+      StrCpy $R3 "$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
+    ${Else}
+      StrCpy $R3 "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe"
+    ${EndIf}
+    nsExec::ExecToStack `"$R3" -NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -Command "& { param([string]$$target); $$target = ((@($$target) + @($$args)) -join ' '); $$target = [IO.Path]::GetFullPath($$target); for ($$attempt = 0; $$attempt -lt 8; $$attempt++) { $$running = @(Get-Process -Name agent-browser -ErrorAction SilentlyContinue | Where-Object { try { [IO.Path]::GetFullPath($$_.Path) -eq $$target } catch { $$false } }); if ($$running.Count -eq 0) { exit 0 }; foreach ($$process in $$running) { Stop-Process -Id $$process.Id -Force -ErrorAction SilentlyContinue }; Start-Sleep -Milliseconds 250 }; exit 1 }" "$INSTDIR\agent-browser.exe"`
     Pop $R0
     Pop $R1
 
