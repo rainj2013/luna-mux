@@ -16,7 +16,7 @@
 
 <div align="center">English · <a href="README.md">简体中文</a></div>
 
-Luna Mux brings project terminals, coding agents, remote machines, and managed browsers into one workspace. A Session persists its project root, local or SSH Panes, and recursive split layout. Codex, Claude Code, and other agents still run in ordinary terminals, while gaining status notifications, browser tooling, and narrowly scoped control over Luna Mux itself.
+Luna Mux brings project terminals, coding agents, remote machines, and browser automation into one workspace. A Session persists its project root, local or SSH Panes, and recursive split layout. Codex, Claude Code, and other agents still run in ordinary terminals, while gaining status notifications, browser tooling, and narrowly scoped control over Luna Mux itself.
 
 > [!NOTE]
 > Luna Mux is currently a **0.1.0 preview** and is not recommended as unattended production infrastructure.
@@ -50,14 +50,14 @@ Luna MCP gives agents a constrained way to operate Luna Mux itself, instead of m
 
 Credentials, private-key contents, and API keys are never exposed through MCP.
 
-## Managed browsers
+## Browser automation
 
-Each Session can own one isolated managed Chrome, running as a standard external window that the user can take over at any time.
+Each Session can own one isolated Chrome that agents use to automate web tasks. It runs as a standard external window that the user can take over at any time.
 
 - Browsers are not terminal Panes and do not participate in split layouts.
 - Agents use a native `agent-browser` MCP for snapshots, interaction, waits, tabs, screenshots, console inspection, network requests, and HAR capture.
 - Chrome starts lazily on the first real browser tool call, then the same Runtime and page are reused.
-- Remote SSH agents reach the desktop's managed Chrome through an authenticated proxy; raw CDP is not exposed to the remote host.
+- Remote SSH agents reach the desktop's Chrome through an authenticated proxy; raw CDP is not exposed to the remote host.
 
 ## SSH, SFTP, and port forwarding
 

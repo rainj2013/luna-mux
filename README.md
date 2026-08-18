@@ -16,7 +16,7 @@
 
 <div align="center"><a href="README.en.md">English</a> · 简体中文</div>
 
-Luna Mux 把项目终端、Coding Agent、远程服务器和受管浏览器放进同一个工作空间。一个 Session 保存项目目录、多个本地或 SSH 窗格及其分屏布局；Codex、Claude Code 等 Agent 仍运行在普通终端中，但能获得状态提醒、浏览器工具，以及在明确权限边界内控制 Luna Mux 的能力。
+Luna Mux 把项目终端、Coding Agent、远程服务器和浏览器自动化整合进同一个工作空间。一个 Session 保存项目目录、多个本地或 SSH 窗格及其分屏布局；Codex、Claude Code 等 Agent 仍运行在普通终端中，但能获得状态提醒、浏览器工具，以及在明确权限边界内控制 Luna Mux 的能力。
 
 > [!NOTE]
 > Luna Mux 当前为 **0.1.0 预览版**，暂不建议作为无人值守的生产基础设施。
@@ -48,9 +48,9 @@ Luna MCP 让终端里的 Agent 在受限范围内操作 Luna Mux 自身，而不
 - 读取安全的连接摘要，修改主题和终端外观。
 - 关闭 Runtime、启动传输或隧道等重要副作用可要求桌面确认；凭据、私钥和 API Key 不通过 MCP 暴露。
 
-## 受管浏览器
+## 浏览器自动化
 
-每个 Session 可以拥有一个隔离的受管 Chrome，以标准外部窗口运行，用户随时可以接管。
+每个 Session 可以拥有一个隔离的 Chrome，Agent 用它自动化网页操作。浏览器以标准外部窗口运行，用户随时可以接管。
 
 - 浏览器不是终端 Pane，不参与分屏布局。
 - Agent 通过原生 `agent-browser` MCP 操作网页，支持快照、交互、等待、标签页、截图、控制台、网络请求和 HAR。
