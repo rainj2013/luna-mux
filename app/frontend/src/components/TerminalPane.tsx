@@ -25,6 +25,12 @@ const terminalSnapshots = new Map<string, TerminalSnapshot>()
 const discardedTerminalSnapshots = new Set<string>()
 const mountedTerminalPanes = new Set<string>()
 
+function shouldOpenTerminalLink(event: MouseEvent): boolean {
+  if (event.button !== 0) return false
+  const commandClick = event.ctrlKey || (window.api.platform === 'darwin' && event.metaKey)
+  return commandClick ? event.detail === 1 : event.detail === 2
+}
+
 export function discardTerminalSnapshot(paneId: string): void {
   terminalSnapshots.delete(paneId)
   if (mountedTerminalPanes.has(paneId)) discardedTerminalSnapshots.add(paneId)
@@ -209,7 +215,10 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     fitAddon.current = fit
     term.loadAddon(fit)
     term.loadAddon(serialize)
-    term.loadAddon(new WebLinksAddon((_event, uri) => { void window.api.system.openExternal(uri).catch((error) => console.warn('Failed to open terminal link', error)) }))
+    term.loadAddon(new WebLinksAddon((event, uri) => {
+      if (!shouldOpenTerminalLink(event)) return
+      void window.api.system.openExternal(uri).catch((error) => console.warn('Failed to open terminal link', error))
+    }))
     if (restorableSnapshot) {
       outputCursor.current = restorableSnapshot.outputCursor
       renderedOutputCursor.current = restorableSnapshot.outputCursor
