@@ -31,6 +31,11 @@ function shouldOpenTerminalLink(event: MouseEvent): boolean {
   return commandClick ? event.detail === 1 : event.detail === 2
 }
 
+function openTerminalLink(event: MouseEvent, uri: string): void {
+  if (!shouldOpenTerminalLink(event)) return
+  void window.api.system.openExternal(uri).catch((error) => console.warn('Failed to open terminal link', error))
+}
+
 export function discardTerminalSnapshot(paneId: string): void {
   terminalSnapshots.delete(paneId)
   if (mountedTerminalPanes.has(paneId)) discardedTerminalSnapshots.add(paneId)
@@ -207,6 +212,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     const term = new Terminal({
       cursorBlink: true, convertEol: false, allowTransparency: true, fontFamily: settings.fontFamily,
       fontSize: settings.fontSize, lineHeight: 1.25, scrollback: 5000,
+      linkHandler: { activate: openTerminalLink },
       ...(restorableSnapshot ? { cols: restorableSnapshot.cols, rows: restorableSnapshot.rows } : {}),
       theme: { background: rendererBackground, foreground: settings.foregroundColor, cursor: '#78d64b', ...terminalSelectionTheme }
     })
@@ -215,10 +221,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     fitAddon.current = fit
     term.loadAddon(fit)
     term.loadAddon(serialize)
-    term.loadAddon(new WebLinksAddon((event, uri) => {
-      if (!shouldOpenTerminalLink(event)) return
-      void window.api.system.openExternal(uri).catch((error) => console.warn('Failed to open terminal link', error))
-    }))
+    term.loadAddon(new WebLinksAddon(openTerminalLink))
     if (restorableSnapshot) {
       outputCursor.current = restorableSnapshot.outputCursor
       renderedOutputCursor.current = restorableSnapshot.outputCursor
