@@ -40,7 +40,7 @@ There is no special “Agent Pane.” Run `codex` or `claude` manually in any te
 
 ## Let agents control Luna Mux
 
-Luna MCP lets agents operate Luna Mux itself directly, instead of mistaking application operations for browser tasks. Agents can:
+Luna MCP lets agents operate Luna Mux itself directly. Agents can:
 
 - discover Sessions, Panes, Terminal Runtimes, and other managed agents;
 - create Panes, update layouts, read bounded terminal output, and write terminal input;

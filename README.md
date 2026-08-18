@@ -40,7 +40,7 @@ Luna Mux 把项目终端、Coding Agent、远程服务器和浏览器自动化�
 
 ## Agent 控制 Luna Mux
 
-Luna MCP 让终端里的 Agent 可以直接操作 Luna Mux 自身，而不是把应用操作误当成浏览器操作。Agent 可以：
+Luna MCP 让终端里的 Agent 可以直接操作 Luna Mux 自身。Agent 可以：
 
 - 发现 Session、Pane、Terminal Runtime 和其他受管 Agent。
 - 创建 Pane、修改布局、读取有界终端输出并写入输入。
