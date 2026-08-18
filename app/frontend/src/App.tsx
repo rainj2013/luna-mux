@@ -1894,7 +1894,7 @@ function MuxLayout({ node, panes, activePaneId, settings, backgroundImage, agent
           <button className="icon-button danger" title={t('app.closePane')} aria-label={t('app.closePane')} onClick={() => onClose(pane)}><X size={14} /></button>
         </div>
       </header>
-      <div className="terminal-region"><TerminalPane key={pane.key} paneId={pane.id} targetId={pane.targetId} ref={(terminalPane) => { if (terminalPane) terminalPaneRefs.current.set(pane.key, terminalPane); else terminalPaneRefs.current.delete(pane.key) }} runtimeId={pane.runtimeId} connected={pane.status === 'connected'} visible={maximizedPaneId ? pane.id === maximizedPaneId : active} settings={settings} backgroundImage={backgroundImage} stoppedState={stoppedState} onAgentAction={() => onTerminalAgentAction(pane)} onRuntimeError={(runtimeId, message) => { onRuntimeError(pane, runtimeId, message) }} onStart={() => onReconnect(pane)} onOpenSettings={onOpenSettings} /></div>
+      <div className="terminal-region"><TerminalPane key={pane.key} paneId={pane.id} targetId={pane.targetId} ref={(terminalPane) => { if (terminalPane) terminalPaneRefs.current.set(pane.key, terminalPane); else terminalPaneRefs.current.delete(pane.key) }} runtimeId={pane.runtimeId} connected={pane.status === 'connected'} connecting={pane.status === 'connecting'} visible={maximizedPaneId ? pane.id === maximizedPaneId : active} settings={settings} backgroundImage={backgroundImage} stoppedState={stoppedState} onAgentAction={() => onTerminalAgentAction(pane)} onRuntimeError={(runtimeId, message) => { onRuntimeError(pane, runtimeId, message) }} onStart={() => onReconnect(pane)} onOpenSettings={onOpenSettings} /></div>
     </section>
   }
   const direction = node.direction

@@ -88,6 +88,7 @@ interface TerminalPaneProps {
   targetId: string
   runtimeId?: string
   connected: boolean
+  connecting: boolean
   visible: boolean
   settings: TerminalSettings
   backgroundImage: string
@@ -102,7 +103,7 @@ interface TerminalPaneProps {
   onOpenSettings?: () => void
 }
 
-export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function TerminalPane({ paneId, targetId, runtimeId, connected, visible, settings, backgroundImage, stoppedState, onAgentAction, onRuntimeError, onStart, onOpenSettings }, ref): React.JSX.Element {
+export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function TerminalPane({ paneId, targetId, runtimeId, connected, connecting, visible, settings, backgroundImage, stoppedState, onAgentAction, onRuntimeError, onStart, onOpenSettings }, ref): React.JSX.Element {
   const { t } = useI18n()
   const container = useRef<HTMLDivElement>(null)
   const terminal = useRef<Terminal | null>(null)
@@ -122,6 +123,8 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
   onRuntimeErrorRef.current = onRuntimeError
   const reportedInputErrorRuntimeId = useRef('')
   const connectedRef = useRef(connected)
+  const connectingRef = useRef(connecting)
+  const pendingRuntimeInput = useRef(new Map<string, string[]>())
   const boundRuntimeId = useRef<string | undefined>(undefined)
   const outputCursor = useRef(0)
   const renderedOutputCursor = useRef(0)
@@ -139,9 +142,28 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     getRecentLines: (maxLines, maxChars) => terminal.current ? recentTerminalText(terminal.current, maxLines, maxChars) : ''
   }), [])
 
+  const reportRuntimeInputError = (failedRuntimeId: string, error: unknown): void => {
+    if (reportedInputErrorRuntimeId.current === failedRuntimeId) return
+    reportedInputErrorRuntimeId.current = failedRuntimeId
+    const message = error instanceof Error ? error.message : String(error)
+    onRuntimeErrorRef.current?.(failedRuntimeId, message)
+  }
+
   useEffect(() => {
+    const previousRuntimeId = runtimeIdRef.current
     runtimeIdRef.current = runtimeId
     connectedRef.current = connected
+    connectingRef.current = connecting
+    if (previousRuntimeId && previousRuntimeId !== runtimeId) pendingRuntimeInput.current.delete(previousRuntimeId)
+    if (runtimeId && connected) {
+      const pending = pendingRuntimeInput.current.get(runtimeId)
+      pendingRuntimeInput.current.delete(runtimeId)
+      if (pending?.length) {
+        void window.api.terminalRuntimes.write(runtimeId, pending.join('')).catch((error) => reportRuntimeInputError(runtimeId, error))
+      }
+    } else if (runtimeId && !connecting) {
+      pendingRuntimeInput.current.delete(runtimeId)
+    }
     if (runtimeId) setStarted(true)
     const term = terminal.current
     if (!term || !runtimeId || boundRuntimeId.current === runtimeId) return
@@ -153,11 +175,12 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
       fitAddon.current?.fit()
       void window.api.terminalRuntimes.resize(runtimeId, term.cols, term.rows)
     })
-  }, [runtimeId, connected, t])
+  }, [runtimeId, connected, connecting, t])
 
   useEffect(() => {
     connectedRef.current = connected
-  }, [connected])
+    connectingRef.current = connecting
+  }, [connected, connecting])
 
   useEffect(() => {
     if (!connected || !visible || !runtimeId) return
@@ -206,13 +229,6 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     let lastTerminalInput = { data: '', timestamp: 0 }
     const pendingImePunctuation = new Set<PendingImePunctuation>()
 
-    const reportRuntimeInputError = (failedRuntimeId: string, error: unknown): void => {
-      if (reportedInputErrorRuntimeId.current === failedRuntimeId) return
-      reportedInputErrorRuntimeId.current = failedRuntimeId
-      const message = error instanceof Error ? error.message : String(error)
-      onRuntimeErrorRef.current?.(failedRuntimeId, message)
-    }
-
     const writeTerminalInput = (data: string): void => {
       lastTerminalInput = { data, timestamp: performance.now() }
       for (const pending of pendingImePunctuation) {
@@ -224,6 +240,10 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
       const activeRuntimeId = runtimeIdRef.current
       if (connectedRef.current && activeRuntimeId) {
         void window.api.terminalRuntimes.write(activeRuntimeId, data).catch((error) => reportRuntimeInputError(activeRuntimeId, error))
+      } else if (connectingRef.current && activeRuntimeId) {
+        const pending = pendingRuntimeInput.current.get(activeRuntimeId) ?? []
+        pending.push(data)
+        pendingRuntimeInput.current.set(activeRuntimeId, pending)
       }
     }
 
@@ -399,6 +419,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
         }
       }
       if (paused && runtimeIdRef.current) void window.api.terminalRuntimes.flow(runtimeIdRef.current, false)
+      pendingRuntimeInput.current.clear()
       for (const pending of pendingImePunctuation) window.clearTimeout(pending.timer)
       pendingImePunctuation.clear()
       textarea?.removeEventListener('beforeinput', rememberImeTextareaBeforeInput)

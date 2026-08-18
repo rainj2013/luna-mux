@@ -1043,10 +1043,14 @@ mod tests {
     }
 
     fn request(command: Option<&str>) -> TerminalRuntimeCreateRequest {
+        request_for_target(powershell_test_target_id(), command)
+    }
+
+    fn request_for_target(target_id: &str, command: Option<&str>) -> TerminalRuntimeCreateRequest {
         TerminalRuntimeCreateRequest {
             runtime_id: None,
             context: None,
-            target_id: powershell_test_target_id().into(),
+            target_id: target_id.into(),
             title: Some("PTY test".into()),
             cwd: None,
             command: command.map(str::to_owned),
@@ -1060,11 +1064,29 @@ mod tests {
 
     #[tokio::test]
     async fn powershell_runtime_preserves_unicode_and_exits() {
+        let mut target_ids = Vec::new();
+        if windows_powershell7_executable().is_some() {
+            target_ids.push(POWERSHELL_TARGET);
+        }
+        if windows_powershell5_executable().is_some() {
+            target_ids.push(POWERSHELL5_TARGET);
+        }
+        assert!(!target_ids.is_empty(), "no PowerShell target is available");
+
+        for target_id in target_ids {
+            assert_powershell_runtime_preserves_unicode_and_exits(target_id).await;
+        }
+    }
+
+    async fn assert_powershell_runtime_preserves_unicode_and_exits(target_id: &str) {
         let backend = InProcessLocalPtyTerminalBackend::new();
         let runtime = backend
-            .create(request(Some("Write-Output 'LunaMux local ✓'; exit 0")))
+            .create(request_for_target(
+                target_id,
+                Some("Write-Output 'LunaMux local ✓'; exit 0"),
+            ))
             .await
-            .expect("create PowerShell runtime");
+            .unwrap_or_else(|error| panic!("create {target_id} runtime: {error}"));
         let mut cursor = 0;
         let mut collected = String::new();
         for _ in 0..100 {
@@ -1091,7 +1113,7 @@ mod tests {
         }
         assert!(
             collected.contains("LunaMux local"),
-            "output was: {collected:?}"
+            "{target_id} output was: {collected:?}"
         );
         assert_eq!(
             backend
