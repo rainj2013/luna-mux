@@ -82,6 +82,7 @@ use tunnels::TunnelManager;
 pub use agent_hooks::try_run_hook_forwarder;
 pub use browser_runtime::try_run_mcp_browser;
 pub use doctor::try_run_agent_check;
+pub use doctor::try_run_wsl_interop_probe;
 pub use luna_mcp_proxy::try_run_luna_mcp_proxy;
 
 #[cfg(target_os = "windows")]

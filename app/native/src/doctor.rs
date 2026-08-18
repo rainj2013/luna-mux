@@ -52,6 +52,14 @@ pub fn try_run_agent_check(args: &[String]) -> Option<i32> {
     Some(if report.ok { 0 } else { 1 })
 }
 
+pub fn try_run_wsl_interop_probe(args: &[String]) -> Option<i32> {
+    if args.get(1).map(String::as_str) != Some("wsl-interop-probe") {
+        return None;
+    }
+    println!("luna-mux-wsl-interop-ok");
+    Some(0)
+}
+
 pub fn run_report(filter: Option<&str>) -> AgentCheckReport {
     run_report_with_agents(filter, &[])
 }
@@ -77,7 +85,10 @@ fn run(filter: Option<&str>, managed_agents: &[DoctorManagedAgent]) -> Vec<Agent
     checks.push(check_runtime_environment_files(filter, managed_agents));
     checks.push(check_managed_agents(filter, managed_agents));
     #[cfg(windows)]
-    checks.push(check_wsl_distributions(filter));
+    {
+        checks.push(check_wsl_distributions(filter));
+        checks.push(check_wsl_interop_executable(filter));
+    }
     checks
 }
 
@@ -396,6 +407,182 @@ fn check_wsl_distributions(filter: Option<&str>) -> AgentCheck {
             detail: distributions.join(", "),
         }
     }
+}
+
+#[cfg(windows)]
+fn check_wsl_interop_executable(filter: Option<&str>) -> AgentCheck {
+    let executable = match std::env::current_exe() {
+        Ok(path) => path,
+        Err(error) => {
+            return AgentCheck {
+                name: "wsl_interop_exe".into(),
+                status: "error".into(),
+                detail: format!("current executable unavailable: {error}"),
+            };
+        }
+    };
+    let wsl_path = match windows_executable_wsl_path(&executable) {
+        Ok(path) => path,
+        Err(error) => {
+            return AgentCheck {
+                name: "wsl_interop_exe".into(),
+                status: "error".into(),
+                detail: error,
+            };
+        }
+    };
+    let distributions = match wsl_distributions(filter) {
+        Ok(distributions) if distributions.is_empty() => {
+            return AgentCheck {
+                name: "wsl_interop_exe".into(),
+                status: "warn".into(),
+                detail: "no WSL distributions found".into(),
+            };
+        }
+        Ok(distributions) => distributions,
+        Err(error) => {
+            return AgentCheck {
+                name: "wsl_interop_exe".into(),
+                status: "warn".into(),
+                detail: error,
+            };
+        }
+    };
+
+    let mut details = Vec::new();
+    let mut errors = Vec::new();
+    for distribution in distributions {
+        match probe_wsl_path_exists(&distribution, &wsl_path) {
+            Ok(true) => {}
+            Ok(false) => {
+                errors.push(format!(
+                    "{distribution}: Windows executable not visible in WSL: {wsl_path}"
+                ));
+                continue;
+            }
+            Err(error) => {
+                errors.push(format!("{distribution}: {error}"));
+                continue;
+            }
+        }
+        match probe_wsl_windows_executable(&distribution, &wsl_path) {
+            Ok(()) => details.push(format!(
+                "{distribution}: exists and runs from WSL ({wsl_path})"
+            )),
+            Err(error) => errors.push(format!(
+                "{distribution}: exists but could not be executed from WSL ({wsl_path}): {error}"
+            )),
+        }
+    }
+    if errors.is_empty() {
+        AgentCheck {
+            name: "wsl_interop_exe".into(),
+            status: "ok".into(),
+            detail: details.join("; "),
+        }
+    } else {
+        AgentCheck {
+            name: "wsl_interop_exe".into(),
+            status: "error".into(),
+            detail: errors.join("\n"),
+        }
+    }
+}
+
+#[cfg(windows)]
+fn wsl_distributions(filter: Option<&str>) -> Result<Vec<String>, String> {
+    let output = match crate::local_pty_backend::windows_no_window_command("wsl.exe")
+        .args(["--list", "--quiet"])
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) => return Err(format!("wsl.exe unavailable: {error}")),
+    };
+    if !output.status.success() {
+        return Err(wsl_failure_detail(&output.stderr, &output.stdout));
+    }
+    let distributions = parse_wsl_distributions(&output.stdout, filter);
+    if distributions.is_empty() {
+        return Err("no WSL distributions found".into());
+    }
+    Ok(distributions)
+}
+
+#[cfg(windows)]
+fn probe_wsl_path_exists(distribution: &str, wsl_path: &str) -> Result<bool, String> {
+    let command = format!(
+        "test -e {}",
+        crate::shell_quoting::posix_shell_quote(wsl_path)
+    );
+    let output = crate::local_pty_backend::windows_no_window_command("wsl.exe")
+        .args([
+            "--distribution",
+            distribution,
+            "--",
+            "/bin/sh",
+            "-lc",
+            command.as_str(),
+        ])
+        .output()
+        .map_err(|error| format!("failed to run wsl.exe: {error}"))?;
+    Ok(output.status.success())
+}
+
+#[cfg(windows)]
+fn probe_wsl_windows_executable(distribution: &str, wsl_path: &str) -> Result<(), String> {
+    let command = format!(
+        "{} wsl-interop-probe",
+        crate::shell_quoting::posix_shell_quote(wsl_path)
+    );
+    let output = crate::local_pty_backend::windows_no_window_command("wsl.exe")
+        .args([
+            "--distribution",
+            distribution,
+            "--",
+            "/bin/sh",
+            "-lc",
+            command.as_str(),
+        ])
+        .output()
+        .map_err(|error| format!("failed to run wsl.exe: {error}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stdout = crate::local_pty_backend::decode_windows_command_output(&output.stdout);
+    let stderr = crate::local_pty_backend::decode_windows_command_output(&output.stderr);
+    let status = output
+        .status
+        .code()
+        .map(|code| code.to_string())
+        .unwrap_or_else(|| "unknown".into());
+    let mut detail = String::new();
+    for value in [stdout, stderr] {
+        let value = value.trim();
+        if !value.is_empty() {
+            if !detail.is_empty() {
+                detail.push(' ');
+            }
+            detail.push_str(value);
+        }
+    }
+    if detail.is_empty() {
+        detail = format!("WSL interop probe exited with status {status}");
+    } else {
+        detail = format!("{detail} (status {status})");
+    }
+    Err(normalize_wsl_detail(&detail))
+}
+
+#[cfg(windows)]
+fn windows_executable_wsl_path(executable: &Path) -> Result<String, String> {
+    let value = executable.to_string_lossy();
+    let bytes = value.as_bytes();
+    if bytes.len() < 3 || bytes[1] != b':' || !matches!(bytes[2], b'\\' | b'/') {
+        return Err("current executable is not on a Windows local drive".into());
+    }
+    let drive = (bytes[0] as char).to_ascii_lowercase();
+    Ok(format!("/mnt/{drive}/{}", value[3..].replace('\\', "/")))
 }
 
 #[cfg(windows)]

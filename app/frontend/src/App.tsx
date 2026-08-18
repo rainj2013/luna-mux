@@ -2381,6 +2381,7 @@ function formatActivity(value?: string | null): string {
 function readableDiagnosticDetail(name: string, detail: string): string {
   if (name === 'local_agents') return detail.replace(/;\s*/g, '\n')
   if (name === 'wsl_distributions') return detail.replace(/,\s*/g, '\n')
+  if (name === 'wsl_interop_exe') return detail.replace(/;\s*/g, '\n')
   return detail
 }
 
@@ -2430,6 +2431,7 @@ function DiagnosticsPanel({ onError }: { onError(message: string): void }): Reac
     if (name === 'runtime_env_files') return t('app.diagnosticsCheckRuntimeEnv')
     if (name === 'managed_agents') return t('app.diagnosticsCheckManagedAgents')
     if (name === 'wsl_distributions') return t('app.diagnosticsCheckWsl')
+    if (name === 'wsl_interop_exe') return t('app.diagnosticsCheckWslInterop')
     return name
   }
   const toggleAgent = (agentId: string): void => setExpandedAgents((current) => ({ ...current, [agentId]: !current[agentId] }))
@@ -2512,6 +2514,11 @@ function DiagnosticsPanel({ onError }: { onError(message: string): void }): Reac
           </div>
         })}
       </div>
+    }
+    if (check.name === 'wsl_interop_exe') {
+      const detail = readableDiagnosticDetail(check.name, check.detail) || t('app.diagnosticsNoDetail')
+      const repair = check.status === 'error' ? t('app.diagnosticsWslInteropRepair') : ''
+      return <code className="diagnostics-check-detail">{repair ? `${detail}\n${repair}` : detail}</code>
     }
     return <code className="diagnostics-check-detail">{readableDiagnosticDetail(check.name, check.detail) || t('app.diagnosticsNoDetail')}</code>
   }

@@ -8,6 +8,9 @@ fn main() {
     if let Some(code) = luna_mux_lib::try_run_agent_check(&args) {
         std::process::exit(code);
     }
+    if let Some(code) = luna_mux_lib::try_run_wsl_interop_probe(&args) {
+        std::process::exit(code);
+    }
     if let Some(code) = luna_mux_lib::try_run_hook_forwarder(&args) {
         std::process::exit(code);
     }
