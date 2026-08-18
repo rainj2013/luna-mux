@@ -531,6 +531,7 @@ export default {
   "terminal.sshTerminalDisconnected": "远程终端已断开",
   "terminal.reconnectSshTerminalToContinue": "重新连接 SSH 终端后即可继续使用此窗格",
   "terminal.reconnectSshTerminal": "重新连接",
+  "terminal.enterCredentialsAgain": "重新输入凭据",
   "terminal.localTerminalStopped": "本地终端未运行",
   "terminal.startLocalTerminalToContinue": "启动本地终端后即可继续使用此窗格",
   "terminal.startLocalTerminal": "启动终端",

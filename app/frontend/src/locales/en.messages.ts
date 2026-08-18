@@ -531,6 +531,7 @@ export default {
   "terminal.sshTerminalDisconnected": "Remote terminal disconnected",
   "terminal.reconnectSshTerminalToContinue": "Reconnect the SSH terminal to continue in this pane",
   "terminal.reconnectSshTerminal": "Reconnect",
+  "terminal.enterCredentialsAgain": "Enter credentials again",
   "terminal.localTerminalStopped": "Local terminal is not running",
   "terminal.startLocalTerminalToContinue": "Start the local terminal to continue in this pane",
   "terminal.startLocalTerminal": "Start terminal",
