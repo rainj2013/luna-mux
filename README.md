@@ -40,7 +40,7 @@ Luna Mux 把项目终端、Coding Agent、远程服务器和浏览器自动化�
 
 ## Agent 控制 Luna Mux
 
-Luna MCP 让终端里的 Agent 在受限范围内操作 Luna Mux 自身，而不是把应用操作误当成浏览器操作。在当前 Session 内，Agent 可以：
+Luna MCP 让终端里的 Agent 可以直接操作 Luna Mux 自身，而不是把应用操作误当成浏览器操作。Agent 可以：
 
 - 发现 Session、Pane、Terminal Runtime 和其他受管 Agent。
 - 创建 Pane、修改布局、读取有界终端输出并写入输入。
@@ -52,7 +52,7 @@ Luna MCP 让终端里的 Agent 在受限范围内操作 Luna Mux 自身，而不
 
 每个 Session 可以拥有一个隔离的 Chrome，Agent 用它自动化网页操作。浏览器以标准外部窗口运行，用户随时可以接管。
 
-- 浏览器不是终端 Pane，不参与分屏布局。
+- 浏览器不是终端 Pane，也不并入分屏布局——它保持独立的满屏窗口，更方便浏览和操作。
 - Agent 通过原生 `agent-browser` MCP 操作网页，支持快照、交互、等待、标签页、截图、控制台、网络请求和 HAR。
 - 首次真正使用时按需启动 Chrome，后续复用同一 Runtime 和页面。
 - 远程 SSH Agent 通过认证代理使用本机 Chrome，不向远端暴露原始 CDP 端口。

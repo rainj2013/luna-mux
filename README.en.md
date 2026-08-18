@@ -40,7 +40,7 @@ There is no special “Agent Pane.” Run `codex` or `claude` manually in any te
 
 ## Let agents control Luna Mux
 
-Luna MCP gives agents a constrained way to operate Luna Mux itself, instead of mistaking application operations for browser tasks. Within their current Session, agents can:
+Luna MCP lets agents operate Luna Mux itself directly, instead of mistaking application operations for browser tasks. Agents can:
 
 - discover Sessions, Panes, Terminal Runtimes, and other managed agents;
 - create Panes, update layouts, read bounded terminal output, and write terminal input;
@@ -54,7 +54,7 @@ Credentials, private-key contents, and API keys are never exposed through MCP.
 
 Each Session can own one isolated Chrome that agents use to automate web tasks. It runs as a standard external window that the user can take over at any time.
 
-- Browsers are not terminal Panes and do not participate in split layouts.
+- Browsers are not terminal Panes and don't join the split layout — they stay a full, standalone window that's easier to browse and operate.
 - Agents use a native `agent-browser` MCP for snapshots, interaction, waits, tabs, screenshots, console inspection, network requests, and HAR capture.
 - Chrome starts lazily on the first real browser tool call, then the same Runtime and page are reused.
 - Remote SSH agents reach the desktop's Chrome through an authenticated proxy; raw CDP is not exposed to the remote host.
