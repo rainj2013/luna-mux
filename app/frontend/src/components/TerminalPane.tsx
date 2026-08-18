@@ -113,10 +113,11 @@ interface TerminalPaneProps {
   onAgentAction?: () => void
   onRuntimeError?: (runtimeId: string, message: string) => void
   onStart?: () => void
+  onClose?: () => void
   onOpenSettings?: () => void
 }
 
-export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function TerminalPane({ paneId, targetId, runtimeId, connected, connecting, visible, settings, backgroundImage, stoppedState, onAgentAction, onRuntimeError, onStart, onOpenSettings }, ref): React.JSX.Element {
+export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function TerminalPane({ paneId, targetId, runtimeId, connected, connecting, visible, settings, backgroundImage, stoppedState, onAgentAction, onRuntimeError, onStart, onClose, onOpenSettings }, ref): React.JSX.Element {
   const { t } = useI18n()
   const container = useRef<HTMLDivElement>(null)
   const terminal = useRef<Terminal | null>(null)
@@ -586,7 +587,10 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     <div className="terminal-stopped-icon">{stoppedState.tone === 'error' ? <ShieldAlert size={24} /> : <span>&gt;_</span>}</div>
     <strong>{stoppedState.title}</strong>
     <span className="terminal-stopped-description">{stoppedState.description}</span>
-    {onStart && <button className="terminal-connect-button" onClick={onStart}><ActionIcon size={15} />{stoppedState.actionLabel}</button>}
+    <div className="terminal-stopped-actions">
+      {onStart && <button type="button" className="terminal-connect-button" onClick={onStart}><ActionIcon size={15} />{stoppedState.actionLabel}</button>}
+      {onClose && <button type="button" className="terminal-close-button" onClick={onClose}><X size={15} />{t('app.closePane')}</button>}
+    </div>
   </div>
 
   if (!shouldRenderTerminal) return <div className="terminal-empty">{stoppedContent}</div>
