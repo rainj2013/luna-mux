@@ -34,25 +34,25 @@ Luna Mux 把项目终端、Coding Agent、远程服务器和浏览器自动化�
 没有特殊的「Agent 窗格」。你可以在任意普通终端里手动运行 `codex` 或 `claude`，也可以使用内置启动入口。
 
 - 统一显示 Agent 的工作、等待输入、等待权限、完成和错误状态。
-- 在侧边栏、窗格边框和桌面通知中标记需要关注的 Pane，点击通知可回到对应位置。
+- 在侧边栏、窗格边框和桌面通知中标记需要关注的窗格，点击通知可回到对应位置。
 - Agent 环境视图显示 Adapter、Hook、Luna MCP 和 Browser MCP 的真实健康状态。
 - Agent 生命周期跟随应用，退出时关闭受管终端、Agent 和 Chrome。
 
 ## Agent 控制 Luna Mux
 
-Luna MCP 让终端里的 Agent 可以直接操作 Luna Mux 自身。Agent 可以：
+Luna MCP 向终端里的 Agent 开放 Luna Mux 的完整功能，覆盖 Session、窗格、终端、Agent、连接、设置、诊断、传输和隧道等。Agent 可以：
 
-- 发现 Session、Pane、Terminal Runtime 和其他受管 Agent。
-- 创建 Pane、修改布局、读取有界终端输出并写入输入。
+- 发现 Session、窗格、Terminal Runtime 和其他受管 Agent。
+- 创建窗格、修改布局、读取有界终端输出并写入输入。
 - 查询 Agent 状态、投递任务或发送中断。
-- 读取安全的连接摘要，修改主题和终端外观。
+- 读取安全的连接摘要，修改主题和终端外观，运行内置诊断。
 - 关闭 Runtime、启动传输或隧道等重要副作用可要求桌面确认；凭据、私钥和 API Key 不通过 MCP 暴露。
 
 ## 浏览器自动化
 
 每个 Session 可以拥有一个隔离的 Chrome，Agent 用它自动化网页操作。浏览器以标准外部窗口运行，用户随时可以接管。
 
-- 浏览器不是终端 Pane，也不并入分屏布局——它保持独立的满屏窗口，更方便浏览和操作。
+- 浏览器不是终端窗格，也不并入分屏布局——它保持独立的满屏窗口，更方便浏览和操作。
 - Agent 通过原生 `agent-browser` MCP 操作网页，支持快照、交互、等待、标签页、截图、控制台、网络请求和 HAR。
 - 首次真正使用时按需启动 Chrome，后续复用同一 Runtime 和页面。
 - 远程 SSH Agent 通过认证代理使用本机 Chrome，不向远端暴露原始 CDP 端口。

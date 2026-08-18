@@ -40,12 +40,12 @@ There is no special “Agent Pane.” Run `codex` or `claude` manually in any te
 
 ## Let agents control Luna Mux
 
-Luna MCP lets agents operate Luna Mux itself directly. Agents can:
+Luna MCP exposes Luna Mux's full functionality to agents in the terminal, covering Sessions, Panes, terminals, agents, connections, settings, diagnostics, transfers, and tunnels. Agents can:
 
 - discover Sessions, Panes, Terminal Runtimes, and other managed agents;
 - create Panes, update layouts, read bounded terminal output, and write terminal input;
 - inspect agent state, send tasks, and interrupt managed agents;
-- read safe connection summaries and update themes or terminal appearance;
+- read safe connection summaries, update themes or terminal appearance, and run built-in diagnostics;
 - close Runtimes or start transfers and tunnels, important side effects that may still require desktop approval.
 
 Credentials, private-key contents, and API keys are never exposed through MCP.
