@@ -4,7 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { SerializeAddon } from '@xterm/addon-serialize'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
-import { ChevronDown, ChevronUp, ClipboardPaste, Copy, Palette, Play, Search, X } from 'lucide-react'
+import { ChevronDown, ChevronUp, ClipboardPaste, Copy, KeyRound, Palette, Play, RefreshCw, Search, ShieldAlert, X } from 'lucide-react'
 import type { TerminalRuntimeEvent, TerminalSettings } from '../types'
 import { colorWithOpacity } from '../terminal-style'
 import { createTerminalOutputWriter, type TerminalOutputWriter } from '../terminal-output-writer'
@@ -107,6 +107,8 @@ interface TerminalPaneProps {
     title: string
     description: string
     actionLabel: string
+    actionIcon: 'credentials' | 'retry' | 'start'
+    tone?: 'error'
   }
   onAgentAction?: () => void
   onRuntimeError?: (runtimeId: string, message: string) => void
@@ -579,7 +581,15 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     setSearchResult({ index: activeSearchIndex.current, count })
   }
 
-  if (!shouldRenderTerminal) return <div className="terminal-empty"><div className="terminal-mark">&gt;_</div><strong>{stoppedState.title}</strong><span>{stoppedState.description}</span>{onStart && <button className="terminal-connect-button" onClick={onStart}><Play size={15} />{stoppedState.actionLabel}</button>}</div>
+  const ActionIcon = stoppedState.actionIcon === 'credentials' ? KeyRound : stoppedState.actionIcon === 'retry' ? RefreshCw : Play
+  const stoppedContent = <div className={`terminal-stopped-state ${stoppedState.tone ?? ''}`} role={stoppedState.tone === 'error' ? 'alert' : 'status'}>
+    <div className="terminal-stopped-icon">{stoppedState.tone === 'error' ? <ShieldAlert size={24} /> : <span>&gt;_</span>}</div>
+    <strong>{stoppedState.title}</strong>
+    <span className="terminal-stopped-description">{stoppedState.description}</span>
+    {onStart && <button className="terminal-connect-button" onClick={onStart}><ActionIcon size={15} />{stoppedState.actionLabel}</button>}
+  </div>
+
+  if (!shouldRenderTerminal) return <div className="terminal-empty">{stoppedContent}</div>
   return <div className="terminal-shell" onContextMenu={(event) => { event.preventDefault(); setContextMenu({ x: Math.max(4, Math.min(event.clientX, window.innerWidth - 210)), y: Math.max(4, Math.min(event.clientY, window.innerHeight - 210)), hasSelection: Boolean(terminal.current?.hasSelection()) }) }}>
     {searchOpen && <form className="terminal-search" onSubmit={(event) => { event.preventDefault(); search() }}>
       <Search size={14} /><input ref={searchInput} value={query} aria-label={t('terminal.searchTerminal')} onChange={(event) => { setQuery(event.target.value); search(event.target.value, false, true) }} onKeyDown={(event) => { if (event.key === 'Escape') setSearchOpen(false) }} />
@@ -589,6 +599,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
       <button type="button" className="icon-button" title={t('terminal.closeSearch')} onClick={() => setSearchOpen(false)}><X size={15} /></button>
     </form>}
     <div className="terminal" ref={container} />
+    {!connected && !connecting && <div className="terminal-stopped-overlay">{stoppedContent}</div>}
     {contextMenu && <div className="sidebar-context-menu terminal-context-menu" role="menu" style={{ left: contextMenu.x, top: contextMenu.y }} onPointerDown={(event) => event.stopPropagation()}>
       <button role="menuitem" disabled={!contextMenu.hasSelection} onClick={() => { const text = terminal.current?.getSelection(); setContextMenu(null); if (text) void window.api.system.writeClipboard(text).catch((error) => console.warn('Failed to copy terminal selection', error)) }}><Copy size={15} />{t('common.copy')}</button>
       <button role="menuitem" onClick={() => { setContextMenu(null); void pasteClipboardRef.current() }}><ClipboardPaste size={15} />{t('terminal.paste')}</button>
