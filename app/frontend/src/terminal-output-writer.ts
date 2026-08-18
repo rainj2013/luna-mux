@@ -1,7 +1,14 @@
 import type { IDisposable, Terminal } from '@xterm/xterm'
 
-const backgroundSameColumnSettleMs = 150
-const backgroundRelocateSettleMs = 500
+/**
+ * The terminal has one cursor in its buffer, but a repaint-heavy TUI uses
+ * that cursor for two different jobs: drawing a footer and accepting input.
+ * The buffer cursor must remain authoritative for input.  The renderer is
+ * therefore given a small, display-only shadow cursor while a DEC 2026 frame
+ * is being flushed.  A following DECTCEM show (`?25h`) is Codex's explicit
+ * "park the visible cursor here" signal and is copied to the shadow cursor.
+ */
+const parkFallbackMs = 50
 
 interface PendingWrite {
   data: string
@@ -15,11 +22,12 @@ interface PrivateBuffer {
 
 interface PrivateRenderer {
   renderRows(start: number, end: number): void
-  __lunaMuxCursorStabilized?: boolean
+  __lunaMuxShadowCursor?: boolean
 }
 
 interface PrivateRenderService {
   handleCursorMove(): void
+  dimensions?: { css?: { cell?: { width: number; height: number } } }
   _renderer?: { value?: PrivateRenderer }
 }
 
@@ -39,12 +47,19 @@ interface TerminalInternals {
 export interface TerminalOutputWriter {
   write(data: string, callback?: () => void): void
   markInteractive(submitting?: boolean): void
+  setComposing(active: boolean): void
   wrapRenderer(): void
   dispose(): void
 }
 
 function includesParameter(params: (number | number[])[], expected: number): boolean {
   return params.some((param) => Array.isArray(param) ? param.includes(expected) : param === expected)
+}
+
+function isDefaultCursorStyle(params: (number | number[])[]): boolean {
+  if (!params.length) return true
+  const first = params[0]
+  return (Array.isArray(first) ? first[0] : first) === 0
 }
 
 export function createTerminalOutputWriter(term: Terminal): TerminalOutputWriter {
@@ -55,32 +70,56 @@ export function createTerminalOutputWriter(term: Terminal): TerminalOutputWriter
   let scheduledTimer = 0
   let disposed = false
   let writeInProgress = false
-  let unsafeBatch = false
+  let composing = false
   let interactiveUntil = 0
-  let settleTimer = 0
-  let committedX = term.buffer.active.cursorX
-  let committedY = term.buffer.active.cursorY
-  let committedHidden = Boolean(internals._core?.coreService?.isCursorHidden)
+  let syncOutputActive = false
+  let altBufferActive = false
+  let codexRepaintDetected = false
+  let shadowActive = false
+  let parkPending = false
+  let parkTimer = 0
+  let cursorHidden = Boolean(internals._core?.coreService?.isCursorHidden)
+  let shadowHidden = cursorHidden
+  let shadowX = term.buffer.active.cursorX
+  let shadowY = term.buffer.active.cursorY
+  let frameSavedX = shadowX
+  let frameSavedY = shadowY
 
   const privateBuffer = (): PrivateBuffer | undefined => internals._core?._bufferService?.buffer
-  const synchronizedOutput = (): boolean => Boolean(internals._core?.coreService?.decPrivateModes?.synchronizedOutput)
-  const pinned = (): boolean => writeInProgress || settleTimer !== 0 || synchronizedOutput()
-  const clampX = (value: number): number => Math.max(0, Math.min(term.cols - 1, value))
-  const clampY = (value: number): number => Math.max(0, Math.min(term.rows - 1, value))
-  const settleDelay = (): number => {
-    return privateBuffer()?.x === committedX ? backgroundSameColumnSettleMs : backgroundRelocateSettleMs
-  }
+  const coreService = (): NonNullable<PrivateCore['coreService']> | undefined => internals._core?.coreService
+  const clampX = (value: number): number => Math.max(0, Math.min(Math.max(0, term.cols - 1), value))
+  const clampY = (value: number): number => Math.max(0, Math.min(Math.max(0, term.rows - 1), value))
+  const interactive = (): boolean => composing || performance.now() < interactiveUntil
+  const shouldUseShadow = (): boolean => (shadowActive || composing) && !altBufferActive
 
   const renderService = internals._core?._renderService
   const originalHandleCursorMove = renderService?.handleCursorMove.bind(renderService)
-  let guardedHandleCursorMove: (() => void) | undefined
-  if (renderService && originalHandleCursorMove) {
-    guardedHandleCursorMove = () => {
-      if (!pinned()) originalHandleCursorMove()
-    }
-    renderService.handleCursorMove = guardedHandleCursorMove
+  const clearCompositionAnchor = (): void => {
+    const element = term.element
+    if (!element) return
+    element.classList.remove('luna-ime-composing')
+    element.style.removeProperty('--luna-ime-anchor-left')
+    element.style.removeProperty('--luna-ime-anchor-top')
   }
 
+  const pinCompositionAnchor = (): void => {
+    const element = term.element
+    if (!element) return
+    const cell = renderService?.dimensions?.css?.cell
+    const buffer = privateBuffer()
+    const anchorX = buffer?.x ?? shadowX
+    const anchorY = buffer?.y ?? shadowY
+    const textarea = term.textarea
+    const left = cell && cell.width > 0
+      ? `${clampX(anchorX) * cell.width}px`
+      : textarea?.style.left || '0px'
+    const top = cell && cell.height > 0
+      ? `${clampY(anchorY) * cell.height}px`
+      : textarea?.style.top || '0px'
+    element.style.setProperty('--luna-ime-anchor-left', left)
+    element.style.setProperty('--luna-ime-anchor-top', top)
+    element.classList.add('luna-ime-composing')
+  }
   const refreshCursorRows = (previousY: number, nextY: number): void => {
     const lastRow = Math.max(0, term.rows - 1)
     term.refresh(
@@ -89,95 +128,191 @@ export function createTerminalOutputWriter(term: Terminal): TerminalOutputWriter
     )
   }
 
-  const commit = (): void => {
+  const refreshShadowCursor = (previousX: number, previousY: number, previousHidden: boolean): void => {
+    if (disposed) return
+    if (previousX !== shadowX || previousY !== shadowY || previousHidden !== shadowHidden) {
+      refreshCursorRows(previousY, shadowY)
+    }
+  }
+
+  const copyBufferToShadow = (force = false): void => {
     const buffer = privateBuffer()
-    if (!buffer) return
-    const previousX = committedX
-    const previousY = committedY
-    const previousHidden = committedHidden
-    committedX = buffer.x
-    committedY = buffer.y
-    committedHidden = Boolean(internals._core?.coreService?.isCursorHidden)
-    requestAnimationFrame(() => {
-      if (disposed || pinned()) return
-      originalHandleCursorMove?.()
-      if (previousX !== committedX || previousY !== committedY || previousHidden !== committedHidden) refreshCursorRows(previousY, committedY)
-    })
+    if (!buffer || (!force && (syncOutputActive || parkPending))) return
+    const previousX = shadowX
+    const previousY = shadowY
+    const previousHidden = shadowHidden
+    shadowX = buffer.x
+    shadowY = buffer.y
+    shadowHidden = cursorHidden
+    refreshShadowCursor(previousX, previousY, previousHidden)
   }
 
-  const commitNow = (): void => {
-    if (settleTimer) window.clearTimeout(settleTimer)
-    settleTimer = 0
-    commit()
+  const armParkFallback = (): void => {
+    if (parkTimer) window.clearTimeout(parkTimer)
+    parkTimer = window.setTimeout(() => {
+      parkTimer = 0
+      if (disposed || !parkPending) return
+      const previousX = shadowX
+      const previousY = shadowY
+      const previousHidden = shadowHidden
+      parkPending = false
+      shadowX = frameSavedX
+      shadowY = frameSavedY
+      shadowHidden = cursorHidden
+      refreshShadowCursor(previousX, previousY, previousHidden)
+    }, parkFallbackMs)
   }
 
-  const armSettle = (delay: number): void => {
-    if (settleTimer) window.clearTimeout(settleTimer)
-    settleTimer = window.setTimeout(() => {
-      settleTimer = 0
-      if (disposed) return
-      if (writeInProgress || synchronizedOutput()) {
-        armSettle(16)
-        return
+  const clearParkFallback = (): void => {
+    if (parkTimer) window.clearTimeout(parkTimer)
+    parkTimer = 0
+  }
+
+  const markCursorHidden = (hidden: boolean): void => {
+    cursorHidden = hidden
+    if (!syncOutputActive && !parkPending && !altBufferActive) {
+      const previousHidden = shadowHidden
+      shadowHidden = hidden
+      if (previousHidden !== shadowHidden) refreshCursorRows(shadowY, shadowY)
+    }
+  }
+
+  const onSyncFrameStart = (): void => {
+    const buffer = privateBuffer()
+    if (buffer && !parkPending) {
+      frameSavedX = buffer.x
+      frameSavedY = buffer.y
+    }
+    syncOutputActive = true
+    shadowActive = codexRepaintDetected
+  }
+
+  const onSyncFrameEnd = (): void => {
+    syncOutputActive = false
+    if (codexRepaintDetected && !altBufferActive) {
+      shadowActive = true
+      parkPending = true
+      armParkFallback()
+      // A frame that intentionally ends hidden must hide the display cursor
+      // immediately; the park freeze only applies while it is visible.
+      if (cursorHidden && !shadowHidden) {
+        const previousHidden = shadowHidden
+        shadowHidden = true
+        refreshShadowCursor(shadowX, shadowY, previousHidden)
       }
-      commit()
-    }, delay)
+    }
   }
 
-  const unsafeCursorFinals = ['H', 'f', 'A', 'B', 'E', 'F', 'G', '`', 'd', 'r']
-  for (const final of unsafeCursorFinals) {
-    disposables.push(term.parser.registerCsiHandler({ final }, () => {
-      unsafeBatch = true
-      return false
-    }))
+  const onCursorPark = (): void => {
+    const buffer = privateBuffer()
+    if (!buffer || altBufferActive || syncOutputActive) {
+      markCursorHidden(false)
+      return
+    }
+    const previousX = shadowX
+    const previousY = shadowY
+    const previousHidden = shadowHidden
+    shadowActive = true
+    shadowX = buffer.x
+    shadowY = buffer.y
+    shadowHidden = false
+    cursorHidden = false
+    parkPending = false
+    clearParkFallback()
+    refreshShadowCursor(previousX, previousY, previousHidden)
   }
-  for (const final of ['C', 'D']) {
-    disposables.push(term.parser.registerCsiHandler({ final }, (params) => {
-      const buffer = privateBuffer()
-      const first = params[0]
-      const amount = Number(Array.isArray(first) ? first[0] : first) || 1
-      const echoLike = buffer?.x === committedX && buffer.y === committedY && amount <= 8
-      if (!echoLike) unsafeBatch = true
-      return false
-    }))
+
+  const onCursorMove = (): void => {
+    // During a repaint the buffer cursor belongs to the frame.  Outside it,
+    // this is the low-latency path that keeps typing, delete and arrows
+    // perfectly synchronized with the real xterm cursor.
+    if (!privateBuffer() || composing || syncOutputActive || altBufferActive) return
+    if (parkPending && !interactive()) return
+    if (parkPending) {
+      parkPending = false
+      clearParkFallback()
+    }
+    copyBufferToShadow(true)
   }
-  for (const final of ['h', 'l']) {
-    disposables.push(term.parser.registerCsiHandler({ final, prefix: '?' }, (params) => {
-      if (includesParameter(params, 25) || includesParameter(params, 2026) || includesParameter(params, 47) || includesParameter(params, 1047) || includesParameter(params, 1049)) {
-        unsafeBatch = true
-      }
-      return false
-    }))
+
+  let guardedHandleCursorMove: (() => void) | undefined
+  if (renderService && originalHandleCursorMove) {
+    guardedHandleCursorMove = () => {
+      // WebGL restarts the CSS blink animation for every cursor move.  Codex
+      // moves the buffer cursor repeatedly while drawing a synchronized
+      // frame, so forwarding those renderer notifications is the fast blink
+      // seen by the user.  Input/output parsing still updates the real buffer.
+      if (!syncOutputActive && !composing) originalHandleCursorMove()
+    }
+    renderService.handleCursorMove = guardedHandleCursorMove
   }
 
   const wrapRenderer = (): void => {
     const renderer = internals._core?._renderService?._renderer?.value
-    if (!renderer || renderer.__lunaMuxCursorStabilized) return
+    if (!renderer || renderer.__lunaMuxShadowCursor) return
     const renderRows = renderer.renderRows.bind(renderer)
     renderer.renderRows = (start, end) => {
       const buffer = privateBuffer()
-      if (!buffer || !pinned()) {
+      if (!buffer || !shouldUseShadow()) {
         renderRows(start, end)
         return
       }
       const actualX = buffer.x
       const actualY = buffer.y
-      const coreService = internals._core?.coreService
-      const actualHidden = coreService?.isCursorHidden
-      const stableY = clampY(committedY)
-      buffer.x = clampX(committedX)
-      buffer.y = stableY
-      if (coreService) coreService.isCursorHidden = committedHidden
+      const service = coreService()
+      const actualHidden = service?.isCursorHidden
+      buffer.x = clampX(shadowX)
+      buffer.y = clampY(shadowY)
+      if (service) service.isCursorHidden = shadowHidden
       try {
-        renderRows(Math.min(start, stableY), Math.max(end, stableY))
+        renderRows(start, end)
       } finally {
         buffer.x = actualX
         buffer.y = actualY
-        if (coreService && actualHidden !== undefined) coreService.isCursorHidden = actualHidden
+        if (service && actualHidden !== undefined) service.isCursorHidden = actualHidden
       }
     }
-    renderer.__lunaMuxCursorStabilized = true
+    renderer.__lunaMuxShadowCursor = true
   }
+
+  // Codex emits `CSI 0 SP q` on every repaint.  xterm interprets it as a
+  // cursor-style reset, restarting its blink animation each time.  A zero
+  // style means "default" and has no useful effect for this terminal, so
+  // consume only that form; explicit bar/underline/block styles remain intact.
+  disposables.push(term.parser.registerCsiHandler({ final: 'q', intermediates: ' ' }, (params) => {
+    if (!isDefaultCursorStyle(params) || !syncOutputActive) return false
+    codexRepaintDetected = true
+    shadowActive = true
+    return true
+  }))
+
+  for (const final of ['h', 'l']) {
+    disposables.push(term.parser.registerCsiHandler({ final, prefix: '?' }, (params) => {
+      if (includesParameter(params, 2026)) {
+        if (final === 'h') onSyncFrameStart()
+        else onSyncFrameEnd()
+      }
+      if (includesParameter(params, 25)) {
+        markCursorHidden(final === 'l')
+        if (final === 'h') onCursorPark()
+      }
+      if (includesParameter(params, 47) || includesParameter(params, 1047) || includesParameter(params, 1049)) {
+        altBufferActive = final === 'h'
+        clearParkFallback()
+        parkPending = false
+        shadowActive = false
+        if (final === 'l') {
+          cursorHidden = false
+          copyBufferToShadow(true)
+        }
+      }
+      return false
+    }))
+  }
+
+  disposables.push(term.onCursorMove(onCursorMove))
+
+  wrapRenderer()
 
   const scheduleFlush = (): void => {
     if (disposed || writeInProgress || !pending.length) return
@@ -185,7 +320,7 @@ export function createTerminalOutputWriter(term: Terminal): TerminalOutputWriter
       if (scheduledFrame) cancelAnimationFrame(scheduledFrame)
       scheduledFrame = 0
       if (scheduledTimer) window.clearTimeout(scheduledTimer)
-      scheduledTimer = window.setTimeout(flush, 4)
+      scheduledTimer = window.setTimeout(flush, 0)
       return
     }
     if (!scheduledFrame) scheduledFrame = requestAnimationFrame(flush)
@@ -198,24 +333,19 @@ export function createTerminalOutputWriter(term: Terminal): TerminalOutputWriter
     const writes = pending
     pending = []
     const data = writes.map((write) => write.data).join('')
-    unsafeBatch = false
     writeInProgress = true
     term.write(data, () => {
       writeInProgress = false
       if (!disposed) {
-        const buffer = privateBuffer()
-        const interactive = performance.now() < interactiveUntil
-        const safeTextAtCommittedColumn = !unsafeBatch && buffer?.x === committedX && !synchronizedOutput()
-        const ordinaryText = !unsafeBatch && settleTimer === 0 && !synchronizedOutput()
-        if (interactive || safeTextAtCommittedColumn || ordinaryText) commitNow()
-        else armSettle(settleDelay())
+        // onCursorMove normally updates this during parsing.  This final
+        // synchronization also covers plain text writes that do not emit a
+        // cursor-move event, without delaying the next interactive frame.
+        if (!syncOutputActive && !parkPending && !altBufferActive) copyBufferToShadow()
       }
       for (const write of writes) write.callback?.()
       scheduleFlush()
     })
   }
-
-  wrapRenderer()
 
   return {
     write(data, callback) {
@@ -229,15 +359,28 @@ export function createTerminalOutputWriter(term: Terminal): TerminalOutputWriter
     markInteractive(submitting = false) {
       interactiveUntil = submitting ? 0 : performance.now() + 500
     },
+    setComposing(active) {
+      if (disposed || composing === active) return
+      if (active) {
+        composing = true
+        copyBufferToShadow(true)
+        pinCompositionAnchor()
+      } else {
+        composing = false
+        clearCompositionAnchor()
+        copyBufferToShadow(true)
+      }
+    },
     wrapRenderer,
     dispose() {
       disposed = true
+      composing = false
+      clearCompositionAnchor()
       if (scheduledFrame) cancelAnimationFrame(scheduledFrame)
       if (scheduledTimer) window.clearTimeout(scheduledTimer)
-      if (settleTimer) window.clearTimeout(settleTimer)
+      clearParkFallback()
       scheduledFrame = 0
       scheduledTimer = 0
-      settleTimer = 0
       for (const write of pending) write.callback?.()
       pending = []
       for (const disposable of disposables) disposable.dispose()

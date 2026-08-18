@@ -86,7 +86,7 @@ export function createChineseHelpSections(commandKey: string): HelpSection[] {
         <ul>
           <li>拖选文本后按 <kbd>{commandKey}+C</kbd> 复制；按 <kbd>{commandKey}+V</kbd> 粘贴。没有选区时，Ctrl+C 仍会发送给终端进程。</li>
           <li>按 <kbd>{commandKey}+F</kbd> 搜索当前终端滚屏，使用上下按钮切换结果，按 Esc 关闭。</li>
-          <li>终端中的 HTTP/HTTPS 链接可点击并交给系统默认浏览器打开，这与受管 Agent 浏览器无关。</li>
+          <li>按住 <kbd>{commandKey}</kbd> 并左键点击或直接双击终端中的 HTTP/HTTPS 链接，可交给系统默认浏览器打开。这与受管 Agent 浏览器无关。</li>
           <li>本地终端停止或 SSH 断开后，空状态中的按钮可重新启动或重连。</li>
         </ul>
         <h3>常用快捷键</h3>
@@ -417,7 +417,7 @@ export function createEnglishHelpSections(commandKey: string): HelpSection[] {
         <ul>
           <li>Select text and press <kbd>{commandKey}+C</kbd> to copy; use <kbd>{commandKey}+V</kbd> to paste. With no selection, Ctrl+C is still delivered to the process.</li>
           <li>Use <kbd>{commandKey}+F</kbd> to search scrollback, the arrows to move between matches, and Escape to close search.</li>
-          <li>HTTP/HTTPS links open in the system browser. This is separate from the managed Agent browser.</li>
+          <li><kbd>{commandKey}</kbd>+click or double-click an HTTP/HTTPS link to open it in the system browser. This is separate from the managed Agent browser.</li>
           <li>A stopped local runtime can be started and a disconnected SSH runtime can be reconnected from the empty state.</li>
         </ul>
         <h3>Shortcuts</h3>

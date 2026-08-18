@@ -4,7 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { SerializeAddon } from '@xterm/addon-serialize'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
-import { ChevronDown, ChevronUp, ClipboardPaste, Copy, Palette, Play, Search, X } from 'lucide-react'
+import { ChevronDown, ChevronUp, ClipboardPaste, Copy, KeyRound, Palette, Play, RefreshCw, Search, ShieldAlert, X } from 'lucide-react'
 import type { TerminalRuntimeEvent, TerminalSettings } from '../types'
 import { colorWithOpacity } from '../terminal-style'
 import { createTerminalOutputWriter, type TerminalOutputWriter } from '../terminal-output-writer'
@@ -24,6 +24,17 @@ interface TerminalSnapshot { runtimeId?: string; outputCursor: number; cols: num
 const terminalSnapshots = new Map<string, TerminalSnapshot>()
 const discardedTerminalSnapshots = new Set<string>()
 const mountedTerminalPanes = new Set<string>()
+
+function shouldOpenTerminalLink(event: MouseEvent): boolean {
+  if (event.button !== 0) return false
+  const commandClick = window.api.platform === 'darwin' ? event.metaKey : event.ctrlKey
+  return commandClick ? event.detail === 1 : event.detail === 2
+}
+
+function openTerminalLink(event: MouseEvent, uri: string): void {
+  if (!shouldOpenTerminalLink(event)) return
+  void window.api.system.openExternal(uri).catch((error) => console.warn('Failed to open terminal link', error))
+}
 
 export function discardTerminalSnapshot(paneId: string): void {
   terminalSnapshots.delete(paneId)
@@ -88,6 +99,7 @@ interface TerminalPaneProps {
   targetId: string
   runtimeId?: string
   connected: boolean
+  connecting: boolean
   visible: boolean
   settings: TerminalSettings
   backgroundImage: string
@@ -95,14 +107,17 @@ interface TerminalPaneProps {
     title: string
     description: string
     actionLabel: string
+    actionIcon: 'credentials' | 'retry' | 'start'
+    tone?: 'error'
   }
   onAgentAction?: () => void
   onRuntimeError?: (runtimeId: string, message: string) => void
   onStart?: () => void
+  onClose?: () => void
   onOpenSettings?: () => void
 }
 
-export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function TerminalPane({ paneId, targetId, runtimeId, connected, visible, settings, backgroundImage, stoppedState, onAgentAction, onRuntimeError, onStart, onOpenSettings }, ref): React.JSX.Element {
+export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function TerminalPane({ paneId, targetId, runtimeId, connected, connecting, visible, settings, backgroundImage, stoppedState, onAgentAction, onRuntimeError, onStart, onClose, onOpenSettings }, ref): React.JSX.Element {
   const { t } = useI18n()
   const container = useRef<HTMLDivElement>(null)
   const terminal = useRef<Terminal | null>(null)
@@ -122,6 +137,8 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
   onRuntimeErrorRef.current = onRuntimeError
   const reportedInputErrorRuntimeId = useRef('')
   const connectedRef = useRef(connected)
+  const connectingRef = useRef(connecting)
+  const pendingRuntimeInput = useRef(new Map<string, string[]>())
   const boundRuntimeId = useRef<string | undefined>(undefined)
   const outputCursor = useRef(0)
   const renderedOutputCursor = useRef(0)
@@ -139,9 +156,28 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     getRecentLines: (maxLines, maxChars) => terminal.current ? recentTerminalText(terminal.current, maxLines, maxChars) : ''
   }), [])
 
+  const reportRuntimeInputError = (failedRuntimeId: string, error: unknown): void => {
+    if (reportedInputErrorRuntimeId.current === failedRuntimeId) return
+    reportedInputErrorRuntimeId.current = failedRuntimeId
+    const message = error instanceof Error ? error.message : String(error)
+    onRuntimeErrorRef.current?.(failedRuntimeId, message)
+  }
+
   useEffect(() => {
+    const previousRuntimeId = runtimeIdRef.current
     runtimeIdRef.current = runtimeId
     connectedRef.current = connected
+    connectingRef.current = connecting
+    if (previousRuntimeId && previousRuntimeId !== runtimeId) pendingRuntimeInput.current.delete(previousRuntimeId)
+    if (runtimeId && connected) {
+      const pending = pendingRuntimeInput.current.get(runtimeId)
+      pendingRuntimeInput.current.delete(runtimeId)
+      if (pending?.length) {
+        void window.api.terminalRuntimes.write(runtimeId, pending.join('')).catch((error) => reportRuntimeInputError(runtimeId, error))
+      }
+    } else if (runtimeId && !connecting) {
+      pendingRuntimeInput.current.delete(runtimeId)
+    }
     if (runtimeId) setStarted(true)
     const term = terminal.current
     if (!term || !runtimeId || boundRuntimeId.current === runtimeId) return
@@ -153,11 +189,12 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
       fitAddon.current?.fit()
       void window.api.terminalRuntimes.resize(runtimeId, term.cols, term.rows)
     })
-  }, [runtimeId, connected, t])
+  }, [runtimeId, connected, connecting, t])
 
   useEffect(() => {
     connectedRef.current = connected
-  }, [connected])
+    connectingRef.current = connecting
+  }, [connected, connecting])
 
   useEffect(() => {
     if (!connected || !visible || !runtimeId) return
@@ -178,6 +215,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     const term = new Terminal({
       cursorBlink: true, convertEol: false, allowTransparency: true, fontFamily: settings.fontFamily,
       fontSize: settings.fontSize, lineHeight: 1.25, scrollback: 5000,
+      linkHandler: { activate: openTerminalLink },
       ...(restorableSnapshot ? { cols: restorableSnapshot.cols, rows: restorableSnapshot.rows } : {}),
       theme: { background: rendererBackground, foreground: settings.foregroundColor, cursor: '#78d64b', ...terminalSelectionTheme }
     })
@@ -186,7 +224,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     fitAddon.current = fit
     term.loadAddon(fit)
     term.loadAddon(serialize)
-    term.loadAddon(new WebLinksAddon((_event, uri) => { void window.api.system.openExternal(uri).catch((error) => console.warn('Failed to open terminal link', error)) }))
+    term.loadAddon(new WebLinksAddon(openTerminalLink))
     if (restorableSnapshot) {
       outputCursor.current = restorableSnapshot.outputCursor
       renderedOutputCursor.current = restorableSnapshot.outputCursor
@@ -206,13 +244,6 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     let lastTerminalInput = { data: '', timestamp: 0 }
     const pendingImePunctuation = new Set<PendingImePunctuation>()
 
-    const reportRuntimeInputError = (failedRuntimeId: string, error: unknown): void => {
-      if (reportedInputErrorRuntimeId.current === failedRuntimeId) return
-      reportedInputErrorRuntimeId.current = failedRuntimeId
-      const message = error instanceof Error ? error.message : String(error)
-      onRuntimeErrorRef.current?.(failedRuntimeId, message)
-    }
-
     const writeTerminalInput = (data: string): void => {
       lastTerminalInput = { data, timestamp: performance.now() }
       for (const pending of pendingImePunctuation) {
@@ -224,6 +255,10 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
       const activeRuntimeId = runtimeIdRef.current
       if (connectedRef.current && activeRuntimeId) {
         void window.api.terminalRuntimes.write(activeRuntimeId, data).catch((error) => reportRuntimeInputError(activeRuntimeId, error))
+      } else if (connectingRef.current && activeRuntimeId) {
+        const pending = pendingRuntimeInput.current.get(activeRuntimeId) ?? []
+        pending.push(data)
+        pendingRuntimeInput.current.set(activeRuntimeId, pending)
       }
     }
 
@@ -320,9 +355,30 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     const recoverDroppedImePunctuationFromComposition = (rawEvent: Event): void => {
       queueDroppedImePunctuation((rawEvent as CompositionEvent).data)
     }
+    let compositionReleaseTimer = 0
+    const startImeComposition = (): void => {
+      if (compositionReleaseTimer) window.clearTimeout(compositionReleaseTimer)
+      compositionReleaseTimer = 0
+      writer.setComposing(true)
+    }
+    const finishImeComposition = (): void => {
+      if (compositionReleaseTimer) window.clearTimeout(compositionReleaseTimer)
+      compositionReleaseTimer = window.setTimeout(() => {
+        compositionReleaseTimer = 0
+        writer.setComposing(false)
+      }, 0)
+    }
+    const cancelImeComposition = (): void => {
+      if (compositionReleaseTimer) window.clearTimeout(compositionReleaseTimer)
+      compositionReleaseTimer = 0
+      writer.setComposing(false)
+    }
     textarea?.addEventListener('beforeinput', rememberImeTextareaBeforeInput)
     textarea?.addEventListener('input', recoverDroppedImePunctuationFromInput)
+    textarea?.addEventListener('compositionstart', startImeComposition)
     textarea?.addEventListener('compositionend', recoverDroppedImePunctuationFromComposition, true)
+    textarea?.addEventListener('compositionend', finishImeComposition)
+    textarea?.addEventListener('blur', cancelImeComposition)
     const resize = term.onResize(({ cols, rows }) => { if (runtimeIdRef.current) void window.api.terminalRuntimes.resize(runtimeIdRef.current, cols, rows) })
     let catchingUp = true
     const queuedOutput: Array<Extract<TerminalRuntimeEvent, { type: 'output' }>['payload']> = []
@@ -399,11 +455,16 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
         }
       }
       if (paused && runtimeIdRef.current) void window.api.terminalRuntimes.flow(runtimeIdRef.current, false)
+      pendingRuntimeInput.current.clear()
       for (const pending of pendingImePunctuation) window.clearTimeout(pending.timer)
       pendingImePunctuation.clear()
       textarea?.removeEventListener('beforeinput', rememberImeTextareaBeforeInput)
       textarea?.removeEventListener('input', recoverDroppedImePunctuationFromInput)
+      textarea?.removeEventListener('compositionstart', startImeComposition)
       textarea?.removeEventListener('compositionend', recoverDroppedImePunctuationFromComposition, true)
+      textarea?.removeEventListener('compositionend', finishImeComposition)
+      textarea?.removeEventListener('blur', cancelImeComposition)
+      cancelImeComposition()
       stop(); observer.disconnect(); input.dispose(); resize.dispose(); writer.dispose(); webglAddon.current?.dispose(); term.dispose()
       void catchUp
       webglAddon.current = null; outputWriter.current = null; terminal.current = null; fitAddon.current = null
@@ -521,7 +582,18 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     setSearchResult({ index: activeSearchIndex.current, count })
   }
 
-  if (!shouldRenderTerminal) return <div className="terminal-empty"><div className="terminal-mark">&gt;_</div><strong>{stoppedState.title}</strong><span>{stoppedState.description}</span>{onStart && <button className="terminal-connect-button" onClick={onStart}><Play size={15} />{stoppedState.actionLabel}</button>}</div>
+  const ActionIcon = stoppedState.actionIcon === 'credentials' ? KeyRound : stoppedState.actionIcon === 'retry' ? RefreshCw : Play
+  const stoppedContent = <div className={`terminal-stopped-state ${stoppedState.tone ?? ''}`} role={stoppedState.tone === 'error' ? 'alert' : 'status'}>
+    <div className="terminal-stopped-icon">{stoppedState.tone === 'error' ? <ShieldAlert size={24} /> : <span>&gt;_</span>}</div>
+    <strong>{stoppedState.title}</strong>
+    <span className="terminal-stopped-description">{stoppedState.description}</span>
+    <div className="terminal-stopped-actions">
+      {onStart && <button type="button" className="terminal-connect-button" onClick={onStart}><ActionIcon size={15} />{stoppedState.actionLabel}</button>}
+      {onClose && <button type="button" className="terminal-close-button" onClick={onClose}><X size={15} />{t('app.closePane')}</button>}
+    </div>
+  </div>
+
+  if (!shouldRenderTerminal) return <div className="terminal-empty">{stoppedContent}</div>
   return <div className="terminal-shell" onContextMenu={(event) => { event.preventDefault(); setContextMenu({ x: Math.max(4, Math.min(event.clientX, window.innerWidth - 210)), y: Math.max(4, Math.min(event.clientY, window.innerHeight - 210)), hasSelection: Boolean(terminal.current?.hasSelection()) }) }}>
     {searchOpen && <form className="terminal-search" onSubmit={(event) => { event.preventDefault(); search() }}>
       <Search size={14} /><input ref={searchInput} value={query} aria-label={t('terminal.searchTerminal')} onChange={(event) => { setQuery(event.target.value); search(event.target.value, false, true) }} onKeyDown={(event) => { if (event.key === 'Escape') setSearchOpen(false) }} />
@@ -531,6 +603,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
       <button type="button" className="icon-button" title={t('terminal.closeSearch')} onClick={() => setSearchOpen(false)}><X size={15} /></button>
     </form>}
     <div className="terminal" ref={container} />
+    {!connected && !connecting && <div className="terminal-stopped-overlay">{stoppedContent}</div>}
     {contextMenu && <div className="sidebar-context-menu terminal-context-menu" role="menu" style={{ left: contextMenu.x, top: contextMenu.y }} onPointerDown={(event) => event.stopPropagation()}>
       <button role="menuitem" disabled={!contextMenu.hasSelection} onClick={() => { const text = terminal.current?.getSelection(); setContextMenu(null); if (text) void window.api.system.writeClipboard(text).catch((error) => console.warn('Failed to copy terminal selection', error)) }}><Copy size={15} />{t('common.copy')}</button>
       <button role="menuitem" onClick={() => { setContextMenu(null); void pasteClipboardRef.current() }}><ClipboardPaste size={15} />{t('terminal.paste')}</button>
