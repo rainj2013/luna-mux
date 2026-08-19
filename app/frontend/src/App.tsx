@@ -609,6 +609,9 @@ export function App(): React.JSX.Element {
     const tone = agentAttentionTone(agent)
     return tone ? [[agent.paneId, tone] as const] : []
   })), [allAgents])
+  const activeAgentAdapterByPane = useMemo(() => new Map(allAgents.flatMap((agent) => {
+    return agent.latest ? [[agent.paneId, agent.latest.adapterId] as const] : []
+  })), [allAgents])
   const selectedBookmark = bookmarkMap.get(selectedBookmarkId) ?? activeBookmark
   const filteredBookmarks = bookmarks.filter((item) => `${item.name} ${item.host} ${item.username} ${item.groupName} ${item.note}`.toLowerCase().includes(query.toLowerCase()))
   const bookmarkGroups = useMemo(() => {
@@ -1383,7 +1386,7 @@ export function App(): React.JSX.Element {
             if (!layout) return null
             const shown = session.id === activeMuxSessionId && workspaceView === 'terminal'
             const hasBackgroundImage = Boolean(terminalSettings.backgroundImagePath && terminalBackground)
-            return <div key={session.id} hidden={!shown} className={`terminal-workspace ${hasBackgroundImage ? 'has-background-image' : ''}`} style={terminalBackgroundStyle(terminalSettings, terminalBackground)}><MuxLayout node={layout} panes={panes} bookmarks={bookmarkMap} activePaneId={shown ? activeKey : ''} settings={terminalSettings} backgroundImage={terminalBackground} agentAttentionByPane={agentAttentionByPane} terminalPaneRefs={terminalPaneRefs} onFocus={(pane) => { setActiveKey(pane.key); const agent = allAgents.find((item) => item.paneId === pane.id); if (agent) markAgentRead(agent.agentId) }} onTerminalAgentAction={(pane) => { const agent = allAgents.find((item) => item.paneId === pane.id); if (agent) dismissAgentWaitingAttention(agent) }} onRuntimeError={(pane, runtimeId, message) => { setTabs((current) => current.map((item) => item.key === pane.key && item.runtimeId === runtimeId ? { ...item, status: 'error', error: message } : item)); showError(message) }} onReconnect={reconnectPane} onReauthenticate={reauthenticatePane} onSplit={(pane, direction) => void splitPane(pane, direction)} onClose={closeTab} onResize={resizeLayout} onToggleMaximize={(paneId) => setMaximizedPaneId((current) => current ? '' : paneId)} onOpenSettings={() => openSettings('terminal')} maximizedPaneId={shown ? maximizedPaneId : ''} /></div>
+            return <div key={session.id} hidden={!shown} className={`terminal-workspace ${hasBackgroundImage ? 'has-background-image' : ''}`} style={terminalBackgroundStyle(terminalSettings, terminalBackground)}><MuxLayout node={layout} panes={panes} bookmarks={bookmarkMap} activePaneId={shown ? activeKey : ''} settings={terminalSettings} backgroundImage={terminalBackground} agentAttentionByPane={agentAttentionByPane} activeAgentAdapterByPane={activeAgentAdapterByPane} terminalPaneRefs={terminalPaneRefs} onFocus={(pane) => { setActiveKey(pane.key); const agent = allAgents.find((item) => item.paneId === pane.id); if (agent) markAgentRead(agent.agentId) }} onTerminalAgentAction={(pane) => { const agent = allAgents.find((item) => item.paneId === pane.id); if (agent) dismissAgentWaitingAttention(agent) }} onRuntimeError={(pane, runtimeId, message) => { setTabs((current) => current.map((item) => item.key === pane.key && item.runtimeId === runtimeId ? { ...item, status: 'error', error: message } : item)); showError(message) }} onReconnect={reconnectPane} onReauthenticate={reauthenticatePane} onSplit={(pane, direction) => void splitPane(pane, direction)} onClose={closeTab} onResize={resizeLayout} onToggleMaximize={(paneId) => setMaximizedPaneId((current) => current ? '' : paneId)} onOpenSettings={() => openSettings('terminal')} maximizedPaneId={shown ? maximizedPaneId : ''} /></div>
           })}
           {!activeMuxSession ? <div className="welcome-state"><div className="welcome-icon"><SquareTerminal size={30} /></div><h2>{t('app.createYourFirstSession')}</h2><div className="welcome-actions"><button className="primary-button" onClick={() => setMuxSessionDialog({ mode: 'create' })}><CirclePlus size={16} />{t('app.newSession')}</button></div></div>
             : sessionTabs.length === 0 && sessionBrowserResources.length === 0 ? <div className="welcome-state"><div className="welcome-icon"><SquareTerminal size={30} /></div><h2>{activeMuxSession.name}</h2>{activeMuxSession.rootPath && <p>{activeMuxSession.rootPath}</p>}<div className="welcome-actions"><button className="primary-button" onClick={() => void openPaneLauncher()}><CirclePlus size={16} />{t('app.addFirstPane')}</button></div></div>
@@ -1880,6 +1883,7 @@ interface MuxLayoutProps {
   settings: TerminalSettings
   backgroundImage: string
   agentAttentionByPane: Map<string, AgentAttentionTone>
+  activeAgentAdapterByPane: Map<string, string>
   terminalPaneRefs: React.MutableRefObject<Map<string, TerminalPaneHandle>>
   onFocus(pane: WorkspaceTab): void
   onTerminalAgentAction(pane: WorkspaceTab): void
@@ -1895,7 +1899,7 @@ interface MuxLayoutProps {
   path?: string
 }
 
-function MuxLayout({ node, panes, bookmarks, activePaneId, settings, backgroundImage, agentAttentionByPane, terminalPaneRefs, onFocus, onTerminalAgentAction, onRuntimeError, onReconnect, onReauthenticate, onSplit, onClose, onResize, onToggleMaximize, onOpenSettings, maximizedPaneId, path = '' }: MuxLayoutProps): React.JSX.Element | null {
+function MuxLayout({ node, panes, bookmarks, activePaneId, settings, backgroundImage, agentAttentionByPane, activeAgentAdapterByPane, terminalPaneRefs, onFocus, onTerminalAgentAction, onRuntimeError, onReconnect, onReauthenticate, onSplit, onClose, onResize, onToggleMaximize, onOpenSettings, maximizedPaneId, path = '' }: MuxLayoutProps): React.JSX.Element | null {
   const { t } = useI18n()
   if (node.type === 'pane') {
     const pane = panes.find((item) => item.id === node.paneId)
@@ -1924,7 +1928,7 @@ function MuxLayout({ node, panes, bookmarks, activePaneId, settings, backgroundI
           <button className="icon-button danger" title={t('app.closePane')} aria-label={t('app.closePane')} onClick={() => onClose(pane)}><X size={14} /></button>
         </div>
       </header>
-      <div className="terminal-region"><TerminalPane key={pane.key} paneId={pane.id} targetId={pane.targetId} ref={(terminalPane) => { if (terminalPane) terminalPaneRefs.current.set(pane.key, terminalPane); else terminalPaneRefs.current.delete(pane.key) }} runtimeId={pane.runtimeId} connected={pane.status === 'connected'} connecting={pane.status === 'connecting'} visible={maximizedPaneId ? pane.id === maximizedPaneId : active} settings={settings} backgroundImage={backgroundImage} stoppedState={stoppedState} onAgentAction={() => onTerminalAgentAction(pane)} onRuntimeError={(runtimeId, message) => { onRuntimeError(pane, runtimeId, message) }} onStart={() => authenticationFailure ? onReauthenticate(pane) : onReconnect(pane)} onClose={() => onClose(pane)} onOpenSettings={onOpenSettings} /></div>
+      <div className="terminal-region"><TerminalPane key={pane.key} paneId={pane.id} targetId={pane.targetId} activeAgentAdapterId={activeAgentAdapterByPane.get(pane.id)} ref={(terminalPane) => { if (terminalPane) terminalPaneRefs.current.set(pane.key, terminalPane); else terminalPaneRefs.current.delete(pane.key) }} runtimeId={pane.runtimeId} connected={pane.status === 'connected'} connecting={pane.status === 'connecting'} visible={maximizedPaneId ? pane.id === maximizedPaneId : active} settings={settings} backgroundImage={backgroundImage} stoppedState={stoppedState} onAgentAction={() => onTerminalAgentAction(pane)} onRuntimeError={(runtimeId, message) => { onRuntimeError(pane, runtimeId, message) }} onStart={() => authenticationFailure ? onReauthenticate(pane) : onReconnect(pane)} onClose={() => onClose(pane)} onOpenSettings={onOpenSettings} /></div>
     </section>
   }
   const direction = node.direction
@@ -1954,9 +1958,9 @@ function MuxLayout({ node, panes, bookmarks, activePaneId, settings, backgroundI
     : { gridTemplateRows: `minmax(0, ${node.ratio}fr) 5px minmax(0, ${1 - node.ratio}fr)` }
   const maximizeClass = maximizedPaneId ? paneIdsInLayout(node).includes(maximizedPaneId) ? 'maximized-branch' : 'maximize-hidden' : ''
   return <div className={['mux-split', direction, maximizeClass].filter(Boolean).join(' ')} style={style}>
-    <MuxLayout node={node.first} panes={panes} bookmarks={bookmarks} activePaneId={activePaneId} settings={settings} backgroundImage={backgroundImage} agentAttentionByPane={agentAttentionByPane} terminalPaneRefs={terminalPaneRefs} onFocus={onFocus} onTerminalAgentAction={onTerminalAgentAction} onRuntimeError={onRuntimeError} onReconnect={onReconnect} onReauthenticate={onReauthenticate} onSplit={onSplit} onClose={onClose} onResize={onResize} onToggleMaximize={onToggleMaximize} onOpenSettings={onOpenSettings} maximizedPaneId={maximizedPaneId} path={`${path}0`} />
+    <MuxLayout node={node.first} panes={panes} bookmarks={bookmarks} activePaneId={activePaneId} settings={settings} backgroundImage={backgroundImage} agentAttentionByPane={agentAttentionByPane} activeAgentAdapterByPane={activeAgentAdapterByPane} terminalPaneRefs={terminalPaneRefs} onFocus={onFocus} onTerminalAgentAction={onTerminalAgentAction} onRuntimeError={onRuntimeError} onReconnect={onReconnect} onReauthenticate={onReauthenticate} onSplit={onSplit} onClose={onClose} onResize={onResize} onToggleMaximize={onToggleMaximize} onOpenSettings={onOpenSettings} maximizedPaneId={maximizedPaneId} path={`${path}0`} />
     <div className="mux-split-divider" role="separator" aria-orientation={direction === 'horizontal' ? 'vertical' : 'horizontal'} onPointerDown={startResize} />
-    <MuxLayout node={node.second} panes={panes} bookmarks={bookmarks} activePaneId={activePaneId} settings={settings} backgroundImage={backgroundImage} agentAttentionByPane={agentAttentionByPane} terminalPaneRefs={terminalPaneRefs} onFocus={onFocus} onTerminalAgentAction={onTerminalAgentAction} onRuntimeError={onRuntimeError} onReconnect={onReconnect} onReauthenticate={onReauthenticate} onSplit={onSplit} onClose={onClose} onResize={onResize} onToggleMaximize={onToggleMaximize} onOpenSettings={onOpenSettings} maximizedPaneId={maximizedPaneId} path={`${path}1`} />
+    <MuxLayout node={node.second} panes={panes} bookmarks={bookmarks} activePaneId={activePaneId} settings={settings} backgroundImage={backgroundImage} agentAttentionByPane={agentAttentionByPane} activeAgentAdapterByPane={activeAgentAdapterByPane} terminalPaneRefs={terminalPaneRefs} onFocus={onFocus} onTerminalAgentAction={onTerminalAgentAction} onRuntimeError={onRuntimeError} onReconnect={onReconnect} onReauthenticate={onReauthenticate} onSplit={onSplit} onClose={onClose} onResize={onResize} onToggleMaximize={onToggleMaximize} onOpenSettings={onOpenSettings} maximizedPaneId={maximizedPaneId} path={`${path}1`} />
   </div>
 }
 

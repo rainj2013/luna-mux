@@ -1225,9 +1225,13 @@ impl LunaControlService for InProcessControlService {
                                 .unwrap_or("unknown")
                                 .to_string();
                                 let pane_id = snapshot.context.pane_id;
-                                let pane_title = pane_titles.get(&pane_id).cloned().unwrap_or_default();
+                                let pane_title =
+                                    pane_titles.get(&pane_id).cloned().unwrap_or_default();
                                 let mux_session_id = snapshot.context.mux_session_id;
-                                let session_name = session_names.get(&mux_session_id).cloned().unwrap_or_default();
+                                let session_name = session_names
+                                    .get(&mux_session_id)
+                                    .cloned()
+                                    .unwrap_or_default();
                                 crate::doctor::DoctorManagedAgent {
                                     agent_id: snapshot.context.agent_id,
                                     adapter,
@@ -1673,7 +1677,7 @@ impl LunaControlService for InProcessControlService {
                         let runtime_id = required_resource_id(&request)?;
                         let from_cursor = optional_u64(&request, "fromCursor", 0)?;
                         let max_bytes = optional_u64(&request, "maxBytes", 64 * 1024)?
-                            .clamp(1, 1024 * 1024) as usize;
+                            .clamp(4, 1024 * 1024) as usize;
                         serde_json::to_value(
                             self.backend
                                 .read_output(runtime_id, from_cursor, max_bytes)

@@ -7,9 +7,9 @@ use std::{
     time::UNIX_EPOCH,
 };
 
-use base64::{Engine, engine::general_purpose::STANDARD};
 #[cfg(target_os = "macos")]
 use crate::desktop;
+use base64::{Engine, engine::general_purpose::STANDARD};
 use chrono::Utc;
 use serde_json::json;
 use tauri::{AppHandle, Emitter, Manager, State, Theme, WebviewWindow};
@@ -39,8 +39,8 @@ use crate::{
     models::*,
     product,
     runtime_env::{self, RuntimeEnvironment},
-    shell_quoting::posix_shell_quote,
     sessions::SessionManager,
+    shell_quoting::posix_shell_quote,
     ssh_config,
     ssh_terminal_backend::InProcessSshTerminalBackend,
     terminal_backend::TerminalBackend,
@@ -49,7 +49,7 @@ use crate::{
         TerminalRuntimeCreateRequest, TerminalRuntimeOutputReadResult, TerminalTarget,
     },
     transfers::TransferManager,
-    tunnels::TunnelManager,
+    tunnels::{TunnelManager, validate_dynamic_bind_address},
 };
 
 const LUNA_REMOTE_CONNECTION_ARCHIVE_FORMAT: &str = "luna-remote-connections";
@@ -394,20 +394,21 @@ pub async fn terminal_runtime_create(
                             return Err(error);
                         }
                     };
-                    let claude_bootstrap = match crate::claude_code_adapter::install_wsl_manual_bootstrap(
-                        &context,
-                        &request.target_id,
-                        &endpoint,
-                        &mcp_endpoint,
-                        environment_path.as_path().to_str(),
-                    ) {
-                        Ok(command) => command,
-                        Err(error) => {
-                            state.agent_hooks.revoke_token(&token);
-                            state.luna_mcp.revoke_token(&mcp_token);
-                            return Err(error);
-                        }
-                    };
+                    let claude_bootstrap =
+                        match crate::claude_code_adapter::install_wsl_manual_bootstrap(
+                            &context,
+                            &request.target_id,
+                            &endpoint,
+                            &mcp_endpoint,
+                            environment_path.as_path().to_str(),
+                        ) {
+                            Ok(command) => command,
+                            Err(error) => {
+                                state.agent_hooks.revoke_token(&token);
+                                state.luna_mcp.revoke_token(&mcp_token);
+                                return Err(error);
+                            }
+                        };
                     Some(format!("{codex_bootstrap}; {claude_bootstrap}"))
                 } else {
                     None
@@ -735,13 +736,15 @@ where
             Ok(Err(error)) => {
                 last_error = Some(format!("{label}: {error}"));
                 if attempt < 3 {
-                    tokio::time::sleep(std::time::Duration::from_millis(300 * attempt as u64)).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(300 * attempt as u64))
+                        .await;
                 }
             }
             Err(_) => {
                 last_error = Some(format!("{label}: ????"));
                 if attempt < 3 {
-                    tokio::time::sleep(std::time::Duration::from_millis(300 * attempt as u64)).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(300 * attempt as u64))
+                        .await;
                 }
             }
         }
@@ -808,8 +811,12 @@ async fn setup_remote_manual_agent_shims(
         return Err("远端缺少 python3，无法安装 Agent Hook 与 Browser MCP 代理".into());
     }
     let (codex, claude) = tokio::join!(
-        remote_setup_optional(|| state.sessions.remote_command_path(&runtime.runtime_id, "codex")),
-        remote_setup_optional(|| state.sessions.remote_command_path(&runtime.runtime_id, "claude"))
+        remote_setup_optional(|| state
+            .sessions
+            .remote_command_path(&runtime.runtime_id, "codex")),
+        remote_setup_optional(|| state
+            .sessions
+            .remote_command_path(&runtime.runtime_id, "claude"))
     );
     if codex.is_none() && claude.is_none() {
         return Err("远端没有可用的 codex 或 claude 命令，已跳过 Agent 注入".into());
@@ -840,21 +847,17 @@ async fn setup_remote_manual_agent_shims(
     .await?;
 
     let hook_port = retry_remote_setup("remote setup", || {
-        state
-            .sessions
-            .start_loopback_reverse_forward(
-                &runtime.runtime_id,
-                hook_endpoint_port(local_hook_endpoint).expect("validated hook endpoint"),
-            )
+        state.sessions.start_loopback_reverse_forward(
+            &runtime.runtime_id,
+            hook_endpoint_port(local_hook_endpoint).expect("validated hook endpoint"),
+        )
     })
     .await?;
     let mcp_port = match retry_remote_setup("remote setup", || {
-        state
-            .sessions
-            .start_loopback_reverse_forward(
-                &runtime.runtime_id,
-                mcp_endpoint_port(local_mcp_endpoint).expect("validated mcp endpoint"),
-            )
+        state.sessions.start_loopback_reverse_forward(
+            &runtime.runtime_id,
+            mcp_endpoint_port(local_mcp_endpoint).expect("validated mcp endpoint"),
+        )
     })
     .await
     {
@@ -949,7 +952,8 @@ async fn setup_remote_manual_agent_shims(
                 browser_credentials_file: Some(&browser_credentials),
                 existing_developer_instructions: existing_developer_instructions.as_deref(),
             })?;
-            let script = remote_manual_agent_script(adapter, &hook_command, &launch, &environment_file);
+            let script =
+                remote_manual_agent_script(adapter, &hook_command, &launch, &environment_file);
             let name = if adapter == "codex" {
                 "codex"
             } else {
@@ -975,13 +979,13 @@ async fn setup_remote_manual_agent_shims(
             has_claude,
         );
         let write_result = tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        state
-            .terminal_backend
-            .write(&runtime.runtime_id, &format!("{bootstrap}\r")),
-    )
-    .await
-    .map_err(|_| "write remote shell bootstrap timed out".to_string())?;
+            std::time::Duration::from_secs(10),
+            state
+                .terminal_backend
+                .write(&runtime.runtime_id, &format!("{bootstrap}\r")),
+        )
+        .await
+        .map_err(|_| "write remote shell bootstrap timed out".to_string())?;
         if write_result.is_err() {
             state
                 .sessions
@@ -1008,7 +1012,12 @@ async fn setup_remote_manual_agent_shims(
     setup
 }
 
-fn remote_manual_agent_script(adapter_id: &str, hook_command: &str, launch: &str, environment_file: &str) -> String {
+fn remote_manual_agent_script(
+    adapter_id: &str,
+    hook_command: &str,
+    launch: &str,
+    environment_file: &str,
+) -> String {
     let payload_adapter = if adapter_id == "claude-code" {
         "claude-code"
     } else {
@@ -1201,7 +1210,6 @@ fn codex_managed_command_with_hook(
 fn hook_executable_for_target(executable: &Path, target_id: &str) -> Result<String, String> {
     crate::codex_shim::hook_executable_for_target(executable, target_id)
 }
-
 
 #[cfg(test)]
 mod managed_agent_launch_tests {
@@ -1475,7 +1483,7 @@ pub fn terminal_runtime_read_output(
 ) -> Result<TerminalRuntimeOutputReadResult, String> {
     state
         .terminal_backend
-        .read_output(&runtime_id, from_cursor, max_bytes)
+        .read_output(&runtime_id, from_cursor, max_bytes.max(4))
 }
 
 #[tauri::command]
@@ -3057,6 +3065,7 @@ pub fn tunnels_save_profile(
     if profile.bind_address.is_empty() {
         return Err("请输入有效的监听地址".into());
     }
+    validate_dynamic_bind_address(&profile)?;
     if profile.forward_type != PortForwardType::Dynamic
         && (profile.target_host.is_empty() || profile.target_port == 0)
     {
@@ -3277,15 +3286,17 @@ pub async fn diagnostics_run(
         .snapshots()
         .into_iter()
         .map(|snapshot| {
-            let adapter = crate::agent_adapters::adapter_id_for_profile(
-                &snapshot.context.launch_profile_id,
-            )
-            .unwrap_or("unknown")
-            .to_string();
+            let adapter =
+                crate::agent_adapters::adapter_id_for_profile(&snapshot.context.launch_profile_id)
+                    .unwrap_or("unknown")
+                    .to_string();
             let pane_id = snapshot.context.pane_id;
             let pane_title = pane_titles.get(&pane_id).cloned().unwrap_or_default();
             let mux_session_id = snapshot.context.mux_session_id;
-            let session_name = session_names.get(&mux_session_id).cloned().unwrap_or_default();
+            let session_name = session_names
+                .get(&mux_session_id)
+                .cloned()
+                .unwrap_or_default();
             DoctorManagedAgent {
                 agent_id: snapshot.context.agent_id,
                 adapter,

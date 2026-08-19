@@ -43,6 +43,13 @@ export function discardTerminalSnapshot(paneId: string): void {
 
 const fullWidthPunctuationPattern = /^[\u00b7\u2014\u2018\u2019\u201c\u201d\u2026\u3000-\u303f\uff01-\uff0f\uff1a-\uff20\uff3b-\uff40\uff5b-\uff65\uffe5]+$/u
 
+function shiftEnterInput(platform: string, targetId: string, codexTui: boolean): string {
+  const nativeWindowsPowershell = platform === 'win32' && (targetId === 'local:powershell' || targetId === 'local:powershell5')
+  // In ConPTY Win32 input mode LF becomes Ctrl+Enter, which Codex does not
+  // bind. ESC+CR becomes Alt+Enter, one of Codex's newline bindings.
+  return nativeWindowsPowershell && codexTui ? '\x1b\r' : '\n'
+}
+
 function stringOffsetToBufferColumn(line: IBufferLine, offset: number): number {
   let stringOffset = 0
   for (let col = 0; col < line.length; col += 1) {
@@ -97,6 +104,7 @@ export interface TerminalPaneHandle {
 interface TerminalPaneProps {
   paneId: string
   targetId: string
+  activeAgentAdapterId?: string
   runtimeId?: string
   connected: boolean
   connecting: boolean
@@ -117,7 +125,7 @@ interface TerminalPaneProps {
   onOpenSettings?: () => void
 }
 
-export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function TerminalPane({ paneId, targetId, runtimeId, connected, connecting, visible, settings, backgroundImage, stoppedState, onAgentAction, onRuntimeError, onStart, onClose, onOpenSettings }, ref): React.JSX.Element {
+export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function TerminalPane({ paneId, targetId, activeAgentAdapterId, runtimeId, connected, connecting, visible, settings, backgroundImage, stoppedState, onAgentAction, onRuntimeError, onStart, onClose, onOpenSettings }, ref): React.JSX.Element {
   const { t } = useI18n()
   const container = useRef<HTMLDivElement>(null)
   const terminal = useRef<Terminal | null>(null)
@@ -130,6 +138,8 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
   const runtimeIdRef = useRef(runtimeId)
   const targetIdRef = useRef(targetId)
   targetIdRef.current = targetId
+  const activeAgentAdapterIdRef = useRef(activeAgentAdapterId)
+  activeAgentAdapterIdRef.current = activeAgentAdapterId
   const pasteClipboardRef = useRef<() => Promise<void>>(async () => undefined)
   const onAgentActionRef = useRef(onAgentAction)
   onAgentActionRef.current = onAgentAction
@@ -281,6 +291,19 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     pasteClipboardRef.current = pasteClipboard
 
     term.attachCustomKeyEventHandler((event) => {
+      if (event.key === 'Enter' && event.shiftKey) {
+        if (event.type === 'keydown') {
+          event.preventDefault()
+          event.stopPropagation()
+          onAgentActionRef.current?.()
+          writer.markInteractive()
+          writeTerminalInput(shiftEnterInput(window.api.platform, targetIdRef.current, activeAgentAdapterIdRef.current === 'codex'))
+        } else if (event.type === 'keypress') {
+          event.preventDefault()
+          event.stopPropagation()
+        }
+        return event.type === 'keyup'
+      }
       const commandKey = window.api.platform === 'darwin' ? event.metaKey : event.ctrlKey
       if (commandKey && event.key.toLowerCase() === 'f' && event.type === 'keydown') {
         event.preventDefault()
@@ -382,7 +405,31 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     const resize = term.onResize(({ cols, rows }) => { if (runtimeIdRef.current) void window.api.terminalRuntimes.resize(runtimeIdRef.current, cols, rows) })
     let catchingUp = true
     const queuedOutput: Array<Extract<TerminalRuntimeEvent, { type: 'output' }>['payload']> = []
-    const writeOutput = (payload: Extract<TerminalRuntimeEvent, { type: 'output' }>['payload']): void => {
+    type TerminalOutputPayload = Extract<TerminalRuntimeEvent, { type: 'output' }>['payload']
+    const outputFromCursor = (payload: TerminalOutputPayload, cursor: number): TerminalOutputPayload | undefined => {
+      if (payload.endCursor <= cursor) return undefined
+      if (payload.startCursor >= cursor) return payload
+      const targetBytes = cursor - payload.startCursor
+      const encoder = new TextEncoder()
+      let offset = 0
+      let consumedBytes = 0
+      for (const character of payload.data) {
+        const characterBytes = encoder.encode(character).length
+        if (consumedBytes + characterBytes > targetBytes) break
+        consumedBytes += characterBytes
+        offset += character.length
+      }
+      if (offset >= payload.data.length) return undefined
+      const data = payload.data.slice(offset)
+      return {
+        ...payload,
+        startCursor: payload.startCursor + consumedBytes,
+        data,
+      }
+    }
+    const writeOutput = (rawPayload: TerminalOutputPayload): void => {
+      const payload = outputFromCursor(rawPayload, outputCursor.current)
+      if (!payload) return
       if (payload.endCursor <= outputCursor.current) return
       const length = payload.data.length
       outputCursor.current = payload.endCursor
@@ -409,8 +456,10 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
       const catchUpRuntimeId = runtimeIdRef.current
       try {
         if (catchUpRuntimeId) {
-          const result = await window.api.terminalRuntimes.readOutput(catchUpRuntimeId, outputCursor.current, terminalHighWaterMark)
-          if (!disposed && result.runtimeId === runtimeIdRef.current && result.data && result.nextCursor > outputCursor.current) {
+          while (!disposed && catchUpRuntimeId === runtimeIdRef.current) {
+            const before = outputCursor.current
+            const result = await window.api.terminalRuntimes.readOutput(catchUpRuntimeId, before, terminalHighWaterMark)
+            if (result.runtimeId !== runtimeIdRef.current || !result.data || result.nextCursor <= before) break
             outputCursor.current = result.nextCursor
             writer.write(result.data, () => {
               if (runtimeIdRef.current === result.runtimeId) renderedOutputCursor.current = Math.max(renderedOutputCursor.current, result.nextCursor)
