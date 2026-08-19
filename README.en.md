@@ -22,14 +22,14 @@ Luna Mux is a terminal workspace built for coding agents. It maintains a Session
 
 A Session corresponds to one project directory and persists its project root and pane layout.
 
-- A Session holds multiple terminal panes with horizontal and vertical splits, draggable ratios, presets, rename, maximize, and restore.
+- A Session holds multiple terminal panes with horizontal and vertical splits, draggable ratios, presets, rename, and maximize.
 - Each pane can be a local terminal (macOS zsh/bash, Windows PowerShell or WSL) or an SSH remote terminal.
 - Local and remote terminals share one xterm.js UI, including search, clipboard handling, themes, fonts, backgrounds, and output flow control.
 - Restarting the app restores Sessions and layouts without reconnecting hosts or restarting processes behind the user's back.
 
 ## Agents in the Terminal
 
-Launch `codex` or `claude` in any pane and Luna Mux detects the agent and injects a Hook and MCP servers to extend it. You can also pick a saved launch profile when creating a pane to start the agent automatically once the shell is ready.
+Launch `codex` or `claude` in any pane and Luna Mux detects the agent and injects a Hook and MCP servers to extend it.
 
 ### Status Monitoring (Hook)
 
@@ -45,13 +45,14 @@ Launch `codex` or `claude` in any pane and Luna Mux detects the agent and inject
 - Agents can create Panes, update layouts, read bounded terminal output, and write terminal input.
 - Agents can inspect agent state, send tasks, and interrupt managed agents.
 - Agents can read safe connection summaries, update themes and terminal appearance, and run built-in diagnostics.
-- Closing Runtimes or starting transfers and tunnels may require desktop approval; credentials, private keys, and API keys are never exposed through MCP.
+- Closing Runtimes or starting transfers and tunnels requires desktop confirmation first.
+- Credentials, private keys, and API keys are never exposed to agents through MCP.
 
 ### Browser Automation (agent-browser MCP)
 
-- Each Session can own one isolated Chrome that agents automate through the [`agent-browser`](https://github.com/vercel-labs/agent-browser) MCP.
+Agents drive the browser on their own to complete web tasks: opening pages, clicking, filling forms, taking snapshots, capturing screenshots, and inspecting the console and network. They operate a Session-scoped, isolated Chrome through the [`agent-browser`](https://github.com/vercel-labs/agent-browser) MCP, which runs as a standalone window you can take over at any time.
+
 - Snapshots, interaction, waits, tabs, screenshots, console inspection, network requests, and HAR capture are supported.
-- The browser runs as a full standalone window that the user can take over at any time.
 - Chrome starts lazily on first use, then the same Runtime and page are reused.
 - Remote SSH agents reach the desktop's Chrome through an authenticated proxy; raw CDP is not exposed to the remote host.
 

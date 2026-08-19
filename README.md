@@ -22,14 +22,14 @@ Luna Mux 是一个面向 Coding Agent 的终端工作台。它以项目目录为
 
 一个 Session 对应一个项目目录，保存项目根目录和窗格布局。
 
-- 一个 Session 里有多个终端窗格，支持横向/纵向分割、拖动比例、布局预设、重命名、最大化和恢复。
+- 一个 Session 里有多个终端窗格，支持横向/纵向分割、拖动比例、布局预设、重命名和最大化。
 - 每个窗格既可以是本地终端（macOS 的 zsh/bash、Windows 的 PowerShell 或 WSL），也可以是 SSH 远程终端。
 - 本地和远程终端共用 xterm.js 界面，包括搜索、复制粘贴、主题、字体、背景和输出流控。
 - 应用重启后恢复 Session 与布局，但不擅自重连服务器或重启进程。
 
 ## 终端里的 Agent
 
-在任意终端窗格里启动 `codex` 或 `claude`，Luna Mux 会自动发现这个 Agent，并注入 Hook 和 MCP 来扩展它的能力。你也可以在新建窗格时选择已保存的启动配置，让 Agent 在 Shell 就绪后自动启动。
+在任意终端窗格里启动 `codex` 或 `claude`，Luna Mux 会自动发现这个 Agent，并注入 Hook 和 MCP 来扩展它的能力。
 
 ### 状态监控（Hook）
 
@@ -45,13 +45,14 @@ Luna Mux 是一个面向 Coding Agent 的终端工作台。它以项目目录为
 - Agent 可以创建窗格、修改布局、读取有界终端输出、写入终端输入。
 - Agent 可以查询 Agent 状态、投递任务、发送中断。
 - Agent 可以读取安全的连接摘要、修改主题和终端外观、运行内置诊断。
-- 关闭 Runtime、启动传输或隧道等重要副作用可要求桌面确认；凭据、私钥和 API Key 不通过 MCP 暴露。
+- 关闭 Runtime、启动传输或隧道等重要副作用，需要先在桌面端确认。
+- 凭据、私钥和 API Key 不会通过 MCP 暴露给 Agent。
 
 ### 浏览器自动化（agent-browser MCP）
 
-- 每个 Session 可以拥有一个隔离的 Chrome，Agent 通过 [`agent-browser`](https://github.com/vercel-labs/agent-browser) MCP 自动化网页操作。
+Agent 可以自主操作浏览器完成网页任务：打开页面、点击、填表、读取快照、截图、检查控制台和网络。它通过 [`agent-browser`](https://github.com/vercel-labs/agent-browser) MCP 驱动一个 Session 专属的隔离 Chrome，浏览器以独立窗口运行，用户随时可以接管。
+
 - 支持快照、交互、等待、标签页、截图、控制台、网络请求和 HAR。
-- 浏览器以独立的满屏窗口运行，用户随时可以接管。
 - 首次使用时按需启动 Chrome，后续复用同一 Runtime 和页面。
 - 远程 SSH Agent 通过认证代理使用本机 Chrome，不向远端暴露原始 CDP 端口。
 

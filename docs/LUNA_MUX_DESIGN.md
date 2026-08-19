@@ -123,7 +123,7 @@ Mux Session 通常对应一个项目，项目根目录为本地终端和项目�
 
 布局是由 Pane 叶节点和横向/纵向分割节点组成的递归树，每个分割节点带比例。用户可以分割、缩放、聚焦、最大化、恢复、重命名和关闭 Pane，也可以应用平衡横排、竖排或网格预设。布局变化不应重启已有 Runtime。
 
-数据库持久化 Session、项目根目录、布局、Pane 目标/工作目录/标题、兼容用启动配置字段和 Browser Resource。重启应用只恢复定义，不自动重连、执行 Shell、启动 Chrome 或恢复滚动缓冲区；Runtime ID 和进程 ID 不跨应用重启复用。
+数据库持久化 Session、项目根目录、布局、Pane 目标/工作目录/标题和 Browser Resource。重启应用只恢复定义，不自动重连、执行 Shell、启动 Chrome 或恢复滚动缓冲区；Runtime ID 和进程 ID 不跨应用重启复用。
 
 主侧边栏只包含 Session 和 Pane 树。新增工作始终从选中的 Session 开始：`新增窗格` 创建普通终端并选择本地或 SSH 环境；用户可在其中运行 `codex`、`claude` 或其他命令。Browser Resource 从 Session 的浏览器视图管理。SSH 连接保存在次级资源库，不与 Session 并列为主导航。
 
@@ -133,15 +133,12 @@ Mux Session 通常对应一个项目，项目根目录为本地终端和项目�
 
 `AgentAdapter` 是原生扩展边界。每个适配器负责：
 
-- 内置启动配置和自动配置编号；
-- 手动命令 shim 与托管启动命令；
+- 手动命令 shim；
 - Hook/MCP 配置；
 - 远程 Hook 传输要求；
 - 可选持久化用户 Hook 的兼容策略。
 
 Runtime、面板、Hook 接收器、Luna MCP、Browser Resource、授权和审计保持提供方无关。增加 Agent 提供方时，应实现并注册一个适配器，再补充契约测试。
-
-`启动 Agent` 只是便利入口：它创建普通 Terminal Pane、保存所选配置，并在 Shell 就绪后启动 Agent 命令。普通 `新增窗格` 仍只启动终端。
 
 Codex 与 Claude Code 的结构化 Hook 统一为：
 
@@ -156,7 +153,7 @@ Codex 使用进程级 TOML 覆盖和命令 Hook；Claude Code 使用进程级 `-
 
 启用后，支持文件全部放在 `~/.luna-mux/runtime/<runtime-id>`；该目录只加入当前 Pane 的 `PATH`。Luna Mux 不改远程 Shell 启动文件或用户 Agent 配置，正常断开前通过 SFTP 删除该精确目录。网络中断或进程崩溃时无法保证远程清理。
 
-权限请求仍由 Agent TUI 审批；Luna Mux 负责通知并聚焦对应终端。Agent 视图显示提供方、所有者 Pane、目标、启动方式、Hook、Luna MCP 和 Browser MCP 健康信息；未读和注意状态继续体现在侧边栏和终端边框。
+权限请求仍由 Agent TUI 审批；Luna Mux 负责通知并聚焦对应终端。Agent 视图显示提供方、所有者 Pane、目标、Hook、Luna MCP 和 Browser MCP 健康信息；未读和注意状态继续体现在侧边栏和终端边框。
 
 ### 4.5 统一 Luna 控制 API
 
