@@ -73,16 +73,17 @@ const releaseWorkflow = fs.readFileSync(releaseWorkflowPath, 'utf8')
 generated.set('.github/workflows/release.yml', releaseWorkflow)
 
 let stale = false
+const normalizeNewlines = (value) => value.replace(/\r\n?/g, '\n')
 for (const [relative, content] of generated) {
   const target = path.join(root, relative)
   const current = fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : ''
-  if (current === content) continue
+  if (normalizeNewlines(current) === normalizeNewlines(content)) continue
   stale = true
   if (checkOnly) {
     console.error(`Product metadata output is stale: ${relative}`)
   } else {
     fs.mkdirSync(path.dirname(target), { recursive: true })
-    fs.writeFileSync(target, content)
+    fs.writeFileSync(target, normalizeNewlines(content), 'utf8')
     console.log(`Updated ${relative}`)
   }
 }

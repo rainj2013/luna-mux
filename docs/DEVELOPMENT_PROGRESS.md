@@ -4,12 +4,12 @@
 
 ## 当前检查点
 
-- 日期：2026-08-16
+- 日期：2026-08-19
 - 阶段：提供方无关的 Agent Adapter、运行时 Agent 检测、原生 `agent-browser` MCP，以及 Luna MCP 应用控制。
 - 当前任务：M4.4、M5.1、M6.8——收尾真实 SSH 的 Hook/Luna MCP，以及 WSL 和 Claude Code 的 Browser MCP 端到端验收；远程 SSH Agent 浏览器操作已经通过。
 - 任务进度：65 项中 53 项完成（81.54%），8 项进行中，4 项待办。
 - 总体状态：Session/Pane 是产品外壳，每个 Pane 都是普通终端。`AgentAdapter` 注册表负责 Codex 与 Claude Code 的提供方差异；检测、面板、Luna MCP、Browser Resource、权限和审计保持共享。外部 Chrome 归 Session 所有，分发版浏览器 MCP 不依赖 Node 或 `npx`。
-- 当前工作目录：`/Users/yangyujian/code/luna-mux`
+- 当前工作目录：`/Users/happyelements/code/luna-mux`
 
 ## 已完成
 
@@ -17,11 +17,12 @@
 
 - 建立独立产品身份、仓库历史、数据库、凭据命名空间、图标和导入边界；Luna Remote 仅作为功能与体验参考，不建立 Git 同步关系。
 - 抽取统一 `TerminalBackend`，本地 PTY 与 SSH 共用 Runtime 契约、输出游标、流控和 React `TerminalPane`。
-- Windows PowerShell 7、本地 PTY、WSL 发现逻辑和 macOS zsh/bash 路径已进入组合后端；进程关闭和应用退出具备清理边界。
+- Windows PowerShell 7/5.1、本地 PTY、WSL 发现逻辑和 macOS zsh/bash 路径已进入组合后端；进程关闭和应用退出具备清理边界。
 - 建立持久化 `MuxSession`、`MuxPane`、递归 `MuxSplitNode` 和 SQLite 迁移；启动时恢复布局但不自动启动进程。
 - 主导航收敛为 Session/Pane 树；SSH 连接是次级目标资源；Browser Resource 不进入分割布局。
 - 完成横纵分屏、比例拖动、最大化、重命名、关闭和布局预设的实现路径。
 - Windows 与 macOS 已分别完成一轮真实桌面开发验证；macOS 近期高频使用覆盖本地 PTY、登录 Shell、Pane 创建、分屏、比例调整、焦点和开发重启清理。
+- 近期终端回归修复了 PowerShell 中 Codex TUI 的终端类型、Shift-Enter 换行、SSH 连接失败恢复、停止 Pane 操作入口和终端/浏览器 Runtime 清理边界。
 
 ### Agent 适配器、Hook 与通知
 
@@ -74,7 +75,7 @@
 - M1.2：`InProcessSshTerminalBackend` 已接入，但旧 SSH/SFTP/隧道路径仍需完整回归。
 - M2.3：Windows WSL 发现和启动代码已实现；仍需真实 WSL 发行版完成工作目录、命令、Agent shim 和清理复验。
 - M4.4、M5.1：远程 Hook、Luna MCP 反向转发和清理代码已实现；待允许 TCP 转发的真实 SSH 服务验收。
-- M4.6：跨平台通知已编译；待 Windows 实际通知和 macOS 权限流程验收。
+- M4.6：跨平台通知已编译；待 Windows 实际通知验收，并继续回归 macOS 应用内通知的点击路由和聚焦抑制（macOS 方案不依赖系统通知权限）。
 - M4.13、M5.7：macOS 本地 Runtime 的窄权限 Hook/MCP 和手动启动已验证；真实 SSH 与 WSL 的完整身份交接仍待复验。
 - M6.8：macOS 本地 Codex 和真实 SSH 远程 Agent 的浏览器任务已通过；仅剩 Claude Code 与真实 WSL 路径的等价验收。
 - Microsoft Pinyin 在受管 Codex TUI 中的全角智能引号差异暂缓处理；证据不足以归因于 PTY、xterm、WebView2 或 Codex。
@@ -94,7 +95,7 @@
 | macOS 桌面与本地 PTY | 连续开发运行覆盖 zsh 登录 Shell、Unicode 终端、Pane 创建、横纵分屏、比例调整、焦点、关闭和 Tauri 热重启清理 | 2026-08-16 |
 | macOS Codex、Luna MCP 与原生浏览器 | 真实 Codex 进程完成 Hook/MCP 注入、Luna Mux 设置与 Pane 控制，以及页面复用、导航、性能采样、HAR、控制台和网络调试；Chrome Runtime 持续复用 | 2026-08-16 |
 | 远程 SSH Agent 浏览器 | 真实远程 Agent 通过认证 STDIO 代理操作本机受管 Chrome，Browser MCP 页面操作通过，远端未暴露原始 CDP | 2026-08-16 |
-| 路由与 MCP 工具描述 | 三域路由覆盖 Luna Mux、网页和普通开发操作；Rust 132 项通过、4 项真实浏览器测试默认忽略 | 2026-08-16 |
+| 路由与 MCP 工具描述 | 三域路由覆盖 Luna Mux、网页和普通开发操作；当前 Rust 测试列表为 158 项，其中 4 项真实浏览器测试默认忽略 | 2026-08-19 |
 | Agent 提醒投递 | Rust Hook 事件源驱动侧边栏和 Pane 边框提醒；Windows 原生通知与 macOS 主题化应用内通知都携带 Session/Pane 路由 | 2026-08-16 |
 | Luna MCP 设置、连接摘要、Session/Pane、传输和隧道扩展 | TypeScript 检查通过；Rust 129 项通过、4 项真实浏览器测试默认忽略；完整 macOS DMG 构建成功 | 2026-08-15 |
 | `mux.pane.create` 与 `mux.layout.set` | 前端生产构建通过；Rust 130 项通过、4 项忽略；幂等双 Pane 创建和非法布局拒绝测试通过 | 2026-08-16 |
@@ -111,6 +112,7 @@
 | 本地 PTY | Windows ConPTY 的 Unicode、缩放、中断、自然退出和进程树清理测试通过 | 2026-08-12 |
 | 产品与生成契约 | 产品、Runtime、图标、多语言、类型和原生核心检查通过 | 2026-08-12 |
 | 安全依赖审阅 | `npm audit` 报告间接 `nanoid` 高风险和 `postcss` 中风险；当前运行路径不接受攻击者控制的相关输入，升级待处理 | 2026-08-12 |
+| 当前环境 Rust 测试 | `cargo test --manifest-path app/native/Cargo.toml`：144 项通过、10 项失败、4 项忽略；其中 9 项因受限环境禁止回环端口分配，终端输出游标测试仍需修复后重跑 | 2026-08-19 |
 
 ## 决策记录
 

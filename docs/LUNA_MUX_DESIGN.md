@@ -88,7 +88,7 @@ Luna Mux 桌面应用
 
 本地与 SSH Runtime 共用 React `TerminalPane` 和 xterm.js。主题、字体、背景、搜索、复制粘贴、快捷键、缩放、UTF-8、WebGL 回退和输出流控保持一致。SFTP 和 SSH 转发只由能力标记控制，不分叉终端界面。
 
-- Windows 使用 ConPTY、PowerShell 7 和已选择的 WSL 发行版，并通过 Job Object 清理进程树。
+- Windows 使用 ConPTY、PowerShell 7/5.1 和已选择的 WSL 发行版，并通过 Job Object 清理进程树。
 - macOS 使用 Unix PTY 和用户配置的 zsh/bash，并通过进程组和信号清理。
 - 关闭活动 Pane 需要确认；退出应用时一次确认并清理全部 PTY、SSH Channel 和受管 Chrome。
 
