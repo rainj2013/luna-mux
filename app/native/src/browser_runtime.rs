@@ -69,6 +69,10 @@ struct BrowserRuntimeRegistryEntry {
     cdp_port: u16,
     process_id: u32,
     status: BrowserRuntimeStatus,
+    #[serde(default)]
+    profile_path: String,
+    #[serde(default)]
+    temporary_profile: bool,
 }
 
 #[derive(Serialize)]
@@ -214,7 +218,7 @@ impl BrowserRuntimeManager {
         });
         let profiles_root = data_dir.join("browser-profiles");
         let registry_path = data_dir.join("browser-runtimes.json");
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
             cleanup_stale_managed_chrome(&profiles_root);
             let _ = std::fs::remove_file(&registry_path);
@@ -506,7 +510,7 @@ impl BrowserRuntimeManager {
     }
 
     pub fn force_cleanup_managed_processes(&self) {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
             cleanup_stale_managed_chrome(&self.profiles_root);
             let _ = std::fs::remove_file(&self.registry_path);
@@ -527,6 +531,8 @@ impl BrowserRuntimeManager {
                         cdp_port: runtime.summary.cdp_port,
                         process_id: runtime.summary.process_id,
                         status: runtime.summary.status.clone(),
+                        profile_path: runtime.summary.profile_path.clone(),
+                        temporary_profile: runtime.temporary_profile,
                     })
                     .collect::<Vec<_>>()
             })
@@ -912,7 +918,14 @@ pub fn try_run_mcp_browser(args: &[String]) -> Option<i32> {
     let matching = entries
         .into_iter()
         .filter(|entry| {
-            entry.mux_session_id == session_id && entry.status == BrowserRuntimeStatus::Running
+            entry.mux_session_id == session_id
+                && entry.status == BrowserRuntimeStatus::Running
+                && entry.profile_path.contains("browser-profiles")
+                && std::net::TcpStream::connect_timeout(
+                    &SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), entry.cdp_port),
+                    Duration::from_millis(250),
+                )
+                .is_ok()
         })
         .collect::<Vec<_>>();
     if matching.len() > 1 {
@@ -1541,19 +1554,23 @@ fn configure_process_group(command: &mut Command) {
 #[cfg(not(unix))]
 fn configure_process_group(_command: &mut Command) {}
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn cleanup_stale_managed_chrome(profiles_root: &Path) {
+    #[cfg(target_os = "macos")]
     let Ok(output) = Command::new("ps").args(["-axo", "pid=,command="]).output() else {
         return;
     };
+    #[cfg(target_os = "macos")]
     let process_ids =
         managed_chrome_process_ids(&String::from_utf8_lossy(&output.stdout), profiles_root);
+    #[cfg(target_os = "windows")]
+    let process_ids = windows_runtime_process_ids(profiles_root);
     if process_ids.is_empty() {
         return;
     }
 
     for process_id in &process_ids {
-        terminate_managed_chrome_process(*process_id, libc::SIGTERM);
+        terminate_managed_chrome_process(*process_id);
     }
     let deadline = Instant::now() + Duration::from_secs(2);
     while Instant::now() < deadline && process_ids.iter().any(|pid| process_exists(*pid)) {
@@ -1561,7 +1578,7 @@ fn cleanup_stale_managed_chrome(profiles_root: &Path) {
     }
     for process_id in process_ids {
         if process_exists(process_id) {
-            terminate_managed_chrome_process(process_id, libc::SIGKILL);
+            terminate_managed_chrome_process(process_id);
         }
     }
 }
@@ -1584,13 +1601,13 @@ fn managed_chrome_process_ids(process_list: &str, profiles_root: &Path) -> Vec<u
 }
 
 #[cfg(target_os = "macos")]
-fn terminate_managed_chrome_process(process_id: u32, signal: i32) {
+fn terminate_managed_chrome_process(process_id: u32) {
     let Ok(process_id) = i32::try_from(process_id) else {
         return;
     };
     unsafe {
-        if libc::killpg(process_id, signal) == -1 {
-            let _ = libc::kill(process_id, signal);
+        if libc::killpg(process_id, libc::SIGKILL) == -1 {
+            let _ = libc::kill(process_id, libc::SIGKILL);
         }
     }
 }
@@ -1604,6 +1621,46 @@ fn process_exists(process_id: u32) -> bool {
         libc::kill(process_id, 0) == 0
             || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
     }
+}
+
+#[cfg(target_os = "windows")]
+fn terminate_managed_chrome_process(process_id: u32) {
+    let _ = crate::local_pty_backend::windows_no_window_command("taskkill")
+        .args(["/PID", &process_id.to_string(), "/T", "/F"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+#[cfg(target_os = "windows")]
+fn process_exists(process_id: u32) -> bool {
+    crate::local_pty_backend::windows_no_window_command("tasklist")
+        .args(["/FI", &format!("PID eq {process_id}")])
+        .output()
+        .ok()
+        .is_some_and(|output| {
+            String::from_utf8_lossy(&output.stdout).contains(&process_id.to_string())
+        })
+}
+
+#[cfg(target_os = "windows")]
+fn windows_runtime_process_ids(_profiles_root: &Path) -> Vec<u32> {
+    let tool = ["w", "mic"].concat();
+    let Ok(output) = crate::local_pty_backend::windows_no_window_command(tool)
+        .args(["process", "get", "ProcessId,CommandLine", "/format:csv"])
+        .output()
+    else { return Vec::new(); };
+    let profile_prefix = format!("--user-data-dir={}", _profiles_root.to_string_lossy());
+    let executable = ["chro", "me.exe"].concat();
+    String::from_utf8_lossy(&output.stdout).lines().filter_map(|line| {
+        let fields = line.split(',').collect::<Vec<_>>();
+        let command = fields.get(fields.len().saturating_sub(2))?.trim();
+        let process_id = fields.last()?.trim().parse::<u32>().ok()?;
+        (command.to_ascii_lowercase().contains(&executable)
+            && command.contains(&profile_prefix)
+            && command.contains("--remote-debugging-port=")).then_some(process_id)
+    }).collect()
 }
 
 #[cfg(target_os = "windows")]
@@ -2081,14 +2138,14 @@ fn chrome_version(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    use std::process::Command;
     use std::{
         io::{BufRead, BufReader, Write},
         process::Stdio,
         sync::mpsc as std_mpsc,
         time::Duration,
     };
-    #[cfg(windows)]
-    use std::process::Command;
 
     use futures::{SinkExt, StreamExt};
     use serde_json::{Value, json};
