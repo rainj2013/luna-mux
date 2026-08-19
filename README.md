@@ -61,6 +61,7 @@ Agent 可以自主操作浏览器完成网页任务：打开页面、点击、�
 完整 SSH 与 SFTP 能力移植自 Luna Remote。
 
 - SSH 支持密码、私钥、SSH Agent、Host Key 校验、保活和一级跳板机。
+- 在 SSH 终端里启动的 Agent 同样会被注入 Hook 和 MCP，可以远程控制本机的 Luna Mux，也能通过 agent-browser MCP 操作本机浏览器。
 - 连接可分组、排序、备份，可从 OpenSSH Config 或 Luna Remote 数据库导入。
 - SFTP 支持本地/远程目录浏览、上传、下载、预览、拖放、队列和失败重试。
 - 支持本地转发、远程转发和 SOCKS5 动态转发。

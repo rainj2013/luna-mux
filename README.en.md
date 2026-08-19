@@ -61,6 +61,7 @@ Agents drive the browser on their own to complete web tasks: opening pages, clic
 The complete SSH and SFTP capabilities are ported from Luna Remote.
 
 - SSH supports passwords, private keys, SSH Agent, host-key verification, keepalive, and one jump host.
+- Agents launched in SSH terminals get the same Hook and MCP injection, so they can remotely control the local Luna Mux and drive the local browser through agent-browser MCP.
 - Connections can be grouped, reordered, backed up, and imported from OpenSSH Config or a Luna Remote database.
 - SFTP supports local/remote browsing, upload, download, preview, drag and drop, queues, and retry.
 - Local, remote, and SOCKS5 dynamic forwarding are supported.
