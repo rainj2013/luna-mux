@@ -78,13 +78,10 @@ impl TransferManager {
         let mut result = Vec::new();
         for source in &request.source_paths {
             let name = if request.direction == TransferDirection::Upload {
-                local_name(source)
+                local_name(source)?
             } else {
-                remote_name(source)
+                remote_name(source)?
             };
-            if name.is_empty() {
-                return Err(format!("无法确定传输项目名称：{source}"));
-            }
             let destination = if request.direction == TransferDirection::Upload {
                 remote_join(&request.destination_directory, &name)
             } else {
@@ -342,7 +339,7 @@ impl TransferManager {
                 .await
                 .map_err(|e| e.to_string())?;
             while let Some(entry) = entries.next_entry().await.map_err(|e| e.to_string())? {
-                let name = entry.file_name().to_string_lossy().into_owned();
+                let name = validate_entry_name(&entry.file_name().to_string_lossy(), "本地目录项")?;
                 self.upload_entry(
                     internal,
                     entry.path().to_string_lossy().into_owned(),
@@ -404,7 +401,7 @@ impl TransferManager {
                 .await
                 .map_err(|e| e.to_string())?;
             for entry in sftp.read_dir(source).await.map_err(|e| e.to_string())? {
-                let name = entry.file_name();
+                let name = validate_entry_name(&entry.file_name(), "远端目录项")?;
                 self.download_entry(
                     internal,
                     entry.path(),
@@ -795,18 +792,34 @@ fn next_conflict(state: &mut ConflictState) -> Option<TransferConflict> {
     None
 }
 
-fn local_name(path: &str) -> String {
-    Path::new(path)
+fn validate_entry_name(value: &str, label: &str) -> Result<String, String> {
+    let value = value.trim();
+    if value.is_empty()
+        || value == "."
+        || value == ".."
+        || value.contains('/')
+        || value.contains('\\')
+    {
+        return Err(format!("{label}名称无效"));
+    }
+    Ok(value.to_string())
+}
+
+fn local_name(path: &str) -> Result<String, String> {
+    let name = Path::new(path)
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    validate_entry_name(&name, "本地传输项目")
 }
-fn remote_name(path: &str) -> String {
-    path.trim_end_matches('/')
+fn remote_name(path: &str) -> Result<String, String> {
+    let name = path
+        .trim_end_matches('/')
         .rsplit('/')
         .next()
         .unwrap_or("")
-        .to_string()
+        .to_string();
+    validate_entry_name(&name, "远端传输项目")
 }
 fn remote_parent(path: &str) -> String {
     let path = path.trim_end_matches('/');
@@ -832,7 +845,7 @@ fn remote_join(parent: &str, child: &str) -> String {
 fn renamed_path(path: &str, attempt: u32, remote: bool) -> String {
     if remote {
         let parent = remote_parent(path);
-        let name = remote_name(path);
+        let name = remote_name(path).unwrap_or_default();
         let (stem, extension) = name
             .rsplit_once('.')
             .filter(|(stem, _)| !stem.is_empty())
@@ -886,6 +899,17 @@ mod tests {
         assert_eq!(remote_join("/tmp", "a.txt"), "/tmp/a.txt");
         assert_eq!(remote_parent("/tmp/a.txt"), "/tmp");
         assert_eq!(renamed_path("/tmp/a.txt", 2, true), "/tmp/a (2).txt");
+    }
+
+    #[test]
+    fn transfer_names_reject_path_traversal_components() {
+        assert!(validate_entry_name(".", "entry").is_err());
+        assert!(validate_entry_name("..", "entry").is_err());
+        assert!(validate_entry_name("nested/name", "entry").is_err());
+        assert!(validate_entry_name("nested\\name", "entry").is_err());
+        assert!(local_name("/tmp/..").is_err());
+        assert!(remote_name("/tmp/..").is_err());
+        assert_eq!(remote_name("/tmp/a.txt").unwrap(), "a.txt");
     }
 
     #[test]

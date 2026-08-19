@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    net::IpAddr,
     sync::{Arc, Mutex},
 };
 
@@ -64,6 +65,7 @@ impl TunnelManager {
         session_id: String,
         profile: PortForwardProfile,
     ) -> Result<TunnelSummary, String> {
+        validate_dynamic_bind_address(&profile)?;
         if self.sessions.bookmark_id(&session_id)? != profile.bookmark_id {
             return Err("端口转发配置与当前连接不匹配".into());
         }
@@ -409,4 +411,47 @@ impl TunnelManager {
     }
 }
 
+pub(crate) fn validate_dynamic_bind_address(profile: &PortForwardProfile) -> Result<(), String> {
+    if profile.forward_type != PortForwardType::Dynamic {
+        return Ok(());
+    }
+    let address = profile
+        .bind_address
+        .trim()
+        .parse::<IpAddr>()
+        .map_err(|_| "动态 SOCKS5 监听地址必须是回环 IP（127.0.0.1 或 ::1）".to_string())?;
+    if !address.is_loopback() {
+        return Err("动态 SOCKS5 只能监听回环地址，避免暴露未认证代理".into());
+    }
+    Ok(())
+}
+
 use futures::FutureExt;
+
+#[cfg(test)]
+mod tests {
+    use super::validate_dynamic_bind_address;
+    use crate::models::{PortForwardProfile, PortForwardType};
+
+    fn profile(bind_address: &str, forward_type: PortForwardType) -> PortForwardProfile {
+        PortForwardProfile {
+            id: "profile".into(),
+            bookmark_id: "bookmark".into(),
+            name: "test".into(),
+            forward_type,
+            bind_address: bind_address.into(),
+            bind_port: 0,
+            target_host: String::new(),
+            target_port: 0,
+        }
+    }
+
+    #[test]
+    fn dynamic_forwarding_is_loopback_only() {
+        assert!(validate_dynamic_bind_address(&profile("127.0.0.1", PortForwardType::Dynamic)).is_ok());
+        assert!(validate_dynamic_bind_address(&profile("::1", PortForwardType::Dynamic)).is_ok());
+        assert!(validate_dynamic_bind_address(&profile("0.0.0.0", PortForwardType::Dynamic)).is_err());
+        assert!(validate_dynamic_bind_address(&profile("example.com", PortForwardType::Dynamic)).is_err());
+        assert!(validate_dynamic_bind_address(&profile("0.0.0.0", PortForwardType::Local)).is_ok());
+    }
+}
