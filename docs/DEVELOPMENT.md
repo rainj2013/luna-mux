@@ -140,7 +140,7 @@ npm test
 npm run web:build
 ```
 
-`npm run check` 依次执行 TypeScript 类型检查和 Rust `cargo check`，`npm test` 运行 Rust 单元测试。提交代码前应保证三条命令全部通过。
+`npm run check` 会依次校验产品元数据、终端 Runtime 契约、图标、多语言、TypeScript 类型并执行 Rust `cargo check`；`npm test` 运行 Rust 单元测试，`npm run web:build` 验证前端生产构建。提交代码前应保证三条命令全部通过。
 
 ## 打包
 

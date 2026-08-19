@@ -17,7 +17,7 @@ Terminal Runtime
 
 Rust 后端通过 `russh` 请求 `xterm-256color` PTY，并将窗口尺寸变化直接发送给远端。连接支持密码、键盘交互、私钥、SSH Agent、主机密钥确认、一级跳板机和可配置保活。
 
-本地 PTY 采用 `portable-pty` 0.9：Windows 使用 ConPTY，macOS 使用 Unix PTY。M2.1 的 Windows 探针已验证 Unicode 输出、缩放、Ctrl-C 输入和进程清理；macOS 仍需在目标平台验证。ConPTY 启动时可能发送 `ESC[6n` 光标位置查询，正式的 xterm.js `TerminalPane` 会负责响应，PTY 后端不自行实现终端仿真。
+本地 PTY 采用 `portable-pty` 0.9：Windows 使用 ConPTY，支持 PowerShell 7、PowerShell 5.1 和已安装的 WSL 发行版；macOS 使用 Unix PTY 和用户的 zsh/bash 登录 Shell。Windows ConPTY 已验证 Unicode 输出、缩放、Ctrl-C 输入、PowerShell Codex TUI 和进程清理；macOS 已完成本地 PTY、登录 Shell、Pane 生命周期和应用重启清理的实机验证。ConPTY 启动时可能发送 `ESC[6n` 光标位置查询，正式的 xterm.js `TerminalPane` 会负责响应，PTY 后端不自行实现终端仿真。
 
 在 Luna Mux 领域模型中，Mux Session 表示持久化的项目容器，Terminal Runtime 表示窗格中的一次终端运行。应用退出时会停止当前端口转发并关闭全部 Runtime；Mux Session 和窗格配置保留。运行期间，Runtime 由 Rust 后端持有，不依赖前端组件是否重新渲染。
 
