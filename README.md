@@ -16,7 +16,7 @@
 
 <div align="center"><a href="README.en.md">English</a> · 简体中文</div>
 
-Luna Mux 把项目终端、Coding Agent、远程服务器和浏览器自动化整合进同一个工作空间。一个 Session 保存项目目录、多个本地或 SSH 窗格及其分屏布局；Codex、Claude Code 等 Agent 仍运行在普通终端中，但能获得状态提醒、浏览器工具，以及在明确权限边界内控制 Luna Mux 的能力。
+Luna Mux 把项目终端、Coding Agent、远程服务器和浏览器自动化整合进同一个工作空间。一个 Session 保存项目目录、多个本地或 SSH 窗格及其分屏布局；Codex、Claude Code 等 Agent 在普通终端中运行，并获得状态提醒、浏览器工具，以及在明确权限边界内控制 Luna Mux 的能力。
 
 > [!NOTE]
 > Luna Mux 当前为 **0.1.0 预览版**，暂不建议作为无人值守的生产基础设施。
@@ -29,9 +29,9 @@ Luna Mux 把项目终端、Coding Agent、远程服务器和浏览器自动化�
 - 本地和远程终端共用 xterm.js 界面，包括搜索、复制粘贴、主题、字体、背景和输出流控。
 - 应用重启后恢复 Session 与布局，但不擅自重连服务器或重启进程。
 
-## 普通终端中的 Coding Agent
+## Coding Agent
 
-没有特殊的「Agent 窗格」。你可以在任意普通终端里手动运行 `codex` 或 `claude`，也可以使用内置启动入口。
+Codex、Claude Code 等 Agent 运行在普通终端中。你可以手动运行 `codex` 或 `claude`，也可以使用内置启动入口一键拉起。
 
 - 统一显示 Agent 的工作、等待输入、等待权限、完成和错误状态。
 - 在侧边栏、窗格边框和桌面通知中标记需要关注的窗格，点击通知可回到对应位置。
@@ -50,9 +50,8 @@ Luna MCP 向终端里的 Agent 开放 Luna Mux 的完整功能，覆盖 Session�
 
 ## 浏览器自动化
 
-每个 Session 可以拥有一个隔离的 Chrome，Agent 用它自动化网页操作。浏览器以标准外部窗口运行，用户随时可以接管。
+每个 Session 可以拥有一个隔离的 Chrome，Agent 用它自动化网页操作。浏览器以独立的满屏窗口运行，用户随时可以接管。
 
-- 浏览器不是终端窗格，也不并入分屏布局——它保持独立的满屏窗口，更方便浏览和操作。
 - Agent 通过原生 `agent-browser` MCP 操作网页，支持快照、交互、等待、标签页、截图、控制台、网络请求和 HAR。
 - 首次真正使用时按需启动 Chrome，后续复用同一 Runtime 和页面。
 - 远程 SSH Agent 通过认证代理使用本机 Chrome，不向远端暴露原始 CDP 端口。
