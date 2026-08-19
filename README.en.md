@@ -16,7 +16,7 @@
 
 <div align="center">English · <a href="README.md">简体中文</a></div>
 
-Luna Mux brings project terminals, coding agents, remote machines, and browser automation into one workspace. A Session persists its project root, local or SSH Panes, and recursive split layout. Codex, Claude Code, and other agents run in ordinary terminals, with status notifications, browser tooling, and narrowly scoped control over Luna Mux itself.
+Luna Mux brings terminals, coding agents, remote machines, and browser automation into one workspace. A Session persists its project root, local or SSH Panes, and recursive split layout. Codex, Claude Code, and other agents run in terminals, with status notifications, browser tooling, and narrowly scoped control over Luna Mux itself.
 
 > [!NOTE]
 > Luna Mux is currently a **0.1.0 preview** and is not recommended as unattended production infrastructure.
@@ -31,11 +31,11 @@ Luna Mux brings project terminals, coding agents, remote machines, and browser a
 
 ## Coding agents
 
-Codex, Claude Code, and other agents run in ordinary terminals. Launch `codex` or `claude` manually, or use a built-in shortcut to start one.
+Codex, Claude Code, and other agents run in terminals. Launch `codex` or `claude` manually, or use a built-in shortcut to start one.
 
 - Unified working, waiting-for-input, waiting-for-permission, completed, and error states.
 - Attention indicators in the sidebar and Pane border, plus desktop notifications that route back to the owning Session and Pane.
-- An Agent Environment view for inspecting the real Adapter, Hook, Luna MCP, and Browser MCP health state.
+- An Agent Environment view for inspecting the Adapter, Hook, Luna MCP, and Browser MCP health state.
 - Agent lifetime follows the application; managed terminals, agents, and Chrome close with Luna Mux.
 
 ## Let agents control Luna Mux
@@ -55,7 +55,7 @@ Credentials, private-key contents, and API keys are never exposed through MCP.
 Each Session can own one isolated Chrome that agents use to automate web tasks. The browser runs as a full, standalone window that the user can take over at any time.
 
 - Agents use a native `agent-browser` MCP for snapshots, interaction, waits, tabs, screenshots, console inspection, network requests, and HAR capture.
-- Chrome starts lazily on the first real browser tool call, then the same Runtime and page are reused.
+- Chrome starts lazily on the first browser tool call, then the same Runtime and page are reused.
 - Remote SSH agents reach the desktop's Chrome through an authenticated proxy; raw CDP is not exposed to the remote host.
 
 ## SSH, SFTP, and port forwarding
