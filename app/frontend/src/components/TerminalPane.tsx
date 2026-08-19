@@ -281,6 +281,19 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     pasteClipboardRef.current = pasteClipboard
 
     term.attachCustomKeyEventHandler((event) => {
+      if (event.key === 'Enter' && event.shiftKey) {
+        if (event.type === 'keydown') {
+          event.preventDefault()
+          event.stopPropagation()
+          onAgentActionRef.current?.()
+          writer.markInteractive()
+          writeTerminalInput('\n')
+        } else if (event.type === 'keypress') {
+          event.preventDefault()
+          event.stopPropagation()
+        }
+        return event.type === 'keyup'
+      }
       const commandKey = window.api.platform === 'darwin' ? event.metaKey : event.ctrlKey
       if (commandKey && event.key.toLowerCase() === 'f' && event.type === 'keydown') {
         event.preventDefault()
