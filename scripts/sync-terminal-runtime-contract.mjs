@@ -412,16 +412,17 @@ const generated = new Map([
 ])
 
 let stale = false
+const normalizeNewlines = (value) => value.replace(/\r\n?/g, '\n')
 for (const [relativePath, content] of generated) {
   const target = path.join(root, relativePath)
   const current = fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : ''
-  if (current === content) continue
+  if (normalizeNewlines(current) === normalizeNewlines(content)) continue
   stale = true
   if (checkOnly) {
     console.error(`Terminal runtime contract output is stale: ${relativePath}`)
   } else {
     fs.mkdirSync(path.dirname(target), { recursive: true })
-    fs.writeFileSync(target, content)
+    fs.writeFileSync(target, normalizeNewlines(content), 'utf8')
     console.log(`Updated ${relativePath}`)
   }
 }

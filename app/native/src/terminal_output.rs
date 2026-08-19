@@ -6,6 +6,7 @@ use crate::{
 };
 
 pub const OUTPUT_CAPACITY_BYTES: usize = 1024 * 1024;
+pub const MIN_OUTPUT_READ_BYTES: usize = 4;
 
 struct OutputChunk {
     start_cursor: u64,
@@ -70,6 +71,7 @@ impl OutputBuffer {
             .map(|chunk| chunk.start_cursor)
             .unwrap_or(self.next_cursor);
         let cursor = requested_cursor.max(earliest_cursor).min(self.next_cursor);
+        let max_bytes = max_bytes.max(MIN_OUTPUT_READ_BYTES);
         let mut data = String::new();
         let mut next_cursor = cursor;
         for chunk in &self.chunks {
@@ -126,5 +128,8 @@ mod tests {
         assert_eq!(truncated.earliest_cursor, 3);
         assert_eq!(truncated.data, "中def");
         assert_eq!(output.read("runtime-1", 6, 3).unwrap().data, "def");
+        let small = output.read("runtime-1", 3, 1).unwrap();
+        assert_eq!(small.data, "中");
+        assert!(small.next_cursor > 3);
     }
 }

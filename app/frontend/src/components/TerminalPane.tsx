@@ -382,7 +382,31 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     const resize = term.onResize(({ cols, rows }) => { if (runtimeIdRef.current) void window.api.terminalRuntimes.resize(runtimeIdRef.current, cols, rows) })
     let catchingUp = true
     const queuedOutput: Array<Extract<TerminalRuntimeEvent, { type: 'output' }>['payload']> = []
-    const writeOutput = (payload: Extract<TerminalRuntimeEvent, { type: 'output' }>['payload']): void => {
+    type TerminalOutputPayload = Extract<TerminalRuntimeEvent, { type: 'output' }>['payload']
+    const outputFromCursor = (payload: TerminalOutputPayload, cursor: number): TerminalOutputPayload | undefined => {
+      if (payload.endCursor <= cursor) return undefined
+      if (payload.startCursor >= cursor) return payload
+      const targetBytes = cursor - payload.startCursor
+      const encoder = new TextEncoder()
+      let offset = 0
+      let consumedBytes = 0
+      for (const character of payload.data) {
+        const characterBytes = encoder.encode(character).length
+        if (consumedBytes + characterBytes > targetBytes) break
+        consumedBytes += characterBytes
+        offset += character.length
+      }
+      if (offset >= payload.data.length) return undefined
+      const data = payload.data.slice(offset)
+      return {
+        ...payload,
+        startCursor: payload.startCursor + consumedBytes,
+        data,
+      }
+    }
+    const writeOutput = (rawPayload: TerminalOutputPayload): void => {
+      const payload = outputFromCursor(rawPayload, outputCursor.current)
+      if (!payload) return
       if (payload.endCursor <= outputCursor.current) return
       const length = payload.data.length
       outputCursor.current = payload.endCursor
@@ -409,8 +433,10 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
       const catchUpRuntimeId = runtimeIdRef.current
       try {
         if (catchUpRuntimeId) {
-          const result = await window.api.terminalRuntimes.readOutput(catchUpRuntimeId, outputCursor.current, terminalHighWaterMark)
-          if (!disposed && result.runtimeId === runtimeIdRef.current && result.data && result.nextCursor > outputCursor.current) {
+          while (!disposed && catchUpRuntimeId === runtimeIdRef.current) {
+            const before = outputCursor.current
+            const result = await window.api.terminalRuntimes.readOutput(catchUpRuntimeId, before, terminalHighWaterMark)
+            if (result.runtimeId !== runtimeIdRef.current || !result.data || result.nextCursor <= before) break
             outputCursor.current = result.nextCursor
             writer.write(result.data, () => {
               if (runtimeIdRef.current === result.runtimeId) renderedOutputCursor.current = Math.max(renderedOutputCursor.current, result.nextCursor)
