@@ -16,11 +16,11 @@
 
 <div align="center">English · <a href="README.md">简体中文</a></div>
 
-Luna Mux brings terminals, coding agents, remote machines, and browser automation into one workspace. A Session persists its project root, local or SSH Panes, and recursive split layout. Codex, Claude Code, and other agents run in terminals, with status notifications and browser tooling.
+Luna Mux brings terminals, coding agents, remote machines, and browser automation into one workspace. A Session persists its project root and organizes its terminal Panes in a recursive split layout. Codex, Claude Code, and other agents run in terminals, with status notifications and browser tooling.
 
 ## Project Sessions and Terminal Panes
 
-- A Session represents one project context and persists its project root, local or SSH Panes, and recursive split layout.
+- A Session represents one project context and persists its project root, organizing its terminal Panes in a recursive split layout.
 - Layout controls include horizontal and vertical splits, draggable ratios, presets, rename, maximize, and restore.
 - macOS uses a local zsh/bash PTY. Windows supports PowerShell and WSL. Both platforms can create SSH terminals.
 - Local and remote terminals share one xterm.js UI, including search, clipboard handling, themes, fonts, backgrounds, and output flow control.
@@ -51,7 +51,7 @@ Credentials, private-key contents, and API keys are never exposed through MCP.
 
 Each Session can own one isolated Chrome that agents use to automate web tasks. The browser runs as a full, standalone window that the user can take over at any time.
 
-- Agents use a native `agent-browser` MCP for snapshots, interaction, waits, tabs, screenshots, console inspection, network requests, and HAR capture.
+- Agents use a native [`agent-browser`](https://github.com/vercel-labs/agent-browser) MCP for snapshots, interaction, waits, tabs, screenshots, console inspection, network requests, and HAR capture.
 - Chrome starts lazily on the first browser tool call, then the same Runtime and page are reused.
 - Remote SSH agents reach the desktop's Chrome through an authenticated proxy; raw CDP is not exposed to the remote host.
 

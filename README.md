@@ -16,11 +16,11 @@
 
 <div align="center"><a href="README.en.md">English</a> · 简体中文</div>
 
-Luna Mux 把终端、Coding Agent、远程服务器和浏览器自动化整合进同一个工作空间。一个 Session 保存项目根目录、多个本地或 SSH 窗格和分屏布局。Codex、Claude Code 等 Agent 就在终端里运行，配有状态提醒和浏览器工具。
+Luna Mux 把终端、Coding Agent、远程服务器和浏览器自动化整合进同一个工作空间。一个 Session 保存项目根目录，并以分屏布局组织多个终端窗格。Codex、Claude Code 等 Agent 就在终端里运行，配有状态提醒和浏览器工具。
 
 ## 项目 Session 与终端窗格
 
-- 一个 Session 对应一个项目，保存项目根目录、多个本地或 SSH 窗格和分屏布局。
+- 一个 Session 对应一个项目，保存项目根目录，并以分屏布局组织多个终端窗格。
 - 支持横向/纵向分割、拖动比例、布局预设、重命名、最大化和恢复。
 - macOS 使用本地 zsh/bash；Windows 支持 PowerShell 与 WSL；两端都能创建 SSH 终端。
 - 本地和远程终端共用 xterm.js 界面，包括搜索、复制粘贴、主题、字体、背景和输出流控。
@@ -49,7 +49,7 @@ Luna MCP 向终端里的 Agent 开放 Luna Mux 的控制能力，覆盖 Session�
 
 每个 Session 可以拥有一个隔离的 Chrome，Agent 用它自动化网页操作。浏览器以独立的满屏窗口运行，用户随时可以接管。
 
-- Agent 通过原生 `agent-browser` MCP 操作网页，支持快照、交互、等待、标签页、截图、控制台、网络请求和 HAR。
+- Agent 通过原生 [`agent-browser`](https://github.com/vercel-labs/agent-browser) MCP 操作网页，支持快照、交互、等待、标签页、截图、控制台、网络请求和 HAR。
 - 首次使用时按需启动 Chrome，后续复用同一 Runtime 和页面。
 - 远程 SSH Agent 通过认证代理使用本机 Chrome，不向远端暴露原始 CDP 端口。
 
