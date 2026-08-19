@@ -28,7 +28,7 @@ Luna Mux brings terminals, coding agents, remote machines, and browser automatio
 
 ## Coding Agents
 
-Codex, Claude Code, and other agents run in terminals. Launch `codex` or `claude` manually, or use a built-in launcher to start one.
+Codex, Claude Code, and other agents run in terminals. Launch `codex` or `claude` manually, or pick a saved launch profile when creating a Pane to start the agent automatically once the shell is ready.
 
 - Unified working, waiting-for-input, waiting-for-permission, completed, and error states.
 - Attention indicators in the sidebar and Pane border, plus desktop notifications that route back to the owning Session and Pane.

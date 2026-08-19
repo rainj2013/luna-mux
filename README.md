@@ -16,7 +16,7 @@
 
 <div align="center"><a href="README.en.md">English</a> · 简体中文</div>
 
-Luna Mux 把终端、Coding Agent、远程服务器和浏览器自动化整合进同一个工作空间。一个 Session 保存项目目录、多个本地或 SSH 窗格及其分屏布局；Codex、Claude Code 等 Agent 在终端中运行，并获得状态提醒和浏览器工具。
+Luna Mux 把终端、Coding Agent、远程服务器和浏览器自动化整合进同一个工作空间。一个 Session 保存项目根目录、多个本地或 SSH 窗格和分屏布局。Codex、Claude Code 等 Agent 就在终端里运行，配有状态提醒和浏览器工具。
 
 ## 项目 Session 与终端窗格
 
@@ -28,7 +28,7 @@ Luna Mux 把终端、Coding Agent、远程服务器和浏览器自动化整合�
 
 ## Coding Agent
 
-Codex、Claude Code 等 Agent 运行在终端中。你可以手动运行 `codex` 或 `claude`，也可以使用内置启动入口一键拉起。
+Codex、Claude Code 等 Agent 运行在终端中。你可以手动运行 `codex` 或 `claude`，也可以在新建窗格时选择已保存的启动配置，Agent 会在 Shell 就绪后自动启动。
 
 - 统一显示 Agent 的工作、等待输入、等待权限、完成和错误状态。
 - 在侧边栏、窗格边框和桌面通知中标记需要关注的窗格，点击通知可回到对应位置。
