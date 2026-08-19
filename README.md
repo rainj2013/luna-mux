@@ -1,7 +1,7 @@
 <div align="center">
   <img src="assets/icons/luna.png" width="96" alt="Luna Mux 图标">
   <h1>Luna Mux</h1>
-  <p>面向 Coding Agent 的本地与远程终端工作台</p>
+  <p>面向 Coding Agent 的终端工作台</p>
   <p>
     <a href="https://github.com/rainj2013/luna-mux/actions/workflows/release.yml"><img src="https://github.com/rainj2013/luna-mux/actions/workflows/release.yml/badge.svg" alt="构建状态"></a>
     <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-5b8def?style=flat-square" alt="支持平台">

@@ -1,7 +1,7 @@
 <div align="center">
   <img src="assets/icons/luna.png" width="96" alt="Luna Mux icon">
   <h1>Luna Mux</h1>
-  <p>A local and remote terminal workspace built for coding agents</p>
+  <p>A terminal workspace built for coding agents</p>
   <p>
     <a href="https://github.com/rainj2013/luna-mux/actions/workflows/release.yml"><img src="https://github.com/rainj2013/luna-mux/actions/workflows/release.yml/badge.svg" alt="Build status"></a>
     <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-5b8def?style=flat-square" alt="Supported platforms">
