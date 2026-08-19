@@ -394,6 +394,15 @@ fn configure_terminal_environment(command: &mut CommandBuilder, target_id: &str)
         // Finder-launched applications do not inherit TERM from a parent terminal.
         command.env("TERM", XTERM_256COLOR);
         command.env("COLORTERM", TRUECOLOR);
+    } else if is_powershell_target(target_id) {
+        let needs_fallback = command.get_env("TERM").is_none_or(|value| {
+            let value = value.to_string_lossy();
+            value.trim().is_empty() || value.eq_ignore_ascii_case("dumb")
+        });
+        if needs_fallback {
+            command.env("TERM", XTERM_256COLOR);
+            command.env("COLORTERM", TRUECOLOR);
+        }
     }
 }
 
@@ -989,23 +998,50 @@ mod terminal_environment_tests {
     }
 
     #[test]
-    fn powershell_and_wsl_keep_their_platform_environment() {
-        for target_id in [POWERSHELL_TARGET, POWERSHELL5_TARGET, "local:wsl:Ubuntu"] {
+    fn powershell_replaces_an_unusable_parent_terminal_type() {
+        for target_id in [POWERSHELL_TARGET, POWERSHELL5_TARGET] {
             let mut command = CommandBuilder::new("shell");
-            command.env("TERM", "platform-default");
-            command.env("COLORTERM", "platform-color");
+
+            command.env("TERM", "dumb");
 
             configure_terminal_environment(&mut command, target_id);
 
-            assert_eq!(
-                command.get_env("TERM"),
-                Some(OsStr::new("platform-default"))
-            );
-            assert_eq!(
-                command.get_env("COLORTERM"),
-                Some(OsStr::new("platform-color"))
-            );
+            assert_eq!(command.get_env("TERM"), Some(OsStr::new(XTERM_256COLOR)));
+            assert_eq!(command.get_env("COLORTERM"), Some(OsStr::new(TRUECOLOR)));
         }
+    }
+
+    #[test]
+    fn powershell_preserves_a_usable_parent_terminal_type() {
+        let mut command = CommandBuilder::new("shell");
+        command.env("TERM", "custom-terminal");
+        command.env("COLORTERM", "platform-color");
+
+        configure_terminal_environment(&mut command, POWERSHELL_TARGET);
+
+        assert_eq!(command.get_env("TERM"), Some(OsStr::new("custom-terminal")));
+        assert_eq!(
+            command.get_env("COLORTERM"),
+            Some(OsStr::new("platform-color"))
+        );
+    }
+
+    #[test]
+    fn wsl_keeps_its_platform_environment() {
+        let mut command = CommandBuilder::new("shell");
+        command.env("TERM", "platform-default");
+        command.env("COLORTERM", "platform-color");
+
+        configure_terminal_environment(&mut command, "local:wsl:Ubuntu");
+
+        assert_eq!(
+            command.get_env("TERM"),
+            Some(OsStr::new("platform-default"))
+        );
+        assert_eq!(
+            command.get_env("COLORTERM"),
+            Some(OsStr::new("platform-color"))
+        );
     }
 
     #[cfg(target_os = "macos")]
@@ -1112,7 +1148,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn powershell_runtime_preserves_unicode_and_exits() {
+    async fn powershell_runtime_preserves_unicode_sets_terminal_type_and_exits() {
         let mut target_ids = Vec::new();
         if windows_powershell7_executable().is_some() {
             target_ids.push(POWERSHELL_TARGET);
@@ -1123,17 +1159,24 @@ mod tests {
         assert!(!target_ids.is_empty(), "no PowerShell target is available");
 
         for target_id in target_ids {
-            assert_powershell_runtime_preserves_unicode_and_exits(target_id).await;
+            assert_powershell_runtime_preserves_unicode_sets_terminal_type_and_exits(target_id)
+                .await;
         }
     }
 
-    async fn assert_powershell_runtime_preserves_unicode_and_exits(target_id: &str) {
+    async fn assert_powershell_runtime_preserves_unicode_sets_terminal_type_and_exits(
+        target_id: &str,
+    ) {
         let backend = InProcessLocalPtyTerminalBackend::new();
+        let mut request = request_for_target(
+            target_id,
+            Some("Write-Output \"LunaMux local ✓ TERM=$env:TERM\"; exit 0"),
+        );
+        request
+            .launch_environment
+            .insert("TERM".into(), "dumb".into());
         let runtime = backend
-            .create(request_for_target(
-                target_id,
-                Some("Write-Output 'LunaMux local ✓'; exit 0"),
-            ))
+            .create(request)
             .await
             .unwrap_or_else(|error| panic!("create {target_id} runtime: {error}"));
         let mut cursor = 0;
@@ -1161,7 +1204,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(50));
         }
         assert!(
-            collected.contains("LunaMux local"),
+            collected.contains("LunaMux local") && collected.contains("TERM=xterm-256color"),
             "{target_id} output was: {collected:?}"
         );
         assert_eq!(

@@ -43,6 +43,13 @@ export function discardTerminalSnapshot(paneId: string): void {
 
 const fullWidthPunctuationPattern = /^[\u00b7\u2014\u2018\u2019\u201c\u201d\u2026\u3000-\u303f\uff01-\uff0f\uff1a-\uff20\uff3b-\uff40\uff5b-\uff65\uffe5]+$/u
 
+function shiftEnterInput(platform: string, targetId: string, codexTui: boolean): string {
+  const nativeWindowsPowershell = platform === 'win32' && (targetId === 'local:powershell' || targetId === 'local:powershell5')
+  // In ConPTY Win32 input mode LF becomes Ctrl+Enter, which Codex does not
+  // bind. ESC+CR becomes Alt+Enter, one of Codex's newline bindings.
+  return nativeWindowsPowershell && codexTui ? '\x1b\r' : '\n'
+}
+
 function stringOffsetToBufferColumn(line: IBufferLine, offset: number): number {
   let stringOffset = 0
   for (let col = 0; col < line.length; col += 1) {
@@ -97,6 +104,7 @@ export interface TerminalPaneHandle {
 interface TerminalPaneProps {
   paneId: string
   targetId: string
+  activeAgentAdapterId?: string
   runtimeId?: string
   connected: boolean
   connecting: boolean
@@ -117,7 +125,7 @@ interface TerminalPaneProps {
   onOpenSettings?: () => void
 }
 
-export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function TerminalPane({ paneId, targetId, runtimeId, connected, connecting, visible, settings, backgroundImage, stoppedState, onAgentAction, onRuntimeError, onStart, onClose, onOpenSettings }, ref): React.JSX.Element {
+export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function TerminalPane({ paneId, targetId, activeAgentAdapterId, runtimeId, connected, connecting, visible, settings, backgroundImage, stoppedState, onAgentAction, onRuntimeError, onStart, onClose, onOpenSettings }, ref): React.JSX.Element {
   const { t } = useI18n()
   const container = useRef<HTMLDivElement>(null)
   const terminal = useRef<Terminal | null>(null)
@@ -130,6 +138,8 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
   const runtimeIdRef = useRef(runtimeId)
   const targetIdRef = useRef(targetId)
   targetIdRef.current = targetId
+  const activeAgentAdapterIdRef = useRef(activeAgentAdapterId)
+  activeAgentAdapterIdRef.current = activeAgentAdapterId
   const pasteClipboardRef = useRef<() => Promise<void>>(async () => undefined)
   const onAgentActionRef = useRef(onAgentAction)
   onAgentActionRef.current = onAgentAction
@@ -287,7 +297,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
           event.stopPropagation()
           onAgentActionRef.current?.()
           writer.markInteractive()
-          writeTerminalInput('\n')
+          writeTerminalInput(shiftEnterInput(window.api.platform, targetIdRef.current, activeAgentAdapterIdRef.current === 'codex'))
         } else if (event.type === 'keypress') {
           event.preventDefault()
           event.stopPropagation()
