@@ -16,7 +16,7 @@
 
 <div align="center">English · <a href="README.md">简体中文</a></div>
 
-Luna Mux organizes work by project directory: each Session maps to one project and holds multiple terminal panes, each of which can be a local terminal or an SSH remote terminal. When you launch Codex, Claude Code, or another agent in a terminal, Luna Mux automatically injects a Hook and MCP servers to extend the agent — the Hook monitors its status, the Luna Mux MCP lets it control Luna Mux itself, and the agent-browser MCP lets it drive the browser. It also ships the complete SSH and SFTP capabilities ported from Luna Remote.
+Luna Mux is a terminal workspace built for coding agents. It maintains a Session per project directory; each Session holds multiple terminal panes, and each pane can be a local terminal or an SSH remote terminal. When you launch Codex, Claude Code, or another agent in a terminal, Luna Mux automatically injects a Hook and MCP servers to extend it: the Hook monitors status, the Luna Mux MCP lets the agent control Luna Mux itself, and the agent-browser MCP lets it drive the browser. It also ships the complete SSH and SFTP capabilities ported from Luna Remote.
 
 ## Project Sessions and Terminal Panes
 

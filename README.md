@@ -16,7 +16,7 @@
 
 <div align="center"><a href="README.en.md">English</a> · 简体中文</div>
 
-Luna Mux 以项目目录为单位组织工作空间：一个 Session 对应一个项目，里面可以有多个终端窗格，每个窗格既可以是本地终端，也可以是 SSH 远程终端。在这些终端里启动 Codex、Claude Code 等 Agent 时，Luna Mux 会自动注入 Hook 和 MCP——Hook 负责状态监控，Luna Mux MCP 让 Agent 控制 Luna Mux 自身的各个功能，agent-browser MCP 让 Agent 操作浏览器。此外还内置了移植自 Luna Remote 的完整 SSH 与 SFTP 能力。
+Luna Mux 是一个面向 Coding Agent 的终端工作台。它以项目目录为单位维护 Session，一个 Session 里可以有多个终端窗格，每个窗格既可以是本地终端，也可以是 SSH 远程终端。在这些终端里启动 Codex、Claude Code 等 Agent 时，Luna Mux 会自动注入 Hook 和 MCP 来扩展 Agent 的能力：Hook 负责状态监控，Luna Mux MCP 让 Agent 控制 Luna Mux 自身的各个功能，agent-browser MCP 让 Agent 操作浏览器。此外还内置了移植自 Luna Remote 的完整 SSH 与 SFTP 能力。
 
 ## 项目 Session 与终端窗格
 
