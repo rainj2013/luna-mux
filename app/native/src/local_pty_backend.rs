@@ -35,12 +35,21 @@ const LOCAL_TARGET_PREFIX: &str = "local:";
 const POWERSHELL_TARGET: &str = "local:powershell";
 const POWERSHELL5_TARGET: &str = "local:powershell5";
 const WSL_TARGET_PREFIX: &str = "local:wsl:";
+#[cfg(windows)]
+const LOCAL_PTY_READER_DRAIN_TIMEOUT_MS: u64 = 750;
 const MACOS_SHELL_TARGET: &str = "local:macos-shell";
 const XTERM_256COLOR: &str = "xterm-256color";
 const TRUECOLOR: &str = "truecolor";
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+#[cfg(windows)]
+fn local_pty_reader_drain_timeout() -> Option<std::time::Duration> {
+    Some(std::time::Duration::from_millis(
+        LOCAL_PTY_READER_DRAIN_TIMEOUT_MS,
+    ))
+}
 
 struct RuntimeRecord {
     runtime: Mutex<TerminalRuntime>,
@@ -54,6 +63,7 @@ struct RuntimeRecord {
     process_group_id: Option<i32>,
     paused: AtomicBool,
     close_requested: AtomicBool,
+    reader_abandoned: AtomicBool,
     reader_done: AtomicBool,
 }
 
@@ -201,6 +211,7 @@ impl InProcessLocalPtyTerminalBackend {
         sink: Arc<RwLock<Option<TerminalRuntimeEventSink>>>,
         mut reader: Box<dyn Read + Send>,
         mut child: Box<dyn Child + Send + Sync>,
+        reader_drain_timeout: Option<std::time::Duration>,
     ) {
         let reader_record = record.clone();
         let reader_sink = sink.clone();
@@ -212,9 +223,15 @@ impl InProcessLocalPtyTerminalBackend {
                 while reader_record.paused.load(Ordering::Acquire) {
                     thread::sleep(std::time::Duration::from_millis(5));
                 }
+                if reader_record.reader_abandoned.load(Ordering::Acquire) {
+                    break;
+                }
                 match reader.read(&mut bytes) {
                     Ok(0) => break,
                     Ok(size) => {
+                        if reader_record.reader_abandoned.load(Ordering::Acquire) {
+                            break;
+                        }
                         let text = decoder.push(&bytes[..size]);
                         if !text.is_empty() {
                             let event = {
@@ -232,6 +249,9 @@ impl InProcessLocalPtyTerminalBackend {
                         }
                     }
                     Err(_error) => {
+                        if reader_record.reader_abandoned.load(Ordering::Acquire) {
+                            break;
+                        }
                         let text = decoder.finish();
                         if !text.is_empty() {
                             let mut output =
@@ -243,6 +263,9 @@ impl InProcessLocalPtyTerminalBackend {
                         return;
                     }
                 }
+            }
+            if reader_record.reader_abandoned.load(Ordering::Acquire) {
+                return;
             }
             let tail = decoder.finish();
             if !tail.is_empty() {
@@ -265,9 +288,25 @@ impl InProcessLocalPtyTerminalBackend {
                 .lock()
                 .ok()
                 .and_then(|mut master| master.take());
-            while !record.reader_done.load(Ordering::Acquire) {
-                thread::sleep(std::time::Duration::from_millis(5));
+            match reader_drain_timeout {
+                Some(timeout) => {
+                    let drain_deadline = std::time::Instant::now() + timeout;
+                    while !record.reader_done.load(Ordering::Acquire)
+                        && std::time::Instant::now() < drain_deadline
+                    {
+                        thread::sleep(std::time::Duration::from_millis(5));
+                    }
+                }
+                None => {
+                    while !record.reader_done.load(Ordering::Acquire) {
+                        thread::sleep(std::time::Duration::from_millis(5));
+                    }
+                }
             }
+            let reader_abandoned = !record.reader_done.load(Ordering::Acquire);
+            record
+                .reader_abandoned
+                .store(reader_abandoned, Ordering::Release);
             let signal = status
                 .as_ref()
                 .and_then(|value| value.signal().map(str::to_owned));
@@ -692,6 +731,7 @@ impl TerminalBackend for InProcessLocalPtyTerminalBackend {
             process_group_id,
             paused: AtomicBool::new(false),
             close_requested: AtomicBool::new(false),
+            reader_abandoned: AtomicBool::new(false),
             reader_done: AtomicBool::new(false),
         });
         self.runtimes
@@ -708,12 +748,21 @@ impl TerminalBackend for InProcessLocalPtyTerminalBackend {
             .get(&runtime.runtime_id)
             .cloned()
             .ok_or_else(|| "本地 Runtime 不存在".to_string())?;
+        #[cfg(windows)]
+        let reader_drain_timeout = if request.target_id.starts_with(WSL_TARGET_PREFIX) {
+            local_pty_reader_drain_timeout()
+        } else {
+            None
+        };
+        #[cfg(not(windows))]
+        let reader_drain_timeout = None;
         Self::spawn_worker(
             runtime.runtime_id.clone(),
             record,
             self.event_sink.clone(),
             reader,
             child,
+            reader_drain_timeout,
         );
         if let Some(input) = Self::initial_input(&request) {
             let _ = self.write(&runtime.runtime_id, &input).await;
