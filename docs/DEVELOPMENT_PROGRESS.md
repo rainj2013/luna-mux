@@ -5,11 +5,11 @@
 ## 当前检查点
 
 - 日期：2026-08-19
-- 阶段：提供方无关的 Agent Adapter、运行时 Agent 检测、原生 `agent-browser` MCP，以及 Luna MCP 应用控制。
-- 当前任务：M4.4、M5.1、M6.8——收尾真实 SSH 的 Hook/Luna MCP，以及 WSL 和 Claude Code 的 Browser MCP 端到端验收；远程 SSH Agent 浏览器操作已经通过。
-- 任务进度：65 项中 53 项完成（81.54%），8 项进行中，4 项待办。
-- 总体状态：Session/Pane 是产品外壳，每个 Pane 都是普通终端。`AgentAdapter` 注册表负责 Codex 与 Claude Code 的提供方差异；检测、面板、Luna MCP、Browser Resource、权限和审计保持共享。外部 Chrome 归 Session 所有，分发版浏览器 MCP 不依赖 Node 或 `npx`。
-- 当前工作目录：`/Users/happyelements/code/luna-mux`
+- 阶段：功能里程碑（M0～M6）全部完成并实机验收，进入持续兼容与分发准备（M7）。
+- 当前任务：M7.1～M7.4——Windows/macOS 持续集成、终端一致性场景、按需参考 Luna Remote 能力与里程碑回归门禁。
+- 任务进度：65 项中 61 项完成（93.85%），0 项进行中，4 项待办。
+- 总体状态：Session/Pane 是产品外壳，每个 Pane 都是普通终端。`AgentAdapter` 注册表负责 Codex 与 Claude Code 的提供方差异；检测、面板、Luna MCP、Browser Resource、权限和审计保持共享。外部 Chrome 归 Session 所有，分发版浏览器 MCP 不依赖 Node 或 `npx`。WSL、远程 SSH 反向转发、跨平台通知与 Claude Code 浏览器路径均已实机验收。
+- 当前工作目录：`/Users/yangyujian/code/luna-mux`
 
 ## 已完成
 
@@ -23,6 +23,8 @@
 - 完成横纵分屏、比例拖动、最大化、重命名、关闭和布局预设的实现路径。
 - Windows 与 macOS 已分别完成一轮真实桌面开发验证；macOS 近期高频使用覆盖本地 PTY、登录 Shell、Pane 创建、分屏、比例调整、焦点和开发重启清理。
 - 近期终端回归修复了 PowerShell 中 Codex TUI 的终端类型、Shift-Enter 换行、SSH 连接失败恢复、停止 Pane 操作入口和终端/浏览器 Runtime 清理边界。
+- Windows WSL 发行版已实机验证：工作目录、命令启动、Agent shim 与进程树清理全部通过。
+- `InProcessSshTerminalBackend` 完成 SSH、缩放、流控、关闭、SFTP 和隧道回归，旧 SSH/SFTP/隧道路径全部收编到统一 Runtime 契约。
 
 ### Agent 适配器、Hook 与通知
 
@@ -34,6 +36,9 @@
 - 等待、完成和错误事件已接入侧边栏和 Pane 边框提醒，并在对应 Pane 聚焦时抑制重复提醒。
 - Windows 系统通知由 Rust Hook 事件源直接发送；macOS 使用单个隐藏 WebView 实现 Luna Mux 主题通知，8 秒自动收起且悬停时暂停计时，不依赖签名、系统通知权限、辅助进程或回环服务。点击后都会唤醒主窗口并切换到事件所属 Session/Pane。
 - Codex 与 Claude Code 适配器已在 macOS 验证进程级启动注入；Agent 环境视图实际用于定位 Hook、Luna MCP、Browser MCP 和代理启动故障。
+- 远程 Hook 上传与反向转发已在真实 SSH 主机验收，事件绑定 SSH 连接、终端 Runtime 和随机令牌。
+- Windows 系统通知与 macOS 应用内通知均已实机验收；两端点击都能唤醒并切换到对应 Session/Pane。
+- 本地、SSH 与 WSL 终端的手动启动 Agent 获得 Runtime 级窄权限 Hook/MCP 凭据，不修改用户全局配置。
 
 ### Luna 控制与 Luna MCP
 
@@ -46,6 +51,7 @@
 - 已提供 Session/Pane 元数据更新、`mux.pane.create` 和 `mux.layout.set`。Pane 创建会串行持久化 Pane 与布局并通知桌面启动 Runtime；完整布局严格校验 Session、叶节点、比例、重复、遗漏和深度。
 - 已提供 Runtime 范围的传输、隧道和转发配置观察；关闭、启动传输/隧道等重要副作用保留桌面审批。
 - 控制审计默认保留 30 天；终端输入、任务正文、浏览器输入和脚本只记录字节数等摘要。
+- 有范围进程内 MCP 传输已在本地与 SSH 环境验收，Agent 只能通过 Runtime 令牌连接。
 
 ### 浏览器资源与原生浏览器 MCP
 
@@ -61,6 +67,7 @@
 - macOS 真实 Codex 浏览器任务已完成当前页面复用、首页与文章页导航、性能 API 采样、网络请求、HAR、控制台和缓存前后对比；生命周期日志确认复用同一受管 Chrome。
 - macOS 已验证 Chrome 发现、隔离配置、按需启动、外部窗口交互和应用开发重启清理，补齐此前只有 Windows 实机证据的缺口。
 - 真实 SSH 远程 Agent 已通过认证 STDIO 代理操作本机受管 Chrome，确认远程 Browser MCP 不需要向远端暴露 CDP，也不会另起浏览器后端。
+- Claude Code 与真实 WSL 路径的 `agent-browser` MCP 已完成与 macOS Codex 等价的浏览器任务验收。
 
 ### 已淘汰方案
 
@@ -72,26 +79,26 @@
 
 ## 进行中
 
-- M1.2：`InProcessSshTerminalBackend` 已接入，但旧 SSH/SFTP/隧道路径仍需完整回归。
-- M2.3：Windows WSL 发现和启动代码已实现；仍需真实 WSL 发行版完成工作目录、命令、Agent shim 和清理复验。
-- M4.4、M5.1：远程 Hook、Luna MCP 反向转发和清理代码已实现；待允许 TCP 转发的真实 SSH 服务验收。
-- M4.6：跨平台通知已编译；待 Windows 实际通知验收，并继续回归 macOS 应用内通知的点击路由和聚焦抑制（macOS 方案不依赖系统通知权限）。
-- M4.13、M5.7：macOS 本地 Runtime 的窄权限 Hook/MCP 和手动启动已验证；真实 SSH 与 WSL 的完整身份交接仍待复验。
-- M6.8：macOS 本地 Codex 和真实 SSH 远程 Agent 的浏览器任务已通过；仅剩 Claude Code 与真实 WSL 路径的等价验收。
+功能里程碑（M0～M6）已全部完成并实机验收，当前无进行中的功能任务。剩余待办见「下一步」。
+
 - Microsoft Pinyin 在受管 Codex TUI 中的全角智能引号差异暂缓处理；证据不足以归因于 PTY、xterm、WebView2 或 Codex。
 
 ## 下一步
 
-1. 用真实 SSH 主机复验 Hook/MCP 反向转发、令牌交接、重连和清理，完成 M4.4 与 M5.1。
-2. 在真实 WSL 发行版验证目标发现、工作目录、Agent shim、Luna MCP、Browser MCP 和进程树清理；远程 SSH 浏览器路径无需重复验收。
-3. 在最新预览中用 Claude Code 完成一次与 macOS Codex 等价的 Luna MCP 与浏览器任务，收尾 M6.8。
-4. 验证 Windows 系统通知的真实 Agent 事件，并持续回归 macOS 应用内通知的点击路由和聚焦抑制。
-5. 使用至少两个 Agent 验证同 Session 输出读取、任务投递、跨 Session 隔离、输入、中断、审计、未读和通知。
+1. 建立 Windows/macOS 持续集成检查（M7.1），覆盖类型检查、Rust 测试、构建、产品元数据与多语言检查。
+2. 增加终端一致性场景（M7.2），覆盖 PowerShell、WSL、macOS Shell 与 SSH 的共用行为。
+3. 按需参考 Luna Remote 相关能力并重新实现（M7.3），记录需求、设计差异与验证证据。
+4. 执行里程碑回归门禁（M7.4），确保 Windows 与 macOS 验收全部通过。
+5. 继续归因 Microsoft Pinyin 在受管 Codex TUI 中的全角智能引号差异。
 
 ## 验证证据
 
 | 检查 | 结果 | 日期 |
 | --- | --- | --- |
+| Windows WSL 实机验收 | 已安装发行版可选择，工作目录、命令启动、Agent shim 和进程树清理全部通过 | 2026-08-19 |
+| Claude Code 浏览器任务 | Claude Code 与真实 WSL 路径完成与 macOS Codex 等价的 Luna MCP 与浏览器验收 | 2026-08-19 |
+| 远程 SSH Hook/MCP | 真实 SSH 主机通过 Hook 上传、反向转发、令牌交接、重连和清理验收 | 2026-08-19 |
+| Windows/macOS 通知 | Windows 系统通知与 macOS 应用内通知均实机通过，点击路由回对应 Session/Pane | 2026-08-19 |
 | macOS 桌面与本地 PTY | 连续开发运行覆盖 zsh 登录 Shell、Unicode 终端、Pane 创建、横纵分屏、比例调整、焦点、关闭和 Tauri 热重启清理 | 2026-08-16 |
 | macOS Codex、Luna MCP 与原生浏览器 | 真实 Codex 进程完成 Hook/MCP 注入、Luna Mux 设置与 Pane 控制，以及页面复用、导航、性能采样、HAR、控制台和网络调试；Chrome Runtime 持续复用 | 2026-08-16 |
 | 远程 SSH Agent 浏览器 | 真实远程 Agent 通过认证 STDIO 代理操作本机受管 Chrome，Browser MCP 页面操作通过，远端未暴露原始 CDP | 2026-08-16 |
@@ -143,6 +150,7 @@
 | 2026-08-15 | 普通 SSH Pane 的 Agent 集成默认关闭；启用后使用 Runtime 隔离文件和认证反向转发。 |
 | 2026-08-15 | Agent 可读无凭据连接摘要和安全设置；不得获得 `Application` 超级授权。 |
 | 2026-08-16 | Pane 创建和布局写入进入 Luna MCP；并发修改串行化，完整布局必须通过严格 Session 校验。 |
+| 2026-08-19 | 功能里程碑 M0～M6 全部实机验收完成，进入持续兼容（M7）阶段。 |
 | 2026-08-16 | 仓库自有说明文档统一使用中文；代码标识、命令和协议字段保留原名，许可证保留法律原文。 |
 
 ## 开发更新规范
@@ -150,7 +158,7 @@
 今后的每次实现会话必须：
 
 1. 修改前阅读本文和 [DEVELOPMENT_TASKS.md](DEVELOPMENT_TASKS.md) 中的当前里程碑。
-2. 除非明确记录并行工作，否则只设置一个主任务为 `IN_PROGRESS`。当前主任务是 M6.8。
+2. 除非明确记录并行工作，否则只设置一个主任务为 `IN_PROGRESS`。当前主任务是 M7.1。
 3. 重要决策立即加入决策记录。
 4. 只有写入验证命令和结果后，任务才能标记为 `DONE`。
 5. 结束前更新“当前检查点”“已完成”“进行中”和“下一步”。

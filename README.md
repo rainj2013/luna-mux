@@ -16,10 +16,7 @@
 
 <div align="center"><a href="README.en.md">English</a> · 简体中文</div>
 
-Luna Mux 把终端、Coding Agent、远程服务器和浏览器自动化整合进同一个工作空间。一个 Session 保存项目目录、多个本地或 SSH 窗格及其分屏布局；Codex、Claude Code 等 Agent 在终端中运行，并获得状态提醒、浏览器工具，以及在明确权限边界内控制 Luna Mux 的能力。
-
-> [!NOTE]
-> Luna Mux 当前为 **0.1.0 预览版**，暂不建议作为无人值守的生产基础设施。
+Luna Mux 把终端、Coding Agent、远程服务器和浏览器自动化整合进同一个工作空间。一个 Session 保存项目目录、多个本地或 SSH 窗格及其分屏布局；Codex、Claude Code 等 Agent 在终端中运行，并获得状态提醒和浏览器工具。
 
 ## 项目 Session 与终端窗格
 
@@ -40,7 +37,7 @@ Codex、Claude Code 等 Agent 运行在终端中。你可以手动运行 `codex`
 
 ## Agent 控制 Luna Mux
 
-Luna MCP 向终端里的 Agent 开放 Luna Mux 的完整功能，覆盖 Session、窗格、终端、Agent、连接、设置、诊断、传输和隧道等。Agent 可以：
+Luna MCP 向终端里的 Agent 开放 Luna Mux 的控制能力，覆盖 Session、窗格、终端、Agent、连接、设置、诊断、传输和隧道等。Agent 可以：
 
 - 发现 Session、窗格、Terminal Runtime 和其他受管 Agent。
 - 创建窗格、修改布局、读取有界终端输出并写入输入。

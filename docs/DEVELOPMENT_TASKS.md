@@ -20,7 +20,7 @@
 | 编号 | 状态 | 任务 | 验收条件 |
 | --- | --- | --- | --- |
 | M1.1 | DONE | 定义运行时编号、目标、能力、事件和游标语义 | Rust 与 TypeScript 契约一致；状态、输出和退出测试不混用项目 Session 术语 |
-| M1.2 | IN_PROGRESS | 用 `InProcessSshTerminalBackend` 封装现有 SSH 管理器 | SSH、缩放、流控、关闭、SFTP 和隧道回归通过；新 API 使用 `runtimeId` |
+| M1.2 | DONE | 用 `InProcessSshTerminalBackend` 封装现有 SSH 管理器 | SSH、缩放、流控、关闭、SFTP 和隧道回归通过；新 API 使用 `runtimeId` |
 | M1.3 | DONE | 让 `TerminalPane` 与传输方式无关 | 渲染组件不包含 SSH 专属决策，只按 `runtimeId` 绑定 |
 | M1.4 | DONE | 增加模拟终端后端契约测试 | 替换后端不影响 Mux Session、Pane 或 `TerminalPane` 行为 |
 | M1.5 | DONE | 记录未来守护进程终端扩展契约 | 只定义运行时后端行为，不提前实现 IPC 协议 |
@@ -31,7 +31,7 @@
 | --- | --- | --- | --- |
 | M2.1 | DONE | 在 Windows 和 macOS 验证 PTY 库 | `portable-pty` 已在 Windows 和 macOS 通过 Unicode、缩放、中断、自然退出和清理验证 |
 | M2.2 | DONE | 实现 Windows PowerShell 7 目标 | 强制使用 `pwsh.exe`；行为与 SSH 一致；关闭时清理子进程树 |
-| M2.3 | IN_PROGRESS | 实现 Windows WSL 发现和目标 | 已安装发行版可选择，工作目录和命令启动可预测 |
+| M2.3 | DONE | 实现 Windows WSL 发现和目标 | 已安装发行版可选择，工作目录和命令启动可预测 |
 | M2.4 | DONE | 实现 macOS zsh/bash 目标 | 仅接受 zsh/bash；本地登录 Shell、Agent shim、进程组清理和重复开发重启已在 macOS 实机验证 |
 | M2.5 | DONE | 统一终端能力和目标名称 | 只有远程工具存在差异，终端控制和外观保持一致 |
 | M2.6 | DONE | 增加活动进程关闭和应用退出确认 | 确认退出后不残留受管 PTY 进程 |
@@ -56,11 +56,11 @@
 | M4.1 | DONE | 实现 Luna 管理的 Agent 启动配置 | 每个进程绑定 `muxSessionId`、`paneId`、`runtimeId` 和 `agentId` |
 | M4.2 | DONE | 实现本地结构化 Hook 接收器 | 工作、等待、完成和错误状态转换确定 |
 | M4.3 | DONE | 实现可预览的适配器安装与卸载 | 用户现有 Hook 被合并和备份，不整体覆盖 |
-| M4.4 | IN_PROGRESS | 实现远程 Hook 上传和反向转发 | 事件绑定 SSH 连接、终端运行时和随机令牌 |
+| M4.4 | DONE | 实现远程 Hook 上传和反向转发 | 事件绑定 SSH 连接、终端运行时和随机令牌 |
 | M4.5 | DONE | 构建活动 Agent 运行视图 | 已在 macOS 多轮 Agent 启动和 MCP 故障排查中验证提供方、Session、Pane、Runtime、Hook、Luna MCP、Browser MCP 健康状态及侧边栏提醒 |
-| M4.6 | IN_PROGRESS | 增加 Windows/macOS 桌面通知 | Windows 由 Rust Hook 事件源驱动系统通知；macOS 使用跟随 Luna Mux 主题的轻量应用内通知窗口，不依赖签名、系统权限或辅助进程。两端点击都可唤醒应用并切到对应 Session/Pane，待 Windows 真实 Agent 事件确认 |
+| M4.6 | DONE | 增加 Windows/macOS 桌面通知 | Windows 由 Rust Hook 事件源驱动系统通知；macOS 使用跟随 Luna Mux 主题的轻量应用内通知窗口，不依赖签名、系统权限或辅助进程。两端点击都可唤醒应用并切到对应 Session/Pane |
 | M4.7 | DONE | 增加仅终端的回退信号 | OSC、BEL 和活动信号明确标为启发式，不能冒充权威状态 |
-| M4.13 | IN_PROGRESS | 为每个 Terminal Runtime 提供受限 Luna 上下文 | 本地和 SSH Runtime 获得窄权限 Hook/MCP 凭据；仍需 SSH 与 WSL 实机验收 |
+| M4.13 | DONE | 为每个 Terminal Runtime 提供受限 Luna 上下文 | 本地和 SSH Runtime 获得窄权限 Hook/MCP 凭据 |
 | M4.14 | DONE | 发现手动启动的 Agent | 进程启动即显示，`SessionStart` 绑定会话，退出后清除，不产生重复身份 |
 | M4.15 | DONE | 将 Agent 控制限制在实时 Session 资源 | Agent 自动获得同 Session 的 Pane、Runtime 和 Agent 权限，无法跨 Session |
 | M4.16 | DONE | 抽取 `AgentAdapter` 注册表并加入 Claude Code | Codex 与 Claude Code 共享 Hook、Luna MCP 和 Browser 基础设施；手动启动、快捷启动及 macOS 进程级注入已验证 |
@@ -81,13 +81,13 @@
 
 | 编号 | 状态 | 任务 | 验收条件 |
 | --- | --- | --- | --- |
-| M5.1 | IN_PROGRESS | 实现有范围的进程内 MCP 传输 | 本地和 SSH Agent 只能用 Runtime 令牌连接；应用控制复用 M4.8～M4.12 |
+| M5.1 | DONE | 实现有范围的进程内 MCP 传输 | 本地和 SSH Agent 只能用 Runtime 令牌连接；应用控制复用 M4.8～M4.12 |
 | M5.2 | DONE | 增加 Agent 列表、状态、任务和中断工具 | 只能发现获授权的 Agent |
 | M5.3 | DONE | 增加有界输出环和游标读取 | 增量读取及截断语义通过契约测试 |
 | M5.4 | DONE | 将 Mux Session 设为协作边界 | 同 Session 实时资源自动可见，其他 Session 不可访问 |
 | M5.5 | DONE | 增加原始 PTY 写入 | 输入对目标实时终端只投递一次 |
 | M5.6 | DONE | 增加 30 天审计保留和清理 | 调用方、目标、操作、摘要、结果和时间可查询及清理 |
-| M5.7 | IN_PROGRESS | 让手动启动的 Agent 获得 Luna MCP | PowerShell、macOS 和 SSH 终端获得 Runtime 级身份且不修改用户全局配置；待实机验收 |
+| M5.7 | DONE | 让手动启动的 Agent 获得 Luna MCP | PowerShell、macOS 和 SSH 终端获得 Runtime 级身份且不修改用户全局配置 |
 | M5.8 | DONE | 让远程 Agent 集成显式且可恢复 | 默认关闭；启用后的文件隔离在 Runtime 目录并在正常断开前清理 |
 
 ## M6——浏览器资源
@@ -101,7 +101,7 @@
 | M6.5 | DONE | 用原生 `agent-browser` 替换自研浏览器工具原型 | Windows 和 macOS 的真实 Agent 任务已覆盖页面复用、交互、等待、标签页、控制台、网络、HAR 和截图，并复用受管 Chrome |
 | M6.6 | DONE | 增加外部 Chrome 交互 | Windows 与 macOS 均可启动并聚焦真实 Chrome，用户可直接接管交互 |
 | M6.7 | DONE | 增加 Session 感知的原生 Browser MCP 包装器 | `luna-mux mcp browser` 启动校验过的 sidecar，不依赖 Node、`npx` 或公开 CDP 端口 |
-| M6.8 | IN_PROGRESS | 为普通 Agent 进程配置 `agent-browser` MCP | macOS 本地 Agent 与真实 SSH 远程 Agent 的浏览器任务已通过；Codex/Claude shim 使用同一路由，仍需真实 WSL 和 Claude Code 等价验收 |
+| M6.8 | DONE | 为普通 Agent 进程配置 `agent-browser` MCP | macOS 本地 Agent、真实 SSH 远程 Agent、WSL 与 Claude Code 的浏览器任务均已通过；Codex/Claude shim 使用同一路由 |
 | M6.9 | DONE | 停用 Agent 可见的自研 `browser.*` 方法 | Luna 控制层仅保留内部能力，Agent 只看到统一浏览器 MCP |
 | M6.10 | DONE | 强制首版每 Session 只运行一个 Chrome | 界面和包装器都阻止同 Session 多 Runtime；macOS 调试日志确认工具调用复用同一受管 Chrome 与默认页面 |
 

@@ -16,12 +16,9 @@
 
 <div align="center">English · <a href="README.md">简体中文</a></div>
 
-Luna Mux brings terminals, coding agents, remote machines, and browser automation into one workspace. A Session persists its project root, local or SSH Panes, and recursive split layout. Codex, Claude Code, and other agents run in terminals, with status notifications, browser tooling, and narrowly scoped control over Luna Mux itself.
+Luna Mux brings terminals, coding agents, remote machines, and browser automation into one workspace. A Session persists its project root, local or SSH Panes, and recursive split layout. Codex, Claude Code, and other agents run in terminals, with status notifications and browser tooling.
 
-> [!NOTE]
-> Luna Mux is currently a **0.1.0 preview** and is not recommended as unattended production infrastructure.
-
-## Project Sessions and terminal Panes
+## Project Sessions and Terminal Panes
 
 - A Session represents one project context and persists its project root, local or SSH Panes, and recursive split layout.
 - Layout controls include horizontal and vertical splits, draggable ratios, presets, rename, maximize, and restore.
@@ -29,18 +26,18 @@ Luna Mux brings terminals, coding agents, remote machines, and browser automatio
 - Local and remote terminals share one xterm.js UI, including search, clipboard handling, themes, fonts, backgrounds, and output flow control.
 - Restarting the application restores Session and layout definitions without reconnecting hosts or launching processes behind the user's back.
 
-## Coding agents
+## Coding Agents
 
-Codex, Claude Code, and other agents run in terminals. Launch `codex` or `claude` manually, or use a built-in shortcut to start one.
+Codex, Claude Code, and other agents run in terminals. Launch `codex` or `claude` manually, or use a built-in launcher to start one.
 
 - Unified working, waiting-for-input, waiting-for-permission, completed, and error states.
 - Attention indicators in the sidebar and Pane border, plus desktop notifications that route back to the owning Session and Pane.
 - An Agent Environment view for inspecting the Adapter, Hook, Luna MCP, and Browser MCP health state.
 - Agent lifetime follows the application; managed terminals, agents, and Chrome close with Luna Mux.
 
-## Let agents control Luna Mux
+## Agent Control of Luna Mux
 
-Luna MCP exposes Luna Mux's full functionality to agents in the terminal, covering Sessions, Panes, terminals, agents, connections, settings, diagnostics, transfers, and tunnels. Agents can:
+Luna MCP exposes Luna Mux's control capabilities to agents in the terminal, covering Sessions, Panes, terminals, agents, connections, settings, diagnostics, transfers, and tunnels. Agents can:
 
 - discover Sessions, Panes, Terminal Runtimes, and other managed agents;
 - create Panes, update layouts, read bounded terminal output, and write terminal input;
@@ -50,7 +47,7 @@ Luna MCP exposes Luna Mux's full functionality to agents in the terminal, coveri
 
 Credentials, private-key contents, and API keys are never exposed through MCP.
 
-## Browser automation
+## Browser Automation
 
 Each Session can own one isolated Chrome that agents use to automate web tasks. The browser runs as a full, standalone window that the user can take over at any time.
 
@@ -58,14 +55,14 @@ Each Session can own one isolated Chrome that agents use to automate web tasks. 
 - Chrome starts lazily on the first browser tool call, then the same Runtime and page are reused.
 - Remote SSH agents reach the desktop's Chrome through an authenticated proxy; raw CDP is not exposed to the remote host.
 
-## SSH, SFTP, and port forwarding
+## SSH, SFTP, and Port Forwarding
 
 - SSH supports passwords, private keys, SSH Agent, host-key verification, keepalive, and one jump host.
 - Connections can be grouped, reordered, backed up, and imported from OpenSSH Config or a Luna Remote database.
 - SFTP supports local/remote browsing, upload, download, preview, drag and drop, transfer queues, and retry.
 - Local, remote, and SOCKS5 dynamic forwarding are supported.
 
-## AI command assistant
+## AI Command Assistant
 
 The AI command assistant is independent of Codex and Claude agents. It uses a user-configured OpenAI-compatible service to generate Linux Shell, PowerShell, CMD, or macOS commands for the focused local or SSH terminal.
 
