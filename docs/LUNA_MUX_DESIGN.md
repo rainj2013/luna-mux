@@ -1,7 +1,7 @@
 # Luna Mux 设计方案
 
 状态：已批准的设计基线  
-最后更新：2026-08-16
+最后更新：2026-08-20
 
 ## 1. 产品定义
 
@@ -91,6 +91,31 @@ Luna Mux 桌面应用
 - Windows 使用 ConPTY、PowerShell 7/5.1 和已选择的 WSL 发行版，并通过 Job Object 清理进程树。
 - macOS 使用 Unix PTY 和用户配置的 zsh/bash，并通过进程组和信号清理。
 - 关闭活动 Pane 需要确认；退出应用时一次确认并清理全部 PTY、SSH Channel 和受管 Chrome。
+
+#### 4.2.1 数据流与输出背压
+
+```text
+Terminal Runtime
+  -> backend (SSH russh / local portable-pty)
+  -> Rust UTF-8 增量解码与 runtime event
+  -> Tauri `terminal-runtime:event`
+  -> React TerminalPane
+  -> xterm.js
+```
+
+应用不嵌入 Terminal.app、Ghostty 或 Windows Terminal。每个终端 Pane 对应一个独立的 Terminal Runtime；当前 SSH 实现由一条 Rust SSH connection 和 PTY channel 承载，断开其中一个不会影响其他 Pane。
+
+Rust 后端通过 `russh` 请求 `xterm-256color` PTY，并把窗口尺寸变化直接发给远端。本地 PTY 采用 `portable-pty`；Windows ConPTY 启动时可能发送 `ESC[6n` 光标位置查询，正式的 xterm.js `TerminalPane` 负责响应，PTY 后端不自行实现终端仿真。
+
+SSH 和本地 PTY 数据块在 Rust 端用增量 UTF-8 解码器处理，跨数据块的多字节字符不会被截断。Runtime 输出使用有界环形缓冲区和 UTF-8 字节游标，`TerminalPane` 挂载时从游标增量追赶。xterm 写入队列积压时，前端通过流控暂停后端读取，积压恢复后再继续，避免大量输出长期占用 WebView 事件循环。
+
+运行中的 Pane 在跨 Session 和 Session 内视图切换时保持同一个 xterm 实例，非当前工作区只隐藏并停用 WebGL 渲染。确实需要卸载组件（如布局重排）时，使用 xterm 官方序列化格式暂存正常屏幕、备用屏幕和滚动缓冲区，并从最后完成渲染的 UTF-8 字节游标继续追赶；不能只重放有界 PTY 原始输出，因为全屏 TUI 的清屏和光标控制序列无法重建已丢失的滚动历史。删除 Pane 或 Session 时同步丢弃对应快照。
+
+终端启用 WebGL 插件，初始化失败时自动回退到 xterm 默认渲染器。透明背景由 xterm 透明画布与终端容器背景图组合实现，不改变整个系统窗口透明度。
+
+#### 4.2.2 安全边界
+
+WebView 只能通过 Tauri 命令调用显式注册的 Rust 能力。外部链接仅允许 HTTP/HTTPS，文件选择使用原生对话框，凭据保存在 macOS 钥匙串或 Windows 凭据管理器。终端和文件传输不启动 Node.js 子进程或辅助进程。
 
 ### 4.3 Mux Session 与窗格
 
@@ -238,5 +263,3 @@ Windows 和 macOS 都是首版平台。里程碑只有在适用的双平台验�
 6. 实现 Luna Control Service，再通过该边界提供 Luna MCP 和跨 Agent 操作。
 7. 加入 Session 级受管 Chrome、原生浏览器 MCP 和远程服务转发。
 8. 按需参考相关产品能力，由 AI 重新实现并执行跨平台回归。
-
-可执行任务和长期状态分别维护在 [DEVELOPMENT_TASKS.md](DEVELOPMENT_TASKS.md) 与 [DEVELOPMENT_PROGRESS.md](DEVELOPMENT_PROGRESS.md)。
