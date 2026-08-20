@@ -22,6 +22,8 @@ Luna Mux 是一个面向 Coding Agent 的终端工作台。它以项目目录为
 
 一个 Session 对应一个项目目录，保存项目根目录和窗格布局。
 
+![Luna Mux 终端工作区](assets/screenshots/terminal.png)
+
 - 一个 Session 里有多个终端窗格，支持横向/纵向分割、拖动比例、布局预设、重命名和最大化。
 - 每个窗格既可以是本地终端（macOS 的 zsh/bash、Windows 的 PowerShell 或 WSL），也可以是 SSH 远程终端。
 - 本地和远程终端共用 xterm.js 界面，包括搜索、复制粘贴、主题、字体、背景和输出流控。
