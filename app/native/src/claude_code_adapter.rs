@@ -360,7 +360,11 @@ fn mcp_config_json(
             "LUNA_MUX_SESSION_ID".into(),
             Value::String(context.mux_session_id.clone()),
         );
-        if browser_credentials_file.is_none() {
+        // Remote Browser MCP is provided by the uploaded `remote-agent`
+        // helper. Its port/token are loaded from the environment file by the
+        // surrounding SSH bootstrap, so do not add a local-only CDP variable
+        // (or the removed credentials-file variable) to that stdio client.
+        if browser_credentials_file.is_none() && !command.ends_with("remote-agent") {
             env.insert(
                 "LUNA_MUX_BROWSER_CDP_PORT".into(),
                 Value::String("${LUNA_MUX_BROWSER_CDP_PORT}".into()),
@@ -519,6 +523,24 @@ mod tests {
             value["mcpServers"]["agent_browser"]["env"]["LUNA_MUX_SESSION_ID"],
             "session-1"
         );
+    }
+
+    #[test]
+    fn remote_helper_mcp_config_uses_runtime_environment_credentials() {
+        let config = mcp_config_json(
+            "http://127.0.0.1:43128/mcp",
+            Some("/home/user/.luna-mux/runtime/r1/bin/remote-agent"),
+            &[],
+            None,
+            None,
+            &context(),
+        )
+        .unwrap();
+        let value: Value = serde_json::from_str(&config).unwrap();
+        let env = &value["mcpServers"]["agent_browser"]["env"];
+        assert_eq!(env["LUNA_MUX_SESSION_ID"], "session-1");
+        assert!(env.get("LUNA_MUX_BROWSER_CDP_PORT").is_none());
+        assert!(env.get("LUNA_MUX_BROWSER_BRIDGE_CREDENTIALS").is_none());
     }
 
     #[test]

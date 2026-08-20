@@ -378,7 +378,7 @@ export default {
   "app.remoteAgentIntegrationOn": "新建的 SSH 窗格将启用集成",
   "app.remoteAgentIntegrationOnDescription": "仅影响之后新建或重启的 SSH 窗格。Runtime 专用文件会在正常断开时清理；异常断网或进程崩溃时可能无法完成远端清理。",
   "app.remoteAgentIntegrationWarningTitle": "这会在你连接的远程主机上执行命令并写入文件",
-  "app.remoteAgentIntegrationWarningDetail": "启用后，Luna Mux 会：\n• 探测远端 python3、Codex 和 Claude Code；\n• 通过 SFTP 向 ~/.luna-mux/runtime/<runtime-id> 写入 Hook、Browser MCP 代理、凭据和命令包装脚本；\n• 在当前 SSH Shell 中临时调整 PATH，并包装 codex/claude 命令；\n• 建立仅绑定远端 127.0.0.1 的 SSH 反向端口转发；\n• 允许远端 Agent 通过 Luna MCP 读取和操作同一会话的窗格，并控制该会话在本机的浏览器资源。\n\n这些行为可能触发堡垒机、SSH 审计或 EDR 告警。Luna Mux 不会修改远端 Shell 启动文件、系统目录或用户级 Agent 配置。Runtime 文件会在正常断开时清理。",
+  "app.remoteAgentIntegrationWarningDetail": "启用后，Luna Mux 会：\n• 探测远端 Codex 和 Claude Code，以及 Hook/Browser MCP 所需的网络工具；\n• 通过 SFTP 向 ~/.luna-mux/runtime/<runtime-id> 写入无 Python 依赖的远端 helper、凭据和命令包装脚本；\n• 在当前 SSH Shell 中临时调整 PATH，并包装 codex/claude 命令；\n• 建立仅绑定远端 127.0.0.1 的 SSH 反向端口转发；\n• 允许远端 Agent 通过 Luna MCP 读取和操作同一会话的窗格，并控制该会话在本机的浏览器资源。\n\n这些行为可能触发堡垒机、SSH 审计或 EDR 告警。Luna Mux 不会修改远端 Shell 启动文件、系统目录或用户级 Agent 配置。Runtime 文件会在正常断开时清理。",
   "app.sshSettings": "SSH",
   "app.toolSettings": "工具",
   "app.understandAndEnable": "了解并启用",

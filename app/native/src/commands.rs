@@ -537,13 +537,11 @@ pub async fn terminal_runtime_create(
             {
                 let setup = async {
                     wait_for_runtime(&*state.terminal_backend, &runtime.runtime_id).await?;
-                    let requires_hook_forwarder =
-                        agent_adapters::requires_remote_hook_forwarder(&profile.adapter)?;
                     retry_remote_setup("remote setup", || {
                         state.sessions.verify_remote_agent_requirements(
                             &runtime.runtime_id,
                             &profile.command,
-                            true,
+                            profile.adapter == "codex",
                         )
                     })
                     .await?;
@@ -576,19 +574,10 @@ pub async fn terminal_runtime_create(
                         )
                     })
                     .await?;
-                    let browser_proxy = retry_remote_setup("remote setup", || {
+                    let remote_helper = retry_remote_setup("remote setup", || {
                         state
                             .sessions
-                            .install_browser_mcp_proxy(&runtime.runtime_id)
-                    })
-                    .await?;
-                    let browser_credentials = retry_remote_setup("remote setup", || {
-                        state.sessions.write_browser_bridge_credentials(
-                            &runtime.runtime_id,
-                            &runtime.runtime_id,
-                            remote_browser_port,
-                            &browser_bridge_token,
-                        )
+                            .install_remote_agent_helper(&runtime.runtime_id)
                     })
                     .await?;
                     let environment_file = retry_remote_setup("remote setup", || {
@@ -598,18 +587,12 @@ pub async fn terminal_runtime_create(
                             &remote_endpoint,
                             &token,
                             &mcp_token,
-                            Some(&browser_credentials),
+                            Some((remote_browser_port, &browser_bridge_token)),
                         )
                     })
                     .await?;
-                    let remote_hook_command = if requires_hook_forwarder {
-                        let forwarder = retry_remote_setup("remote setup", || {
-                            state
-                                .sessions
-                                .install_agent_hook_forwarder(&runtime.runtime_id)
-                        })
-                        .await?;
-                        Some(format!("python3 {}", posix_shell_quote(&forwarder)))
+                    let remote_hook_command = if profile.adapter == "codex" {
+                        Some(format!("{} hook", posix_shell_quote(&remote_helper)))
                     } else {
                         None
                     };
@@ -631,8 +614,8 @@ pub async fn terminal_runtime_create(
                         context: &context,
                         inject_inline_hooks: true,
                         hook_command: remote_hook_command.as_deref(),
-                        browser_command: Some(&browser_proxy),
-                        browser_credentials_file: Some(&browser_credentials),
+                        browser_command: Some(&remote_helper),
+                        browser_credentials_file: Some(&environment_file),
                         existing_developer_instructions: existing_developer_instructions.as_deref(),
                     })?;
                     let command = remote_managed_agent_command(
@@ -800,16 +783,9 @@ async fn setup_remote_manual_agent_shims(
     browser_cdp_port: u16,
 ) -> Result<(), String> {
     wait_for_runtime(&*state.terminal_backend, &runtime.runtime_id).await?;
-    if remote_setup_optional(|| {
-        state
-            .sessions
-            .remote_command_path(&runtime.runtime_id, "python3")
-    })
-    .await
-    .is_none()
-    {
-        return Err("远端缺少 python3，无法安装 Agent Hook 与 Browser MCP 代理".into());
-    }
+    // The remote helper is POSIX shell and uses curl/wget plus a TCP utility;
+    // Python is not required.  The managed path performs the same capability
+    // check after the runtime is ready.
     let (codex, claude) = tokio::join!(
         remote_setup_optional(|| state
             .sessions
@@ -821,6 +797,14 @@ async fn setup_remote_manual_agent_shims(
     if codex.is_none() && claude.is_none() {
         return Err("远端没有可用的 codex 或 claude 命令，已跳过 Agent 注入".into());
     }
+    state
+        .sessions
+        .verify_remote_agent_requirements(
+            &runtime.runtime_id,
+            codex.as_deref().or(claude.as_deref()).unwrap_or("codex"),
+            true,
+        )
+        .await?;
     let has_codex = codex.is_some();
     let has_claude = claude.is_some();
     let existing_developer_instructions = if codex.is_some() {
@@ -833,16 +817,10 @@ async fn setup_remote_manual_agent_shims(
     } else {
         None
     };
-    let hook_forwarder = retry_remote_setup("remote setup", || {
+    let remote_helper = retry_remote_setup("remote setup", || {
         state
             .sessions
-            .install_agent_hook_forwarder(&runtime.runtime_id)
-    })
-    .await?;
-    let browser_proxy = retry_remote_setup("remote setup", || {
-        state
-            .sessions
-            .install_browser_mcp_proxy(&runtime.runtime_id)
+            .install_remote_agent_helper(&runtime.runtime_id)
     })
     .await?;
 
@@ -892,18 +870,7 @@ async fn setup_remote_manual_agent_shims(
             return Err(error);
         }
     };
-    let mut created_browser_credentials = None;
     let setup = async {
-        let browser_credentials = retry_remote_setup("remote setup", || {
-            state.sessions.write_browser_bridge_credentials(
-                &runtime.runtime_id,
-                &runtime.runtime_id,
-                browser_port,
-                &browser_token,
-            )
-        })
-        .await?;
-        created_browser_credentials = Some(browser_credentials.clone());
         let remote_hook_endpoint = format!("http://127.0.0.1:{hook_port}/v1/hooks");
         let remote_mcp_endpoint = format!("http://127.0.0.1:{mcp_port}/mcp");
         let environment_file = retry_remote_setup("remote setup", || {
@@ -913,11 +880,11 @@ async fn setup_remote_manual_agent_shims(
                 &remote_hook_endpoint,
                 hook_token,
                 mcp_token,
-                Some(&browser_credentials),
+                Some((browser_port, &browser_token)),
             )
         })
         .await?;
-        let hook_command = format!("python3 {}", posix_shell_quote(&hook_forwarder));
+        let hook_command = format!("{} hook", posix_shell_quote(&remote_helper));
         let managed_context = crate::terminal_runtime_contract::TerminalManagedAgentContext {
             mux_session_id: context.mux_session_id.clone(),
             pane_id: context.pane_id.clone(),
@@ -948,8 +915,8 @@ async fn setup_remote_manual_agent_shims(
                 context: &managed_context,
                 inject_inline_hooks: true,
                 hook_command: Some(&hook_command),
-                browser_command: Some(&browser_proxy),
-                browser_credentials_file: Some(&browser_credentials),
+                browser_command: Some(&remote_helper),
+                browser_credentials_file: Some(&environment_file),
                 existing_developer_instructions: existing_developer_instructions.as_deref(),
             })?;
             let script =
@@ -996,12 +963,6 @@ async fn setup_remote_manual_agent_shims(
     }
     .await;
     if setup.is_err() {
-        if let Some(path) = created_browser_credentials.as_deref() {
-            state
-                .sessions
-                .remove_remote_file(&runtime.runtime_id, path)
-                .await;
-        }
         for port in [hook_port, mcp_port, browser_port] {
             let _ = state
                 .sessions
@@ -1115,7 +1076,7 @@ fn remote_managed_agent_command(
     .join(" ");
     let environment_file = posix_shell_quote(environment_file);
     format!(
-        "(set -a; . {environment_file}; rm -f -- {environment_file}; set +a; {identity} {command})"
+        "(set -a; . {environment_file}; set +a; {identity} {command}; luna_mux_agent_exit_code=$?; rm -f -- {environment_file}; exit \"$luna_mux_agent_exit_code\")"
     )
 }
 
@@ -1287,12 +1248,12 @@ mod managed_agent_launch_tests {
             "codex",
             "ssh-bookmark:server-1",
             true,
-            Some("python3 '/home/user/.luna-mux/bin/hook_forwarder.py'"),
+            Some("'/home/user/.luna-mux/bin/remote-agent' hook"),
             "http://127.0.0.1:43128/mcp",
         )
         .unwrap();
-        assert!(command.contains("hook_forwarder.py"));
-        assert!(command.contains("python3"));
+        assert!(command.contains("remote-agent"));
+        assert!(!command.contains("python3"));
         assert!(command.contains("hooks.SessionStart="));
         assert!(!command.contains("commandWindows"));
         assert_eq!(
@@ -1329,14 +1290,15 @@ mod managed_agent_launch_tests {
         assert!(!command.contains("lmx_control-secret"));
         assert!(command.contains("LUNA_MUX_AGENT_ADAPTER='codex'"));
         assert!(command.contains("LUNA_MUX_AGENT_PROCESS_ID='agent-1'"));
-        assert!(command.ends_with(" codex)"));
+        assert!(command.contains("; luna_mux_agent_exit_code=$?; rm -f -- '"));
+        assert!(command.ends_with(" exit \"$luna_mux_agent_exit_code\")"));
     }
 
     #[test]
     fn remote_manual_shims_preserve_arguments_and_emit_process_lifecycle() {
         let script = remote_manual_agent_script(
             "claude-code",
-            "python3 '/home/user/.luna-mux/bin/hook_forwarder.py'",
+            "'/home/user/.luna-mux/bin/remote-agent' hook",
             "'/usr/local/bin/claude' --settings '{}'",
             "/home/user/.luna-mux/runtime/runtime-1/agent.env",
         );

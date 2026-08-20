@@ -228,7 +228,7 @@ Luna Mux 不重复实现浏览器自动化。它启动隔离的外部 Chrome，�
 
 `luna-mux mcp browser` 根据当前 Session 解析端点并启动内置 sidecar；`luna-mux mcp chrome` 只作为兼容别名。分发时不依赖 Node.js 或 `npx`，Node 只用于仓库的 Vite/Tauri 构建。
 
-SSH Pane 使用上传的通用 Python STDIO 代理，通过 SSH 服务端分配的远程回环端口和 Runtime 随机凭据连接桌面。桌面验证后启动同一个 Session 级 sidecar。原始 CDP 不转发到远端，代理不内嵌凭据，桥接随 Runtime 失效。
+SSH Pane 使用上传到 Runtime 目录的单一 POSIX Shell helper，通过 SSH 服务端分配的远程回环端口和 Runtime 随机凭据连接桌面。Hook 转发优先使用 curl/wget，Browser MCP 字节桥使用 socat、nc/ncat 或 bash `/dev/tcp`；不要求远端安装 Python。桌面验证后启动同一个 Session 级 sidecar。原始 CDP 不转发到远端，helper 不内嵌凭据，桥接随 Runtime 失效。
 
 在 Luna Mux 终端中，进程级配置会禁用不可用且会抢占请求的 Codex Browser Plugin、`node_repl` 浏览器路径和对应缓存 Skill，同时合并用户原有 Skill 配置，不修改全局文件。Browser 请求只保留 `agent_browser` 一条受支持路线。
 

@@ -133,7 +133,7 @@ export function createChineseHelpSections(commandKey: string): HelpSection[] {
         <h3>运行时集成</h3>
         <p>Luna Mux 按窗格运行时为 Codex 和 Claude Code 注入各自需要的 Hook、Luna MCP 与 Browser MCP 配置。配置仅作用于当前运行时，退出后随临时身份一起失效，不需要在设置中安装 Agent 专属组件，也不会写入用户级 Agent 配置。</p>
         <p>远程 Agent 集成默认关闭。关闭时，普通 SSH 窗格就是纯 SSH 连接：Luna Mux 不探测远端 Agent、不打开 SFTP、不上传文件、不建立反向转发，也不修改当前 Shell；你仍可手动运行远端原生 <code>codex</code> 或 <code>claude</code>。</p>
-        <p>在“设置 → SSH → 远程 Agent 集成”阅读警告并启用后，新建的 SSH 窗格才会获得集成。Luna Mux 会探测 <code>python3</code> 和 Agent 命令，把运行时文件写入 <code>~/.luna-mux/runtime/&lt;runtime-id&gt;</code>，临时调整当前 Shell 的 PATH，并建立仅监听远端回环地址的反向转发。运行时目录会在正常断开前通过 SFTP 删除；网络中断或应用崩溃时无法保证远端清理。</p>
+        <p>在“设置 → SSH → 远程 Agent 集成”阅读警告并启用后，新建的 SSH 窗格才会获得集成。Luna Mux 会通过远端 login shell 探测 Agent（会加载 macOS 常见的 <code>.zprofile</code> PATH），并探测基础网络工具；然后把一个无 Python 依赖的运行时 helper 和临时环境文件写入 <code>~/.luna-mux/runtime/&lt;runtime-id&gt;</code>，临时调整当前 Shell 的 PATH，并建立仅监听远端回环地址的反向转发。Hook 需要 curl 或 wget；Browser MCP 需要 socat、nc/ncat 或 bash 的 TCP 支持。运行时目录会在正常断开前通过 SFTP 删除；网络中断或应用崩溃时无法保证远端清理。</p>
         <p>远程 Browser MCP 通过当前 SSH 连接把 MCP 请求送回本机，实际操作本机会话的 Browser Resource。Chrome CDP 不会暴露给远程机器，随机凭据也不会出现在启动命令中。</p>
       </>
     },
@@ -464,7 +464,7 @@ export function createEnglishHelpSections(commandKey: string): HelpSection[] {
         <h3>Runtime integration</h3>
         <p>Luna Mux injects the Hooks, Luna MCP, and Browser MCP configuration required by Codex and Claude Code into each Pane runtime. The configuration applies only to that runtime and expires with its temporary identity. No Agent-specific component needs to be installed in Settings, and user-level Agent configuration is not modified.</p>
         <p>Remote Agent integration is off by default. While it is off, an ordinary SSH Pane is a plain SSH connection: Luna Mux does not probe for Agents, open SFTP, upload files, create reverse forwards, or modify the current shell. You may still run the remote host's native <code>codex</code> or <code>claude</code> command.</p>
-        <p>New SSH Panes receive integration only after you review the warning and enable Settings → SSH → Remote Agent integration. Luna Mux then probes <code>python3</code> and Agent commands, writes runtime files under <code>~/.luna-mux/runtime/&lt;runtime-id&gt;</code>, temporarily adjusts the current shell PATH, and creates reverse forwards bound to remote loopback. The runtime directory is removed over SFTP before a normal disconnect; cleanup cannot be guaranteed after a network failure or application crash.</p>
+        <p>New SSH Panes receive integration only after you review the warning and enable Settings → SSH → Remote Agent integration. Luna Mux probes the Agent and basic network utilities, uploads one Python-free runtime helper plus a temporary environment file under <code>~/.luna-mux/runtime/&lt;runtime-id&gt;</code>, temporarily adjusts the current shell PATH, and creates reverse forwards bound to remote loopback. Hook forwarding needs curl or wget; Browser MCP needs socat, nc/ncat, or bash TCP support. The runtime directory is removed over SFTP before a normal disconnect; cleanup cannot be guaranteed after a network failure or application crash.</p>
         <p>Remote Browser MCP sends MCP requests back through the current SSH connection and operates the local Session Browser Resource. Chrome CDP is not exposed to the remote host, and the random credential is never placed in the launch command.</p>
       </>
     },

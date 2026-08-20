@@ -43,6 +43,7 @@ const REMOTE_LIST_MODE_UNKNOWN: u8 = 0;
 const REMOTE_LIST_MODE_EXEC: u8 = 1;
 const REMOTE_LIST_MODE_SFTP: u8 = 2;
 const REMOTE_LIST_MARKER: &str = "__SSH_CLIENT_REMOTE_LIST_V1__";
+const REMOTE_AGENT_COMMAND_MARKER: &str = "__LUNA_MUX_AGENT_COMMAND__";
 const REMOTE_LIST_SCRIPT: &str = r#"import base64,json,os,sys
 path=os.fsdecode(base64.b64decode(sys.argv[1]))
 items=[]
@@ -56,80 +57,123 @@ with os.scandir(path) as entries:
 json_bytes=json.dumps(items,separators=(',',':'),ensure_ascii=False).encode('utf-8','replace')
 payload=base64.b64encode(json_bytes).decode()
 sys.stdout.write('__SSH_CLIENT_REMOTE_LIST_V1__'+payload+'\n')"#;
-const AGENT_HOOK_FORWARDER: &str = r#"import os
-import sys
-import urllib.request
+/// One small, dependency-light helper is uploaded per remote runtime.  It
+/// deliberately uses tools commonly present on minimal POSIX hosts instead of
+/// requiring Python: curl/wget handle the short HTTP hook request and
+/// nc/ncat/socat (or bash /dev/tcp) handle the long-lived Browser MCP byte
+/// stream.  The helper receives all credentials through the 0600 environment
+/// file, never through argv or its own contents.
+const REMOTE_AGENT_HELPER: &str = r#"#!/bin/sh
+set -eu
 
-MAX_BODY = 1024 * 1024
-body = sys.stdin.buffer.read(MAX_BODY + 1)
-endpoint = os.environ.get("LUNA_MUX_HOOK_ENDPOINT", "")
-token = os.environ.get("LUNA_MUX_HOOK_AUTHORIZATION", "")
-if len(body) > MAX_BODY or not endpoint or not token:
-    raise SystemExit(2)
-request = urllib.request.Request(
-    endpoint,
-    data=body,
-    headers={
-        "Authorization": "Bearer " + token,
-        "Content-Type": "application/json",
-    },
-    method="POST",
-)
-try:
-    with urllib.request.urlopen(request, timeout=5) as response:
-        if response.status < 200 or response.status >= 300:
-            raise SystemExit(1)
-except Exception:
-    raise SystemExit(1)
-"#;
-const BROWSER_MCP_PROXY: &str = r#"#!/usr/bin/env python3
-import json
-import os
-import socket
-import sys
-import threading
+helper_dir=$(cd "$(dirname "$0")" 2>/dev/null && pwd) || helper_dir=.
+log_file="$helper_dir/remote-agent.log"
+log() {
+  {
+    if [ -f "$log_file" ] && [ "$(wc -c <"$log_file" 2>/dev/null || printf 0)" -gt 65536 ]; then
+      : >"$log_file"
+    fi
+    printf '%s pid=%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null || printf unknown)" "$$" "$*" >>"$log_file"
+  } 2>/dev/null || true
+}
 
-credentials_path = os.environ.get("LUNA_MUX_BROWSER_BRIDGE_CREDENTIALS", "")
-if not credentials_path:
-    raise SystemExit("Luna Mux Browser MCP credentials are missing")
-try:
-    with open(credentials_path, "r", encoding="utf-8") as credentials_file:
-        credentials = json.load(credentials_file)
-    port = int(credentials["port"])
-    token = str(credentials["token"])
-except Exception as error:
-    raise SystemExit("Cannot read Luna Mux Browser MCP credentials: " + str(error))
-
-connection = socket.create_connection(("127.0.0.1", port), timeout=10)
-connection.settimeout(None)
-connection.sendall(("LUNA_MUX_BROWSER_MCP_V1 " + token + "\n").encode("utf-8"))
-
-def forward_stdin():
-    try:
-        while True:
-            chunk = os.read(sys.stdin.fileno(), 65536)
-            if not chunk:
-                break
-            connection.sendall(chunk)
-    finally:
-        try:
-            connection.shutdown(socket.SHUT_WR)
-        except OSError:
-            pass
-
-upload = threading.Thread(target=forward_stdin, daemon=True)
-upload.start()
-try:
-    while True:
-        chunk = connection.recv(65536)
-        if not chunk:
-            break
-        view = memoryview(chunk)
-        while view:
-            written = os.write(sys.stdout.fileno(), view)
-            view = view[written:]
-finally:
-    connection.close()
+mode=${1:-browser}
+log "start mode=$mode"
+case "$mode" in
+  hook)
+    endpoint=${LUNA_MUX_HOOK_ENDPOINT:-}
+    token=${LUNA_MUX_HOOK_AUTHORIZATION:-}
+    if [ -z "$endpoint" ] || [ -z "$token" ]; then
+      log "hook missing_credentials endpoint_set=$([ -n "$endpoint" ] && printf yes || printf no) token_set=$([ -n "$token" ] && printf yes || printf no)"
+      exit 2
+    fi
+    # Hook payloads are one complete JSON value per line.  Read one value
+    # instead of waiting for EOF: some hook launchers keep stdin open.
+    IFS= read -r body || true
+    if [ -z "$body" ]; then
+      log "hook empty_input"
+      exit 2
+    fi
+    MAX_BODY=1048576
+    [ "${#body}" -le "$MAX_BODY" ] || exit 2
+    if command -v curl >/dev/null 2>&1; then
+      if printf '%s' "$body" | curl --silent --show-error --fail --max-time 5 \
+          -H "Authorization: Bearer $token" \
+          -H 'Content-Type: application/json' \
+          --data-binary @- "$endpoint" >/dev/null; then
+        log "hook transport=curl success"
+        exit 0
+      fi
+      log "hook transport=curl failed"
+    fi
+    if command -v wget >/dev/null 2>&1; then
+      tmp="${TMPDIR:-/tmp}/luna-mux-hook.$$"
+      trap 'rm -f "$tmp"' EXIT HUP INT TERM
+      printf '%s' "$body" >"$tmp"
+      if wget -q -O /dev/null --timeout=5 \
+          --header="Authorization: Bearer $token" \
+          --header='Content-Type: application/json' \
+          --post-file="$tmp" "$endpoint"; then
+        log "hook transport=wget success"
+        exit 0
+      fi
+      log "hook transport=wget failed"
+    fi
+    log "hook no_transport_succeeded"
+    exit 3
+    ;;
+  browser)
+    # Codex/Claude may construct the MCP child environment from the explicit
+    # MCP `env` map instead of inheriting every variable from the SSH shell.
+    # Pass the generated environment file path through that map and load the
+    # browser credentials here, inside the helper that owns the TCP stream.
+    credentials_file=${LUNA_MUX_BROWSER_BRIDGE_CREDENTIALS:-}
+    if [ -n "$credentials_file" ]; then
+      if [ -r "$credentials_file" ]; then
+        . "$credentials_file"
+        log "browser credentials_file=loaded"
+      else
+        log "browser credentials_file=unreadable"
+      fi
+    fi
+    port=${LUNA_MUX_BROWSER_BRIDGE_PORT:-}
+    token=${LUNA_MUX_BROWSER_BRIDGE_TOKEN:-}
+    if [ -z "$port" ] || [ -z "$token" ]; then
+      log "browser missing_credentials port_set=$([ -n "$port" ] && printf yes || printf no) token_set=$([ -n "$token" ] && printf yes || printf no)"
+      exit 2
+    fi
+    # nc variants and socat preserve stdin/stdout as a transparent stream.
+    if command -v socat >/dev/null 2>&1; then
+      log "browser transport=socat port=$port"
+      exec sh -c '{ printf "%s\n" "$1"; cat; } | socat - TCP:127.0.0.1:"$2"' \
+        sh "LUNA_MUX_BROWSER_MCP_V1 $token" "$port"
+    fi
+    for nc in nc ncat; do
+      if command -v "$nc" >/dev/null 2>&1; then
+        log "browser transport=$nc port=$port"
+        exec sh -c '{ printf "%s\n" "$1"; cat; } | "$3" 127.0.0.1 "$2"' \
+          sh "LUNA_MUX_BROWSER_MCP_V1 $token" "$port" "$nc"
+      fi
+    done
+    # Bash's /dev/tcp is the last no-install fallback.  It is intentionally
+    # invoked explicitly because /bin/sh may be dash or another shell.
+    if command -v bash >/dev/null 2>&1; then
+      log "browser transport=bash-dev-tcp port=$port"
+      exec bash -c '
+        exec 3<>/dev/tcp/127.0.0.1/$2 || exit 3
+        printf "%s\n" "$1" >&3
+        { cat >&3; } &
+        cat <&3
+        wait
+      ' bash "LUNA_MUX_BROWSER_MCP_V1 $token" "$port"
+    fi
+    log "browser no_tcp_transport"
+    exit 3
+    ;;
+  *)
+    exit 2
+    ;;
+esac
 "#;
 
 #[derive(Debug)]
@@ -920,18 +964,33 @@ impl SessionManager {
             .await?;
         let manager = self.clone();
         let runtime_id = id.to_string();
+        crate::browser_runtime::record_remote_bridge_diagnostic(&format!(
+            "browser reverse forward registered: runtime={runtime_id}, remote_port={remote_port}, session={mux_session_id}, cdp_port={cdp_port}"
+        ));
         tauri::async_runtime::spawn(async move {
             while let Some(channel) = channels.recv().await {
+                crate::browser_runtime::record_remote_bridge_diagnostic(&format!(
+                    "browser reverse forward connection received: runtime={runtime_id}, remote_port={remote_port}"
+                ));
                 let mux_session_id = mux_session_id.clone();
                 let token = token.clone();
+                let runtime_id = runtime_id.clone();
                 tauri::async_runtime::spawn(async move {
-                    let _ = crate::browser_runtime::bridge_remote_agent_browser_mcp(
+                    let result = crate::browser_runtime::bridge_remote_agent_browser_mcp(
                         channel.into_stream(),
                         &token,
                         &mux_session_id,
                         cdp_port,
                     )
                     .await;
+                    if let Err(error) = result {
+                        crate::browser_runtime::record_remote_bridge_diagnostic(&format!(
+                            "remote forward bridge failed: runtime={runtime_id}, session={mux_session_id}, cdp_port={cdp_port}, error={error}"
+                        ));
+                        eprintln!(
+                            "Remote Browser MCP bridge failed: runtime={runtime_id}, session={mux_session_id}, cdp_port={cdp_port}, error={error}"
+                        );
+                    }
                 });
             }
             if let Ok(mut routes) = manager.forwarded_routes.lock() {
@@ -941,14 +1000,42 @@ impl SessionManager {
         Ok(remote_port)
     }
 
-    pub async fn install_agent_hook_forwarder(&self, id: &str) -> Result<String, String> {
-        self.install_remote_support_file(id, id, "hook_forwarder.py", AGENT_HOOK_FORWARDER, 0o700)
+    pub async fn install_remote_agent_helper(&self, id: &str) -> Result<String, String> {
+        self.install_remote_support_file(id, id, "remote-agent", REMOTE_AGENT_HELPER, 0o700)
             .await
     }
 
-    pub async fn install_browser_mcp_proxy(&self, id: &str) -> Result<String, String> {
-        self.install_remote_support_file(id, id, "browser_mcp_proxy.py", BROWSER_MCP_PROXY, 0o700)
+    /// Read only the non-secret helper log and presence marker for diagnostics.
+    /// The environment file is intentionally never returned because it contains
+    /// hook/MCP credentials.
+    pub async fn remote_agent_diagnostic(
+        &self,
+        id: &str,
+        runtime_id: &str,
+    ) -> Result<(bool, Option<String>), String> {
+        if !is_valid_remote_agent_runtime_id(runtime_id) {
+            return Err("远程 Agent Runtime ID 无效".into());
+        }
+        let home = self.remote_home(id).await?;
+        let root = format!("{home}/.luna-mux/runtime/{runtime_id}");
+        let helper = format!("{root}/bin/remote-agent");
+        let log = format!("{root}/bin/remote-agent.log");
+        let sftp = self.sftp(id).await?;
+        let exists = sftp
+            .try_exists(helper)
             .await
+            .map_err(|error| error.to_string())?;
+        let log = sftp.read(log).await.ok().map(|bytes| {
+            String::from_utf8_lossy(&bytes)
+                .chars()
+                .rev()
+                .take(16 * 1024)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect()
+        });
+        Ok((exists, log))
     }
 
     async fn install_remote_support_file(
@@ -1060,14 +1147,16 @@ impl SessionManager {
 
     pub async fn remote_command_path(&self, id: &str, command: &str) -> Option<String> {
         let active = self.get(id).ok()?;
-        let lookup = format!("command -v -- {}", shell_quote(command));
+        // Resolve the command with the shell's native lookup builtin.  zsh's
+        // `whence` and Bash's `type -P` avoid treating an alias/function as a
+        // path, while the POSIX fallback works for sh/dash.  The marker keeps
+        // startup-script output (common on macOS) from being mistaken for the
+        // executable path.  The fallback below loads the user's login shell
+        // configuration, where Homebrew/npm/fnm PATH entries usually live.
+        let lookup = remote_agent_command_lookup(command);
         let probe = remote_interactive_shell_fallback(&lookup);
         let output = self.exec_remote(&active, &probe).await.ok()?;
-        output
-            .lines()
-            .map(str::trim)
-            .find(|path| path.starts_with('/'))
-            .map(str::to_string)
+        parse_remote_command_path(&output)
     }
 
     pub async fn remote_codex_developer_instructions(&self, id: &str) -> Option<String> {
@@ -1125,64 +1214,25 @@ impl SessionManager {
         Ok((bin, path))
     }
 
-    pub async fn write_browser_bridge_credentials(
-        &self,
-        id: &str,
-        runtime_id: &str,
-        port: u16,
-        token: &str,
-    ) -> Result<String, String> {
-        let root = self.remote_agent_runtime_root(id, runtime_id).await?;
-        let path = format!("{root}/browser-bridge.json");
-        let sftp = self.sftp(id).await?;
-        for directory in [root] {
-            if !sftp
-                .try_exists(directory.clone())
-                .await
-                .map_err(|error| error.to_string())?
-            {
-                sftp.create_dir(directory)
-                    .await
-                    .map_err(|error| error.to_string())?;
-            }
-        }
-        let contents = serde_json::to_vec(&serde_json::json!({
-            "port": port,
-            "token": token,
-        }))
-        .map_err(|error| error.to_string())?;
-        let mut metadata = FileAttributes::empty();
-        metadata.permissions = Some(0o600);
-        let mut file = sftp
-            .open_with_flags_and_attributes(
-                path.clone(),
-                OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::WRITE,
-                metadata,
-            )
-            .await
-            .map_err(|error| error.to_string())?;
-        file.write_all(&contents)
-            .await
-            .map_err(|error| error.to_string())?;
-        file.shutdown().await.map_err(|error| error.to_string())?;
-        Ok(path)
-    }
-
     pub async fn verify_remote_agent_requirements(
         &self,
         id: &str,
         command: &str,
-        requires_python: bool,
+        requires_hook_helper: bool,
     ) -> Result<(), String> {
         let active = self.get(id)?;
-        let requirements = if requires_python {
-            format!(
-                "command -v {} >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1",
-                shell_quote(command),
-            )
+        // Remote integration no longer requires Python. Hook forwarding uses
+        // curl or wget; Browser MCP uses socat, nc/ncat, or bash /dev/tcp.
+        let hook_tools = if requires_hook_helper {
+            " && (command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1)"
         } else {
-            format!("command -v {} >/dev/null 2>&1", shell_quote(command))
+            ""
         };
+        let requirements = format!(
+            "({}) >/dev/null 2>&1{} && (command -v socat >/dev/null 2>&1 || command -v nc >/dev/null 2>&1 || command -v ncat >/dev/null 2>&1 || command -v bash >/dev/null 2>&1)",
+            remote_agent_command_lookup(command),
+            hook_tools,
+        );
         let probe = remote_interactive_shell_fallback(&requirements);
         self.exec_remote(&active, &probe)
             .await
@@ -1190,10 +1240,14 @@ impl SessionManager {
             .map_err(|error| match error {
                 RemoteExecError::Unavailable => "远端 SSH 服务器不支持命令探测".into(),
                 RemoteExecError::Timeout => "远端 Agent 依赖检查超时".into(),
-                RemoteExecError::Failed(_) if requires_python => {
-                    format!("远端需要可用的 {command} 和 python3 命令")
-                }
-                RemoteExecError::Failed(_) => format!("远端需要可用的 {command} 命令"),
+                RemoteExecError::Failed(_) => format!(
+                    "远端需要可用的 {command}，以及 socat/nc/ncat/bash 中的 TCP 工具{}",
+                    if requires_hook_helper {
+                        " 和 curl/wget"
+                    } else {
+                        ""
+                    }
+                ),
             })
     }
 
@@ -1210,17 +1264,13 @@ impl SessionManager {
         hook_endpoint: &str,
         hook_token: &str,
         mcp_token: &str,
-        browser_credentials_file: Option<&str>,
+        browser_bridge: Option<(u16, &str)>,
     ) -> Result<String, String> {
         let runtime_root = self.remote_agent_runtime_root(id, runtime_id).await?;
         let path = format!("{runtime_root}/agent-{}.env", Uuid::new_v4().simple());
         let sftp = self.sftp(id).await?;
-        let contents = agent_environment_contents(
-            hook_endpoint,
-            hook_token,
-            mcp_token,
-            browser_credentials_file,
-        );
+        let contents =
+            agent_environment_contents(hook_endpoint, hook_token, mcp_token, browser_bridge);
         let mut metadata = FileAttributes::empty();
         metadata.permissions = Some(0o600);
         let mut file = sftp
@@ -1244,17 +1294,13 @@ impl SessionManager {
         hook_endpoint: &str,
         hook_token: &str,
         mcp_token: &str,
-        browser_credentials_file: Option<&str>,
+        browser_bridge: Option<(u16, &str)>,
     ) -> Result<String, String> {
         let runtime_root = self.remote_agent_runtime_root(id, runtime_id).await?;
         let path = format!("{runtime_root}/agent.env");
         let sftp = self.sftp(id).await?;
-        let contents = agent_environment_contents(
-            hook_endpoint,
-            hook_token,
-            mcp_token,
-            browser_credentials_file,
-        );
+        let contents =
+            agent_environment_contents(hook_endpoint, hook_token, mcp_token, browser_bridge);
         let mut metadata = FileAttributes::empty();
         metadata.permissions = Some(0o600);
         let mut file = sftp
@@ -1611,7 +1657,7 @@ fn agent_environment_contents(
     hook_endpoint: &str,
     hook_token: &str,
     mcp_token: &str,
-    browser_credentials_file: Option<&str>,
+    browser_bridge: Option<(u16, &str)>,
 ) -> String {
     let mut contents = format!(
         "LUNA_MUX_HOOK_ENDPOINT={}\nLUNA_MUX_HOOK_AUTHORIZATION={}\nLUNA_MUX_MCP_AUTHORIZATION={}\n",
@@ -1619,10 +1665,11 @@ fn agent_environment_contents(
         shell_quote(hook_token),
         shell_quote(mcp_token),
     );
-    if let Some(path) = browser_credentials_file {
+    if let Some((port, token)) = browser_bridge {
         contents.push_str(&format!(
-            "LUNA_MUX_BROWSER_BRIDGE_CREDENTIALS={}\n",
-            shell_quote(path)
+            "LUNA_MUX_BROWSER_BRIDGE_PORT={}\nLUNA_MUX_BROWSER_BRIDGE_TOKEN={}\n",
+            shell_quote(&port.to_string()),
+            shell_quote(token),
         ));
     }
     contents
@@ -1639,8 +1686,7 @@ fn is_valid_remote_agent_runtime_id(value: &str) -> bool {
 #[cfg(test)]
 mod agent_hook_forwarder_tests {
     use super::{
-        AGENT_HOOK_FORWARDER, BROWSER_MCP_PROXY, agent_environment_contents,
-        is_valid_remote_agent_runtime_id,
+        REMOTE_AGENT_HELPER, agent_environment_contents, is_valid_remote_agent_runtime_id,
     };
 
     #[test]
@@ -1655,13 +1701,20 @@ mod agent_hook_forwarder_tests {
     }
 
     #[test]
-    fn remote_forwarder_is_generic_and_contains_no_runtime_credentials() {
-        assert!(AGENT_HOOK_FORWARDER.contains("urllib.request"));
-        assert!(AGENT_HOOK_FORWARDER.contains("LUNA_MUX_HOOK_ENDPOINT"));
-        assert!(AGENT_HOOK_FORWARDER.contains("LUNA_MUX_HOOK_AUTHORIZATION"));
-        assert!(AGENT_HOOK_FORWARDER.contains("MAX_BODY = 1024 * 1024"));
-        assert!(!AGENT_HOOK_FORWARDER.contains("lmxh_"));
-        assert!(!AGENT_HOOK_FORWARDER.contains("127.0.0.1:"));
+    fn remote_helper_is_dependency_light_and_contains_no_runtime_credentials() {
+        assert!(REMOTE_AGENT_HELPER.contains("curl"));
+        assert!(REMOTE_AGENT_HELPER.contains("wget"));
+        assert!(REMOTE_AGENT_HELPER.contains("socat"));
+        assert!(REMOTE_AGENT_HELPER.contains("/dev/tcp"));
+        assert!(REMOTE_AGENT_HELPER.contains("LUNA_MUX_HOOK_ENDPOINT"));
+        assert!(REMOTE_AGENT_HELPER.contains("MAX_BODY=1048576"));
+        assert!(REMOTE_AGENT_HELPER.contains("if printf '%s' \"$body\" | curl"));
+        assert!(REMOTE_AGENT_HELPER.contains("if wget -q -O /dev/null"));
+        assert!(REMOTE_AGENT_HELPER.contains("exit 0"));
+        assert!(REMOTE_AGENT_HELPER.contains("printf \"%s\\n\""));
+        assert!(!REMOTE_AGENT_HELPER.contains("printf \"%s\\\\n\""));
+        assert!(!REMOTE_AGENT_HELPER.contains("lmxh_"));
+        assert!(!REMOTE_AGENT_HELPER.contains("lmxbm_"));
     }
 
     #[test]
@@ -1670,30 +1723,39 @@ mod agent_hook_forwarder_tests {
             "http://127.0.0.1:43127/v1/hooks",
             "lmxh_hook-secret",
             "lmx_control-secret",
-            Some("/home/user/.luna-mux/runtime/runtime-1/browser-bridge.json"),
+            Some((43129, "lmxbm_browser-secret")),
         );
         assert!(contents.contains("LUNA_MUX_HOOK_ENDPOINT='http://127.0.0.1:43127/v1/hooks'"));
         assert!(contents.contains("LUNA_MUX_HOOK_AUTHORIZATION='lmxh_hook-secret'"));
         assert!(contents.contains("LUNA_MUX_MCP_AUTHORIZATION='lmx_control-secret'"));
-        assert!(contents.contains("LUNA_MUX_BROWSER_BRIDGE_CREDENTIALS='/home/user/.luna-mux/runtime/runtime-1/browser-bridge.json'"));
-        assert_eq!(contents.lines().count(), 4);
-    }
-
-    #[test]
-    fn browser_proxy_reads_mode_scoped_credentials_and_uses_the_authenticated_preamble() {
-        assert!(BROWSER_MCP_PROXY.contains("LUNA_MUX_BROWSER_BRIDGE_CREDENTIALS"));
-        assert!(BROWSER_MCP_PROXY.contains("LUNA_MUX_BROWSER_MCP_V1 "));
-        assert!(BROWSER_MCP_PROXY.contains("127.0.0.1"));
-        assert!(!BROWSER_MCP_PROXY.contains("lmxbm_"));
-        assert!(!BROWSER_MCP_PROXY.contains("LUNA_MUX_BROWSER_CDP_PORT"));
+        assert!(contents.contains("LUNA_MUX_BROWSER_BRIDGE_PORT='43129'"));
+        assert!(contents.contains("LUNA_MUX_BROWSER_BRIDGE_TOKEN='lmxbm_browser-secret'"));
+        assert_eq!(contents.lines().count(), 5);
     }
 }
 
 fn remote_interactive_shell_fallback(command: &str) -> String {
     format!(
-        "({command}) 2>/dev/null || \"${{SHELL:-/bin/sh}}\" -ic {}",
+        "({command}) 2>/dev/null || {{ shell=\"${{SHELL:-/bin/sh}}\"; case \"$shell\" in */*) ;; *) shell=\"$(command -v \"$shell\" 2>/dev/null || printf '%s' /bin/sh)\" ;; esac; [ -x \"$shell\" ] || shell=/bin/sh; \"$shell\" -lic {}; }}",
         shell_quote(command)
     )
+}
+
+fn remote_agent_command_lookup(command: &str) -> String {
+    let quoted = shell_quote(command);
+    format!(
+        "if [ -n \"${{ZSH_VERSION:-}}\" ]; then path=$(whence -p -- {quoted} 2>/dev/null); elif [ -n \"${{BASH_VERSION:-}}\" ]; then path=$(type -P -- {quoted} 2>/dev/null); else path=$(command -v {quoted} 2>/dev/null); fi; case \"$path\" in /*) printf '%s%s\\n' {} \"$path\";; *) exit 127;; esac",
+        shell_quote(REMOTE_AGENT_COMMAND_MARKER),
+    )
+}
+
+fn parse_remote_command_path(output: &str) -> Option<String> {
+    output
+        .lines()
+        .rev()
+        .filter_map(|line| line.trim().strip_prefix(REMOTE_AGENT_COMMAND_MARKER))
+        .find(|path| path.starts_with('/'))
+        .map(str::to_owned)
 }
 
 fn parse_remote_entries(output: &str) -> Result<Vec<DirectoryEntry>, RemoteExecError> {
@@ -1754,10 +1816,36 @@ mod tests {
 
     #[test]
     fn retries_remote_probes_in_the_users_interactive_shell() {
-        let probe = remote_interactive_shell_fallback("command -v -- 'codex'");
-        assert!(probe.starts_with("(command -v -- 'codex') 2>/dev/null || "));
-        assert!(probe.contains("\"${SHELL:-/bin/sh}\" -ic "));
-        assert!(probe.ends_with("'command -v -- '\"'\"'codex'\"'\"''"));
+        let probe = remote_interactive_shell_fallback("command -v 'codex'");
+        assert!(probe.starts_with("(command -v 'codex') 2>/dev/null || "));
+        assert!(probe.contains("shell=\"${SHELL:-/bin/sh}\""));
+        assert!(probe.contains("\"$shell\" -lic "));
+        assert!(probe.contains("codex"));
+        assert!(probe.ends_with("; }"));
+    }
+
+    #[test]
+    fn remote_agent_lookup_uses_shell_native_resolvers_and_marker() {
+        let lookup = super::remote_agent_command_lookup("codex");
+        assert!(lookup.contains("whence -p -- 'codex'"));
+        assert!(lookup.contains("type -P -- 'codex'"));
+        assert!(lookup.contains("command -v 'codex'"));
+        assert!(lookup.contains(super::REMOTE_AGENT_COMMAND_MARKER));
+        assert!(lookup.contains("exit 127"));
+    }
+
+    #[test]
+    fn parses_agent_path_after_login_shell_startup_noise() {
+        assert_eq!(
+            super::parse_remote_command_path(
+                "Last login: Thu Aug 20\n\n\u{1b}[32mWelcome\u{1b}[0m\n__LUNA_MUX_AGENT_COMMAND__/opt/homebrew/bin/codex\n"
+            ),
+            Some("/opt/homebrew/bin/codex".into())
+        );
+        assert_eq!(
+            super::parse_remote_command_path("Last login: Thu Aug 20\nno agent\n"),
+            None
+        );
     }
 
     #[test]
