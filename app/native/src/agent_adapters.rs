@@ -27,9 +27,6 @@ trait AgentAdapter: Sync {
     fn id(&self) -> &'static str;
     fn profile(&self) -> AgentLaunchProfile;
     fn automatic_profile_id(&self) -> &'static str;
-    fn requires_remote_hook_forwarder(&self) -> bool {
-        false
-    }
     fn install_manual_shim(
         &self,
         context: &TerminalRuntimeContext,
@@ -60,10 +57,6 @@ impl AgentAdapter for CodexAdapter {
 
     fn automatic_profile_id(&self) -> &'static str {
         "codex.auto"
-    }
-
-    fn requires_remote_hook_forwarder(&self) -> bool {
-        true
     }
 
     fn install_manual_shim(
@@ -117,12 +110,7 @@ impl AgentAdapter for ClaudeCodeAdapter {
         mcp_endpoint: Option<&str>,
         resolved_command: Option<&Path>,
     ) -> Result<Option<PathBuf>, String> {
-        crate::claude_code_adapter::install(
-            context,
-            hook_endpoint,
-            mcp_endpoint,
-            resolved_command,
-        )
+        crate::claude_code_adapter::install(context, hook_endpoint, mcp_endpoint, resolved_command)
     }
 
     fn managed_command(&self, launch: &ManagedAgentLaunch<'_>) -> Result<String, String> {
@@ -167,10 +155,6 @@ pub fn normalize_adapter_id(value: Option<&str>) -> &'static str {
         .and_then(|id| adapters().into_iter().find(|adapter| adapter.id() == id))
         .map(AgentAdapter::id)
         .unwrap_or(CODEX_ADAPTER_ID)
-}
-
-pub fn requires_remote_hook_forwarder(adapter_id: &str) -> Result<bool, String> {
-    resolve(adapter_id).map(AgentAdapter::requires_remote_hook_forwarder)
 }
 
 pub fn install_runtime_shims(
@@ -225,8 +209,6 @@ mod tests {
             automatic_profile_id(CLAUDE_CODE_ADAPTER_ID),
             "claude-code.auto"
         );
-        assert!(requires_remote_hook_forwarder(CODEX_ADAPTER_ID).unwrap());
-        assert!(!requires_remote_hook_forwarder(CLAUDE_CODE_ADAPTER_ID).unwrap());
     }
 
     #[test]
@@ -246,16 +228,14 @@ mod tests {
                 mcp_endpoint: "http://127.0.0.1:43128/mcp",
                 context: &context,
                 inject_inline_hooks: true,
-                hook_command: Some("python3 '/home/user/.luna-mux/bin/hook_forwarder.py'"),
-                browser_command: Some("/home/user/.luna-mux/bin/browser_mcp_proxy.py"),
-                browser_credentials_file: Some(
-                    "/home/user/.luna-mux/runtime/runtime-1/browser-bridge.json",
-                ),
+                hook_command: Some("'/home/user/.luna-mux/bin/remote-agent' hook"),
+                browser_command: Some("/home/user/.luna-mux/bin/remote-agent"),
+                browser_credentials_file: None,
                 existing_developer_instructions: Some("Keep the remote user rule."),
             })
             .unwrap();
-            assert!(command.contains("browser_mcp_proxy.py"), "{command}");
-            assert!(command.contains("browser-bridge.json"), "{command}");
+            assert!(command.contains("remote-agent"), "{command}");
+            assert!(!command.contains("browser-bridge.json"), "{command}");
             assert!(command.contains("127.0.0.1:43128"), "{command}");
             assert!(!command.contains("lmxbm_"), "{command}");
             assert!(!command.contains("LUNA_MUX_BROWSER_CDP_PORT=43129"));
