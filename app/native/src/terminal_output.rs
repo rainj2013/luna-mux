@@ -129,7 +129,9 @@ mod tests {
         assert_eq!(truncated.data, "中def");
         assert_eq!(output.read("runtime-1", 6, 3).unwrap().data, "def");
         let small = output.read("runtime-1", 3, 1).unwrap();
-        assert_eq!(small.data, "中");
+        // Reads are rounded up to MIN_OUTPUT_READ_BYTES (4 UTF-8 bytes), so
+        // the three-byte character is returned together with the next byte.
+        assert_eq!(small.data, "中d");
         assert!(small.next_cursor > 3);
     }
 }
