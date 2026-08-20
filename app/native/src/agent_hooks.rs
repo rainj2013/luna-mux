@@ -1,7 +1,9 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
+    fs,
     future::Future,
     io::Read,
+    path::PathBuf,
     pin::Pin,
     sync::{Arc, Mutex, RwLock},
     time::{Duration, Instant},
@@ -31,6 +33,35 @@ const TERMINAL_ACTIVITY_INTERVAL: Duration = Duration::from_secs(3);
 const TERMINAL_SIGNAL_INTERVAL: Duration = Duration::from_secs(1);
 const AGENT_ADAPTER_HEADER: &str = "x-luna-mux-agent-adapter";
 const AGENT_PROCESS_ID_HEADER: &str = "x-luna-mux-agent-process-id";
+const HOOK_AUTH_FILE_EXTENSION: &str = "json";
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+enum PersistedHookAuthorization {
+    Agent {
+        token: String,
+        context: TerminalManagedAgentContext,
+    },
+    Bootstrap {
+        token: String,
+        context: TerminalRuntimeContext,
+    },
+}
+
+impl PersistedHookAuthorization {
+    fn token(&self) -> &str {
+        match self {
+            Self::Agent { token, .. } | Self::Bootstrap { token, .. } => token,
+        }
+    }
+
+    fn runtime_id(&self) -> &str {
+        match self {
+            Self::Agent { context, .. } => &context.runtime_id,
+            Self::Bootstrap { context, .. } => &context.runtime_id,
+        }
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -103,11 +134,21 @@ pub struct AgentHookService {
     terminal_signals: Mutex<HashMap<(String, String), Instant>>,
     event_sink: RwLock<Option<AgentEventSink>>,
     browser_ensure: RwLock<Option<BrowserEnsure>>,
+    persistence_root: Option<PathBuf>,
 }
 
 impl AgentHookService {
     pub fn new() -> Arc<Self> {
-        Arc::new(Self {
+        let persistence_root = if cfg!(test) {
+            None
+        } else {
+            Some(crate::runtime_env::hook_auth_dir())
+        };
+        Self::with_persistence_root(persistence_root)
+    }
+
+    fn with_persistence_root(persistence_root: Option<PathBuf>) -> Arc<Self> {
+        let service = Arc::new(Self {
             endpoint: RwLock::new(String::new()),
             agents: RwLock::new(HashMap::new()),
             bootstrap_tokens: RwLock::new(HashMap::new()),
@@ -117,7 +158,10 @@ impl AgentHookService {
             terminal_signals: Mutex::new(HashMap::new()),
             event_sink: RwLock::new(None),
             browser_ensure: RwLock::new(None),
-        })
+            persistence_root,
+        });
+        service.restore_persisted_authorizations();
+        service
     }
 
     pub fn start(self: &Arc<Self>) -> Result<(), String> {
@@ -168,7 +212,11 @@ impl AgentHookService {
         self.agents
             .write()
             .map_err(|_| "Agent Hook 授权锁已损坏")?
-            .insert(token.clone(), context);
+            .insert(token.clone(), context.clone());
+        self.persist_authorization(PersistedHookAuthorization::Agent {
+            token: token.clone(),
+            context,
+        });
         Ok(token)
     }
 
@@ -177,7 +225,11 @@ impl AgentHookService {
         self.bootstrap_tokens
             .write()
             .map_err(|_| "Agent Hook 启动授权锁已损坏")?
-            .insert(token.clone(), context);
+            .insert(token.clone(), context.clone());
+        self.persist_authorization(PersistedHookAuthorization::Bootstrap {
+            token: token.clone(),
+            context,
+        });
         Ok(token)
     }
 
@@ -188,9 +240,11 @@ impl AgentHookService {
         if let Ok(mut tokens) = self.bootstrap_tokens.write() {
             tokens.remove(token);
         }
+        self.remove_persisted_authorization(token);
     }
 
     pub fn revoke_runtime(&self, runtime_id: &str) {
+        self.prune_persisted_authorizations(runtime_id);
         if let Ok(mut tokens) = self.bootstrap_tokens.write() {
             tokens.retain(|_, context| context.runtime_id != runtime_id);
         }
@@ -231,6 +285,118 @@ impl AgentHookService {
         if let Ok(mut signals) = self.terminal_signals.lock() {
             signals.retain(|(id, _), _| id != runtime_id);
         }
+    }
+
+    fn persist_authorization(&self, authorization: PersistedHookAuthorization) {
+        let Some(directory) = self.persistence_root.as_deref() else {
+            return;
+        };
+        let result = (|| -> Result<(), String> {
+            fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+            let path = directory.join(format!(
+                "{}.{}",
+                authorization.token(),
+                HOOK_AUTH_FILE_EXTENSION
+            ));
+            let contents = serde_json::to_vec(&authorization).map_err(|error| error.to_string())?;
+            fs::write(&path, contents).map_err(|error| error.to_string())?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+            }
+            Ok(())
+        })();
+        if let Err(error) = result {
+            eprintln!("Unable to persist Luna Mux hook authorization: {error}");
+        }
+    }
+
+    fn restore_persisted_authorizations(&self) {
+        let Some(directory) = self.persistence_root.as_deref() else {
+            return;
+        };
+        let Ok(entries) = fs::read_dir(directory) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|value| value.to_str()) != Some(HOOK_AUTH_FILE_EXTENSION) {
+                continue;
+            }
+            let Ok(contents) = fs::read(&path) else {
+                continue;
+            };
+            let Ok(authorization) = serde_json::from_slice::<PersistedHookAuthorization>(&contents)
+            else {
+                continue;
+            };
+            match authorization {
+                PersistedHookAuthorization::Agent { token, context } => {
+                    if let Ok(mut agents) = self.agents.write() {
+                        agents.insert(token, context);
+                    }
+                }
+                PersistedHookAuthorization::Bootstrap { token, context } => {
+                    if let Ok(mut tokens) = self.bootstrap_tokens.write() {
+                        tokens.insert(token, context);
+                    }
+                }
+            }
+        }
+    }
+
+    fn remove_persisted_authorization(&self, token: &str) {
+        let Some(directory) = self.persistence_root.as_deref() else {
+            return;
+        };
+        let path = directory.join(format!("{token}.{HOOK_AUTH_FILE_EXTENSION}"));
+        let _ = fs::remove_file(path);
+    }
+
+    fn prune_persisted_authorizations(&self, runtime_id: &str) {
+        let Some(directory) = self.persistence_root.as_deref() else {
+            return;
+        };
+        let Ok(entries) = fs::read_dir(directory) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|value| value.to_str()) != Some(HOOK_AUTH_FILE_EXTENSION) {
+                continue;
+            }
+            let Ok(contents) = fs::read(&path) else {
+                continue;
+            };
+            let Ok(authorization) = serde_json::from_slice::<PersistedHookAuthorization>(&contents)
+            else {
+                continue;
+            };
+            if authorization.runtime_id() == runtime_id {
+                let _ = fs::remove_file(&path);
+            }
+        }
+    }
+
+    fn register_bootstrap_process(
+        &self,
+        token: &str,
+        process_id: &str,
+        context: &TerminalRuntimeContext,
+        adapter_id: Option<&str>,
+    ) -> Result<TerminalManagedAgentContext, String> {
+        let identity = format!("{token}:process:{process_id}");
+        let mut agents = self
+            .agents
+            .write()
+            .map_err(|_| "Agent Hook 授权锁已损坏".to_string())?;
+        if let Some(agent) = agents.get(&identity).cloned() {
+            return Ok(agent);
+        }
+        let agent = bootstrap_agent_context(context, adapter_id);
+        agents.insert(identity, agent.clone());
+        Ok(agent)
     }
 
     pub fn endpoint(&self) -> Result<String, String> {
@@ -499,6 +665,21 @@ enum HookAuthorization {
     },
 }
 
+fn bootstrap_agent_context(
+    context: &TerminalRuntimeContext,
+    adapter_id: Option<&str>,
+) -> TerminalManagedAgentContext {
+    TerminalManagedAgentContext {
+        mux_session_id: context.mux_session_id.clone(),
+        pane_id: context.pane_id.clone(),
+        runtime_id: context.runtime_id.clone(),
+        agent_id: format!("agent_{}", Uuid::new_v4().simple()),
+        launch_profile_id: agent_adapters::automatic_profile_id(
+            agent_adapters::normalize_adapter_id(adapter_id),
+        ),
+    }
+}
+
 fn terminal_signal(data: &str) -> &'static str {
     if data.contains("\x1b]") {
         "TerminalOsc"
@@ -718,11 +899,47 @@ async fn receive_hook(
                 if let Ok(mut structured) = service.structured_agents.lock() {
                     structured.remove(&context.agent_id);
                 }
+                service.remove_persisted_authorization(&token);
             }
             event
         }
         HookAuthorization::Bootstrap { token, context } => {
             let hook_event_name = payload.get("hook_event_name").and_then(Value::as_str);
+            let is_recoverable_tool_event = matches!(
+                hook_event_name,
+                Some(
+                    "PreToolUse"
+                        | "PostToolUse"
+                        | "UserPromptSubmit"
+                        | "PermissionRequest"
+                        | "SubagentStart"
+                        | "SubagentStop"
+                )
+            );
+            if !matches!(hook_event_name, Some("AgentProcessStart" | "SessionStart"))
+                && is_recoverable_tool_event
+            {
+                let process_id = process_id
+                    .filter(|value| !value.trim().is_empty())
+                    .ok_or_else(|| {
+                        (
+                            StatusCode::UNAUTHORIZED,
+                            Json(json!({ "error": "agentNotStarted" })),
+                        )
+                    })?;
+                let agent = service
+                    .register_bootstrap_process(&token, process_id, &context, adapter_id)
+                    .map_err(|_| {
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(json!({ "error": "agentAuthUnavailable" })),
+                        )
+                    })?;
+                let event = service.record(agent, payload);
+                return Ok(Json(
+                    hook_response.unwrap_or_else(|| json!({ "sequence": event.sequence })),
+                ));
+            }
             if !matches!(hook_event_name, Some("AgentProcessStart" | "SessionStart")) {
                 return Err((
                     StatusCode::UNAUTHORIZED,
@@ -763,15 +980,7 @@ async fn receive_hook(
                     Json(json!({ "error": "agentAlreadyRegistered" })),
                 ));
             }
-            let agent = TerminalManagedAgentContext {
-                mux_session_id: context.mux_session_id,
-                pane_id: context.pane_id,
-                runtime_id: context.runtime_id,
-                agent_id: format!("agent_{}", Uuid::new_v4().simple()),
-                launch_profile_id: agent_adapters::automatic_profile_id(
-                    agent_adapters::normalize_adapter_id(adapter_id),
-                ),
-            };
+            let agent = bootstrap_agent_context(&context, adapter_id);
             service
                 .agents
                 .write()
@@ -921,6 +1130,77 @@ mod tests {
         path::PathBuf,
         process::{Command, Stdio},
     };
+
+    #[test]
+    fn persisted_hook_authorizations_survive_service_restart_and_are_revoked() {
+        let directory = std::env::temp_dir().join(format!(
+            "luna-mux-hook-auth-test-{}",
+            Uuid::new_v4().simple()
+        ));
+        let context = TerminalRuntimeContext {
+            mux_session_id: "session-1".into(),
+            pane_id: "pane-1".into(),
+            runtime_id: "runtime-1".into(),
+        };
+        let service = AgentHookService::with_persistence_root(Some(directory.clone()));
+        let token = service.issue_bootstrap_token(context.clone()).unwrap();
+        let token_path = directory.join(format!("{token}.{HOOK_AUTH_FILE_EXTENSION}"));
+        assert!(token_path.is_file());
+
+        let restarted = AgentHookService::with_persistence_root(Some(directory.clone()));
+        assert_eq!(
+            restarted
+                .bootstrap_tokens
+                .read()
+                .expect("bootstrap token lock")
+                .get(&token),
+            Some(&context)
+        );
+
+        restarted.revoke_token(&token);
+        assert!(!token_path.exists());
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn persisted_bootstrap_token_recovers_process_binding_after_restart() {
+        let directory = std::env::temp_dir().join(format!(
+            "luna-mux-hook-auth-test-{}",
+            Uuid::new_v4().simple()
+        ));
+        let context = TerminalRuntimeContext {
+            mux_session_id: "session-1".into(),
+            pane_id: "pane-1".into(),
+            runtime_id: "runtime-1".into(),
+        };
+        let token = {
+            let service = AgentHookService::with_persistence_root(Some(directory.clone()));
+            service.issue_bootstrap_token(context).unwrap()
+        };
+
+        let restarted = AgentHookService::with_persistence_root(Some(directory.clone()));
+        let agent = restarted
+            .register_bootstrap_process(
+                &token,
+                "process-1",
+                &TerminalRuntimeContext {
+                    mux_session_id: "session-1".into(),
+                    pane_id: "pane-1".into(),
+                    runtime_id: "runtime-1".into(),
+                },
+                Some("claude-code"),
+            )
+            .unwrap();
+        assert_eq!(agent.launch_profile_id, "claude-code.auto");
+        assert!(
+            restarted
+                .agents
+                .read()
+                .unwrap()
+                .contains_key(&format!("{token}:process:process-1"))
+        );
+        let _ = fs::remove_dir_all(&directory);
+    }
 
     #[test]
     fn hook_events_map_to_deterministic_agent_states() {

@@ -17,6 +17,13 @@ pub(crate) struct RuntimeEnvironment {
 
 const ENV_FILE_NAME_SH: &str = "agent-env.sh";
 const ENV_FILE_NAME_PS: &str = "agent-env.ps1";
+pub(crate) const HOOK_AUTH_DIR_NAME: &str = "hook-auth";
+
+pub(crate) fn hook_auth_dir() -> PathBuf {
+    std::env::temp_dir()
+        .join("luna-mux")
+        .join(HOOK_AUTH_DIR_NAME)
+}
 
 pub(crate) fn runtime_temp_dir(runtime_id: &str) -> Result<PathBuf, String> {
     if !is_valid_runtime_id(runtime_id) {
@@ -137,7 +144,7 @@ pub(crate) fn cleanup_stale_runtime_dirs() {
         let Some(name) = name.to_str() else {
             continue;
         };
-        if name == "agent-browser" {
+        if name == "agent-browser" || name == HOOK_AUTH_DIR_NAME {
             continue;
         }
         let _ = fs::remove_dir_all(path);
