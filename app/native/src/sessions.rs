@@ -1005,6 +1005,39 @@ impl SessionManager {
             .await
     }
 
+    /// Read only the non-secret helper log and presence marker for diagnostics.
+    /// The environment file is intentionally never returned because it contains
+    /// hook/MCP credentials.
+    pub async fn remote_agent_diagnostic(
+        &self,
+        id: &str,
+        runtime_id: &str,
+    ) -> Result<(bool, Option<String>), String> {
+        if !is_valid_remote_agent_runtime_id(runtime_id) {
+            return Err("远程 Agent Runtime ID 无效".into());
+        }
+        let home = self.remote_home(id).await?;
+        let root = format!("{home}/.luna-mux/runtime/{runtime_id}");
+        let helper = format!("{root}/bin/remote-agent");
+        let log = format!("{root}/bin/remote-agent.log");
+        let sftp = self.sftp(id).await?;
+        let exists = sftp
+            .try_exists(helper)
+            .await
+            .map_err(|error| error.to_string())?;
+        let log = sftp.read(log).await.ok().map(|bytes| {
+            String::from_utf8_lossy(&bytes)
+                .chars()
+                .rev()
+                .take(16 * 1024)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect()
+        });
+        Ok((exists, log))
+    }
+
     async fn install_remote_support_file(
         &self,
         id: &str,

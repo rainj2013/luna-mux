@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowRight, Bookmark as BookmarkIcon, Bot, Check, ChevronDown, ChevronRight, CircleHelp, CirclePlus, Columns2, Columns3, Copy, Database as DatabaseIcon, Download, Edit3, ExternalLink, Eye, EyeOff, FileInput, FileJson2, Folder, FolderOpen, FolderPlus, Globe2, Grid2x2, GripVertical, History as HistoryIcon, Image as ImageIcon, KeyRound, Languages, LayoutGrid, Maximize2, Minimize, Minus, Monitor, Moon, Network, Palette, PanelLeftClose, PanelLeftOpen, Play, Plus, Power, Rocket, RotateCcw, Rows2, Rows3, Search, Send, Server, Settings as SettingsIcon, ShieldAlert, Sparkles, Square, SquareTerminal, Star, Stethoscope, Sun, Trash2, Upload, WandSparkles, X } from 'lucide-react'
-import { BUNDLED_TERMINAL_FONT, DEFAULT_AI_SETTINGS, DEFAULT_TERMINAL_SETTINGS, type AgentLaunchProfile, type AiCommandHistoryEntry, type AiCommandSuggestion, type AiProvider, type AiRawExchange, type AiRiskAssessment, type AiSettings, type AiSettingsInput, type AiShell, type AiThinkingMode, type AppEvent, type AppIconId, type AppIconSettings, type AppLanguage, type Bookmark, type BookmarkArchivePreview, type BookmarkArchiveSource, type BookmarkInput, type BrowserResource, type BrowserRuntime, type BrowserRuntimeStatus, type BrowserTunnel, type ChromeInstallation, type ConflictResolution, type ConnectInput, type DeploymentDiffEntry, type DeploymentProfile, type DoctorCheck, type DoctorCheckStatus, type DoctorManagedAgent, type DoctorReport, type HostKeyPrompt, type LunaRemoteImportPreview, type LunaRemoteImportResult, type LunaRemoteSource, type ManagedAgentEvent, type ManagedAgentStatus, type MuxPane, type MuxSession, type MuxSplitNode, type PortForwardProfile, type SessionStatus, type SshConfigPreview, type TerminalRuntime, type TerminalRuntimeEvent, type TerminalSettings, type TerminalTarget, type TransferTask, type TunnelSummary, type UiTheme } from './types'
+import { BUNDLED_TERMINAL_FONT, DEFAULT_AI_SETTINGS, DEFAULT_TERMINAL_SETTINGS, type AgentLaunchProfile, type AiCommandHistoryEntry, type AiCommandSuggestion, type AiProvider, type AiRawExchange, type AiRiskAssessment, type AiSettings, type AiSettingsInput, type AiShell, type AiThinkingMode, type AppEvent, type AppIconId, type AppIconSettings, type AppLanguage, type Bookmark, type BookmarkArchivePreview, type BookmarkArchiveSource, type BookmarkInput, type BrowserResource, type BrowserRuntime, type BrowserRuntimeStatus, type BrowserTunnel, type ChromeInstallation, type ConflictResolution, type ConnectInput, type DeploymentDiffEntry, type DeploymentProfile, type DoctorCheck, type DoctorCheckStatus, type DoctorManagedAgent, type DoctorReport, type DoctorRuntimeCheck, type HostKeyPrompt, type LunaRemoteImportPreview, type LunaRemoteImportResult, type LunaRemoteSource, type ManagedAgentEvent, type ManagedAgentStatus, type MuxPane, type MuxSession, type MuxSplitNode, type PortForwardProfile, type SessionStatus, type SshConfigPreview, type TerminalRuntime, type TerminalRuntimeEvent, type TerminalSettings, type TerminalTarget, type TransferTask, type TunnelSummary, type UiTheme } from './types'
 import { discardTerminalSnapshot, TerminalPane, type TerminalPaneHandle } from './components/TerminalPane'
 import { SftpPane } from './components/SftpPane'
 import { HelpDialog } from './components/HelpDialog'
@@ -2383,7 +2383,18 @@ function formatActivity(value?: string | null): string {
 }
 
 function readableDiagnosticDetail(name: string, detail: string): string {
-  if (name === 'local_agents') return detail.replace(/;\s*/g, '\n')
+  if (name === 'executable') return `当前应用：${detail}`
+  if (name === 'local_agents') {
+    const entries = detail.split(';').map((entry) => entry.trim()).filter(Boolean)
+    const readable = entries.map((entry) => {
+      const match = entry.match(/^([^\[]+)\[([^\]]+)\]=(.*)$/)
+      if (!match) return entry
+      const agent = match[1] === 'codex' ? 'Codex' : match[1] === 'claude' ? 'Claude Code' : match[1]
+      const target = match[2].replace(/^local:/, '').replace(/^powershell5?$/, 'Windows PowerShell')
+      return `已找到 ${agent}（${target}）：${match[3]}`
+    })
+    return readable.join('\n') || detail
+  }
   if (name === 'wsl_distributions') return detail.replace(/,\s*/g, '\n')
   if (name === 'wsl_interop_exe') return detail.replace(/;\s*/g, '\n')
   return detail
@@ -2427,6 +2438,12 @@ function DiagnosticsPanel({ onError }: { onError(message: string): void }): Reac
       if (path) setDiagnosticPath(path)
     } catch (error) { onError(errorMessage(error)) }
   }
+  const repairRuntime = async (runtimeId: string): Promise<void> => {
+    try {
+      await window.api.diagnostics.repair(runtimeId, 'remoteHelper')
+      await runDiagnostics()
+    } catch (error) { onError(errorMessage(error)) }
+  }
   const statusIcon = (status: DoctorCheckStatus): React.JSX.Element => status === 'ok' ? <Check size={15} /> : status === 'warn' ? <ShieldAlert size={15} /> : <X size={15} />
   const statusLabel = (status: DoctorCheckStatus): string => status === 'ok' ? t('app.diagnosticsStatusOk') : status === 'warn' ? t('app.diagnosticsStatusWarn') : t('app.diagnosticsStatusError')
   const checkLabel = (name: string): string => {
@@ -2437,6 +2454,15 @@ function DiagnosticsPanel({ onError }: { onError(message: string): void }): Reac
     if (name === 'wsl_distributions') return t('app.diagnosticsCheckWsl')
     if (name === 'wsl_interop_exe') return t('app.diagnosticsCheckWslInterop')
     return name
+  }
+  const checkDescription = (name: string): string => {
+    if (name === 'executable') return t('app.diagnosticsDescriptionExecutable')
+    if (name === 'local_agents') return t('app.diagnosticsDescriptionLocalAgents')
+    if (name === 'runtime_env_files') return t('app.diagnosticsDescriptionRuntimeEnv')
+    if (name === 'managed_agents') return t('app.diagnosticsDescriptionManagedAgents')
+    if (name === 'wsl_distributions') return t('app.diagnosticsDescriptionWsl')
+    if (name === 'wsl_interop_exe') return t('app.diagnosticsDescriptionWslInterop')
+    return ''
   }
   const toggleAgent = (agentId: string): void => setExpandedAgents((current) => ({ ...current, [agentId]: !current[agentId] }))
   const agentStatusLabel = (status: string): string => {
@@ -2463,6 +2489,45 @@ function DiagnosticsPanel({ onError }: { onError(message: string): void }): Reac
     if (value === 'reachable') return t('app.diagnosticsReachable')
     if (!value || value === 'missing') return t('app.diagnosticsMissing')
     return value
+  }
+  const runtimeCheckLabel = (name: string): string => {
+    if (name === 'runtime') return t('app.diagnosticsRuntimeStatus')
+    if (name === 'luna_mcp') return t('app.diagnosticsRuntimeLunaMcp')
+    if (name === 'hook') return t('app.diagnosticsRuntimeHook')
+    if (name === 'agent_browser') return t('app.diagnosticsRuntimeBrowser')
+    if (name === 'remote_helper') return t('app.diagnosticsRuntimeRemoteHelper')
+    if (name === 'remote_helper_log') return t('app.diagnosticsRuntimeRemoteHelperLog')
+    if (name === 'browser_bridge') return t('app.diagnosticsRuntimeBrowserBridge')
+    return name
+  }
+  const runtimeCheckDetail = (check: DoctorRuntimeCheck): string => {
+    const code = check.code
+    if (code === 'runtime_not_running') return t('app.diagnosticsReasonRuntimeNotRunning', { value0: check.detail.replace(/^runtime status is\s*/i, '') })
+    if (code === 'luna_mcp_endpoint_missing') return t('app.diagnosticsReasonMcpEndpointMissing')
+    if (code === 'hook_endpoint_missing') return t('app.diagnosticsReasonHookEndpointMissing')
+    if (code === 'luna_mcp_authorization_missing' || code === 'hook_authorization_missing') return t('app.diagnosticsReasonAuthorizationMissing')
+    if (code === 'endpoint_tcp_unreachable') return t('app.diagnosticsReasonEndpointUnreachable')
+    if (code === 'endpoint_unauthorized') return t('app.diagnosticsReasonEndpointUnauthorized')
+    if (code === 'endpoint_not_found') return t('app.diagnosticsReasonEndpointNotFound')
+    if (code === 'endpoint_method_rejected') return t('app.diagnosticsReasonEndpointMethodRejected')
+    if (code === 'mcp_initialize_failed') return t('app.diagnosticsReasonMcpInitializeFailed')
+    if (code === 'browser_runtime_error') return t('app.diagnosticsReasonBrowserError')
+    if (code === 'browser_runtime_not_running') return t('app.diagnosticsReasonBrowserNotRunning')
+    if (code === 'remote_helper_missing') return t('app.diagnosticsReasonRemoteHelperMissing')
+    if (code === 'browser_reverse_forward_not_connected') return t('app.diagnosticsReasonBrowserForward')
+    if (code === 'browser_sidecar_start_failed') return t('app.diagnosticsReasonBrowserSidecar')
+    if (code === 'remote_helper_transport_failed') return t('app.diagnosticsReasonRemoteTransport')
+    if (code === 'browser_authentication_failed') return t('app.diagnosticsReasonBrowserAuth')
+    if (code === 'remote_helper_no_recent_success') return t('app.diagnosticsReasonNoRecentTransport')
+    if (check.status === 'ok' && check.name === 'runtime') return t('app.diagnosticsReasonRuntimeOk')
+    if (check.status === 'ok' && check.name === 'luna_mcp') return t('app.diagnosticsReasonMcpOk')
+    if (check.status === 'ok' && check.name === 'hook') return t('app.diagnosticsReasonHookOk')
+    if (check.status === 'ok' && check.name === 'agent_browser') return t('app.diagnosticsReasonBrowserOk')
+    if (check.status === 'ok' && check.name === 'remote_helper') return t('app.diagnosticsReasonRemoteHelperOk')
+    if (check.status === 'ok' && check.name === 'remote_helper_log') return t('app.diagnosticsReasonRemoteTransportOk')
+    if (check.status === 'ok' && check.name === 'browser_bridge') return t('app.diagnosticsReasonBrowserBridgeOk')
+    if (code === 'endpoint_http_error' || code === 'endpoint_no_http_response' || code === 'endpoint_read_failed' || code === 'endpoint_write_failed') return t('app.diagnosticsReasonEndpointCommunication')
+    return check.detail
   }
   const renderCheckDetail = (check: DoctorCheck): React.JSX.Element => {
     if (check.name === 'managed_agents') {
@@ -2526,7 +2591,32 @@ function DiagnosticsPanel({ onError }: { onError(message: string): void }): Reac
     }
     return <code className="diagnostics-check-detail">{readableDiagnosticDetail(check.name, check.detail) || t('app.diagnosticsNoDetail')}</code>
   }
-  const overallStatus: DoctorCheckStatus = report ? report.ok ? report.checks.some((check) => check.status === 'warn') ? 'warn' : 'ok' : 'error' : 'ok'
+  const renderRuntimeReports = (): React.JSX.Element | null => {
+    if (!report?.runtimes?.length) return null
+    return <section className="diagnostics-checks diagnostics-runtime-reports">
+      {report.runtimes.map((runtime) => <article key={runtime.runtimeId} className="diagnostics-check">
+        <div className="diagnostics-check-main">
+          <div className="diagnostics-check-heading"><strong>{runtime.title || runtime.paneTitle || t('app.diagnosticsRuntimeInstance')}</strong><code title={runtime.runtimeId}>{runtime.runtimeId}</code></div>
+          <span className="diagnostics-runtime-context">{runtime.paneTitle || runtime.paneId || runtime.targetId}</span>
+          <div className="diagnostics-runtime-list">
+            {runtime.checks.map((check) => <div className={'diagnostics-runtime ' + check.status} key={check.name}>
+              <div className="diagnostics-runtime-heading"><strong>{runtimeCheckLabel(check.name)}</strong><span className={'diagnostics-status ' + check.status}>{statusLabel(check.status)}</span></div>
+              <span className="diagnostics-check-detail">{runtimeCheckDetail(check)}</span>
+              {check.evidence?.map((evidence) => <details key={evidence.kind} className="diagnostics-evidence-disclosure"><summary>{t('app.diagnosticsViewEvidence')}</summary><pre className="diagnostics-evidence">{evidence.detail}</pre></details>)}
+              {check.repairable && check.name === 'remote_helper' && <button type="button" className="secondary-button" onClick={() => void repairRuntime(runtime.runtimeId)}>{t('app.diagnosticsRepairRemoteHelper')}</button>}
+            </div>)}
+          </div>
+        </div>
+      </article>)}
+    </section>
+  }
+  const overallStatus: DoctorCheckStatus = report
+    ? report.ok
+      ? report.checks.some((check) => check.status === 'warn') || report.runtimes?.some((runtime) => runtime.checks.some((check) => check.status === 'warn'))
+        ? 'warn'
+        : 'ok'
+      : 'error'
+    : 'ok'
   const overallLabel = report ? overallStatus === 'ok' ? t('app.diagnosticsAllGood') : overallStatus === 'warn' ? t('app.diagnosticsNeedsAttention') : t('app.diagnosticsHasErrors') : t('app.diagnosticsReady')
   return <div className="diagnostics-panel">
     <section className={report ? 'diagnostics-summary ' + overallStatus : 'diagnostics-summary idle'}>
@@ -2549,11 +2639,12 @@ function DiagnosticsPanel({ onError }: { onError(message: string): void }): Reac
         <div className="diagnostics-check-icon">{statusIcon(check.status)}</div>
         <div className="diagnostics-check-main">
           <div className="diagnostics-check-heading"><strong>{checkLabel(check.name)}</strong><span className={'diagnostics-status ' + check.status}>{statusLabel(check.status)}</span></div>
-          {check.name === 'runtime_env_files' && <span className="diagnostics-check-description">{t('app.diagnosticsRuntimeEnvDescription')}</span>}
+          {checkDescription(check.name) && <span className="diagnostics-check-description">{checkDescription(check.name)}</span>}
           {renderCheckDetail(check)}
         </div>
       </article>)}
     </section>}
+    {renderRuntimeReports()}
   </div>
 }
 

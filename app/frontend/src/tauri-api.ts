@@ -184,6 +184,7 @@ export async function createTauriApi(): Promise<AppApi> {
     },
     diagnostics: {
       run: (filter) => call('diagnostics_run', filter === undefined ? {} : { filter }),
+      repair: (runtimeId, action) => call('diagnostics_repair', { runtimeId, action }),
       export: () => call('diagnostics_export')
     },
     ai: {

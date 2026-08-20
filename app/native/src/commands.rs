@@ -33,7 +33,7 @@ use crate::{
     },
     control_service::{self, InProcessControlService, LunaControlService},
     database::Database,
-    doctor::{self, AgentCheckReport, DoctorManagedAgent},
+    doctor::{self, AgentCheckReport, DoctorManagedAgent, DoctorRuntimeInput},
     local_pty_backend::InProcessLocalPtyTerminalBackend,
     luna_mcp::{LunaMcpService, MCP_AUTHORIZATION_ENV},
     models::*,
@@ -3272,11 +3272,112 @@ pub async fn diagnostics_run(
             }
         })
         .collect::<Vec<_>>();
+    let hook_endpoint = state.agent_hooks.endpoint().ok();
+    let mcp_endpoint = state.luna_mcp.endpoint().ok();
+    let browser_bridge_log = fs::read_to_string(
+        std::env::temp_dir()
+            .join("luna-mux")
+            .join("remote-browser-bridge.log"),
+    )
+    .ok();
+    let browser_by_session = state
+        .browser_runtimes
+        .list()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|runtime| {
+            (
+                runtime.mux_session_id.clone(),
+                format!("{:?} cdp={}", runtime.status, runtime.cdp_port),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    let mut runtime_inputs = Vec::new();
+    for runtime in state.terminal_backend.list()? {
+        let context = runtime.context.clone().or_else(|| {
+            runtime.managed_agent.as_ref().map(|agent| {
+                crate::terminal_runtime_contract::TerminalRuntimeContext {
+                    mux_session_id: agent.mux_session_id.clone(),
+                    pane_id: agent.pane_id.clone(),
+                    runtime_id: agent.runtime_id.clone(),
+                }
+            })
+        });
+        let Some(context) = context else { continue };
+        let pane_title = pane_titles.get(&context.pane_id).cloned();
+        let (remote_helper_exists, remote_helper_log) =
+            if runtime.target_id.starts_with("ssh-bookmark:") {
+                state
+                    .sessions
+                    .remote_agent_diagnostic(&runtime.runtime_id, &context.runtime_id)
+                    .await
+                    .unwrap_or((false, None))
+            } else {
+                (false, None)
+            };
+        runtime_inputs.push(DoctorRuntimeInput {
+            runtime_id: runtime.runtime_id.clone(),
+            target_id: runtime.target_id.clone(),
+            title: runtime.title.clone(),
+            status: format!("{:?}", runtime.status),
+            pane_id: Some(context.pane_id.clone()),
+            pane_title,
+            mux_session_id: Some(context.mux_session_id.clone()),
+            hook_endpoint: hook_endpoint.clone(),
+            hook_token: state
+                .agent_hooks
+                .diagnostic_token_for_runtime(&context.runtime_id),
+            mcp_endpoint: mcp_endpoint.clone(),
+            mcp_token: state
+                .luna_mcp
+                .diagnostic_token_for_runtime(&context.runtime_id),
+            remote_helper_exists: runtime
+                .target_id
+                .starts_with("ssh-bookmark:")
+                .then_some(remote_helper_exists),
+            remote_helper_log,
+            remote_bridge_log: runtime
+                .target_id
+                .starts_with("ssh-bookmark:")
+                .then(|| browser_bridge_log.clone())
+                .flatten(),
+            integration_enabled: !runtime.target_id.starts_with("ssh-bookmark:")
+                || state.db.get_setting("remoteAgentIntegrationEnabled", false),
+            browser_runtime: browser_by_session.get(&context.mux_session_id).cloned(),
+        });
+    }
     tauri::async_runtime::spawn_blocking(move || {
-        doctor::run_report_with_agents(filter.as_deref(), &managed_agents)
+        doctor::run_report_with_runtime_inputs(filter.as_deref(), &managed_agents, &runtime_inputs)
     })
     .await
     .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn diagnostics_repair(
+    state: State<'_, AppState>,
+    runtime_id: String,
+    action: String,
+) -> Result<serde_json::Value, String> {
+    if action != "remoteHelper" {
+        return Err("不支持的诊断修复操作".into());
+    }
+    let runtime = state
+        .terminal_backend
+        .list()?
+        .into_iter()
+        .find(|runtime| runtime.runtime_id == runtime_id)
+        .ok_or_else(|| "Runtime 不存在".to_string())?;
+    if !runtime.target_id.starts_with("ssh-bookmark:") {
+        return Err("remoteHelper 修复只适用于 SSH Runtime".into());
+    }
+    let path = state
+        .sessions
+        .install_remote_agent_helper(&runtime_id)
+        .await?;
+    Ok(
+        json!({ "action": action, "runtimeId": runtime_id, "path": path, "requiresAgentRestart": true }),
+    )
 }
 
 #[tauri::command]

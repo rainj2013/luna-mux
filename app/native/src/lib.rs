@@ -223,6 +223,7 @@ pub fn run() {
                 transfers.clone(),
                 tunnels.clone(),
                 browser_runtimes.clone(),
+                sessions.clone(),
             );
             let control = InProcessControlService::new(
                 database.clone(),
@@ -237,6 +238,7 @@ pub fn run() {
                 agent_hooks.clone(),
                 terminal_backend.clone(),
             );
+            control.set_luna_mcp(luna_mcp.clone());
             luna_mcp.start()?;
             let browser_ensure_db = database.clone();
             let browser_ensure_runtimes = browser_runtimes.clone();
@@ -510,6 +512,7 @@ pub fn run() {
             browser_tunnel_start,
             tunnels_stop,
             diagnostics_run,
+            diagnostics_repair,
             diagnostics_export,
             state_get_sidebar_collapsed,
             state_set_sidebar_collapsed,

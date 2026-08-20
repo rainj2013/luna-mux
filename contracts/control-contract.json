@@ -85,6 +85,15 @@
       "approval": "none"
     },
     {
+      "name": "diagnostics.repair",
+      "version": 1,
+      "access": "write",
+      "resourceKind": "terminalRuntime",
+      "mutating": true,
+      "supportsIdempotency": true,
+      "approval": "none"
+    },
+    {
       "name": "connections.list",
       "version": 1,
       "access": "read",
