@@ -616,12 +616,39 @@ export interface DoctorCheck {
   name: string
   status: DoctorCheckStatus
   detail: string
+  code?: string
+  runtimeId?: string
+  paneId?: string
+  phase?: string
+  evidence?: Array<{ kind: string; detail: string }>
+  repairable?: boolean
+}
+
+export interface DoctorRuntimeCheck {
+  name: string
+  status: DoctorCheckStatus
+  detail: string
+  code?: string
+  phase?: string
+  evidence?: Array<{ kind: string; detail: string }>
+  repairable?: boolean
+}
+
+export interface DoctorRuntimeReport {
+  runtimeId: string
+  targetId: string
+  title: string
+  status: string
+  paneId?: string
+  paneTitle?: string
+  checks: DoctorRuntimeCheck[]
 }
 
 export interface DoctorReport {
   ok: boolean
   checks: DoctorCheck[]
   managedAgents?: DoctorManagedAgent[]
+  runtimes?: DoctorRuntimeReport[]
 }
 
 export type ClipboardContent =
@@ -761,6 +788,7 @@ export interface AppApi {
   }
   diagnostics: {
     run(filter?: string): Promise<DoctorReport>
+    repair(runtimeId: string, action: string): Promise<Record<string, unknown>>
     export(): Promise<string | null>
   }
   ai: {

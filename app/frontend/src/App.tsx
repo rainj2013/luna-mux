@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowRight, Bookmark as BookmarkIcon, Bot, Check, ChevronDown, ChevronRight, CircleHelp, CirclePlus, Columns2, Columns3, Copy, Database as DatabaseIcon, Download, Edit3, ExternalLink, Eye, EyeOff, FileInput, FileJson2, Folder, FolderOpen, FolderPlus, Globe2, Grid2x2, GripVertical, History as HistoryIcon, Image as ImageIcon, KeyRound, Languages, LayoutGrid, Maximize2, Minimize, Minus, Monitor, Moon, Network, Palette, PanelLeftClose, PanelLeftOpen, Play, Plus, Power, Rocket, RotateCcw, Rows2, Rows3, Search, Send, Server, Settings as SettingsIcon, ShieldAlert, Sparkles, Square, SquareTerminal, Star, Stethoscope, Sun, Trash2, Upload, WandSparkles, X } from 'lucide-react'
-import { BUNDLED_TERMINAL_FONT, DEFAULT_AI_SETTINGS, DEFAULT_TERMINAL_SETTINGS, type AgentLaunchProfile, type AiCommandHistoryEntry, type AiCommandSuggestion, type AiProvider, type AiRawExchange, type AiRiskAssessment, type AiSettings, type AiSettingsInput, type AiShell, type AiThinkingMode, type AppEvent, type AppIconId, type AppIconSettings, type AppLanguage, type Bookmark, type BookmarkArchivePreview, type BookmarkArchiveSource, type BookmarkInput, type BrowserResource, type BrowserRuntime, type BrowserRuntimeStatus, type BrowserTunnel, type ChromeInstallation, type ConflictResolution, type ConnectInput, type DeploymentDiffEntry, type DeploymentProfile, type DoctorCheck, type DoctorCheckStatus, type DoctorManagedAgent, type DoctorReport, type HostKeyPrompt, type LunaRemoteImportPreview, type LunaRemoteImportResult, type LunaRemoteSource, type ManagedAgentEvent, type ManagedAgentStatus, type MuxPane, type MuxSession, type MuxSplitNode, type PortForwardProfile, type SessionStatus, type SshConfigPreview, type TerminalRuntime, type TerminalRuntimeEvent, type TerminalSettings, type TerminalTarget, type TransferTask, type TunnelSummary, type UiTheme } from './types'
+import { BUNDLED_TERMINAL_FONT, DEFAULT_AI_SETTINGS, DEFAULT_TERMINAL_SETTINGS, type AgentLaunchProfile, type AiCommandHistoryEntry, type AiCommandSuggestion, type AiProvider, type AiRawExchange, type AiRiskAssessment, type AiSettings, type AiSettingsInput, type AiShell, type AiThinkingMode, type AppEvent, type AppIconId, type AppIconSettings, type AppLanguage, type Bookmark, type BookmarkArchivePreview, type BookmarkArchiveSource, type BookmarkInput, type BrowserResource, type BrowserRuntime, type BrowserRuntimeStatus, type BrowserTunnel, type ChromeInstallation, type ConflictResolution, type ConnectInput, type DeploymentDiffEntry, type DeploymentProfile, type DoctorCheck, type DoctorCheckStatus, type DoctorManagedAgent, type DoctorReport, type DoctorRuntimeCheck, type HostKeyPrompt, type LunaRemoteImportPreview, type LunaRemoteImportResult, type LunaRemoteSource, type ManagedAgentEvent, type ManagedAgentStatus, type MuxPane, type MuxSession, type MuxSplitNode, type PortForwardProfile, type SessionStatus, type SshConfigPreview, type TerminalRuntime, type TerminalRuntimeEvent, type TerminalSettings, type TerminalTarget, type TransferTask, type TunnelSummary, type UiTheme } from './types'
 import { discardTerminalSnapshot, TerminalPane, type TerminalPaneHandle } from './components/TerminalPane'
 import { SftpPane } from './components/SftpPane'
 import { HelpDialog } from './components/HelpDialog'
@@ -2240,7 +2240,6 @@ function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, u
   const [apiKey, setApiKey] = useState('')
   const [testingAi, setTestingAi] = useState(false)
   const [aiTested, setAiTested] = useState(false)
-  const [diagnosticPath, setDiagnosticPath] = useState('')
   const [section, setSection] = useState<SettingsSection>(initialSection)
   const [systemFonts, setSystemFonts] = useState<string[] | null>(null)
   const [manualFontMode, setManualFontMode] = useState(false)
@@ -2319,7 +2318,7 @@ function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, u
       </div>
     </div>
     <div className={`settings-content ${section}`}>
-    {section === 'appearance' ? <><fieldset className="ui-theme-settings"><legend>{t('common.theme')}</legend><div className="theme-options" role="radiogroup" aria-label={t('common.theme')}>{themeOptions.map((option) => { const Icon = option.icon; return <button key={option.value} type="button" role="radio" aria-checked={theme === option.value} className={theme === option.value ? 'active' : ''} onClick={() => selectTheme(option.value)}><Icon size={17} /><span>{option.label}</span></button> })}</div></fieldset><fieldset className="ui-theme-settings"><legend>{t('common.language')}</legend><div className="theme-options" role="radiogroup" aria-label={t('common.language')}>{availableLanguages.map((option) => <button key={option.code} type="button" role="radio" aria-checked={language === option.code} className={language === option.code ? 'active' : ''} onClick={() => { setDialogLanguage(option.code); onLanguagePreview(option.code) }}><Languages size={17} /><span>{option.label}</span></button>)}</div></fieldset><fieldset className="app-icon-settings"><legend>{t('app.appIcon')}</legend><div className="app-icon-options">{appIcons.options.map((icon) => <label key={icon.id} className={appIcon === icon.id ? 'selected' : ''}><input type="radio" name="app-icon" checked={appIcon === icon.id} onChange={() => setAppIcon(icon.id)} /><img src={icon.dataUrl} alt="" /><span>{t(appIconMessageKeys[icon.id])}</span></label>)}</div></fieldset><section className="diagnostic-section"><strong>{t('app.diagnostics')}</strong><div className="diagnostic-export"><button type="button" className="secondary-button" onClick={async () => { try { const path = await window.api.diagnostics.export(); if (path) setDiagnosticPath(path) } catch (error) { onError(errorMessage(error)) } }}><FileInput size={15} />{t('app.exportDiagnostics')}</button>{diagnosticPath && <small title={diagnosticPath}>{diagnosticPath}</small>}</div></section></> : section === 'diagnostics' ? <DiagnosticsPanel onError={onError} /> : section === 'ssh' ? <div className="remote-agent-settings">
+    {section === 'appearance' ? <><fieldset className="ui-theme-settings"><legend>{t('common.theme')}</legend><div className="theme-options" role="radiogroup" aria-label={t('common.theme')}>{themeOptions.map((option) => { const Icon = option.icon; return <button key={option.value} type="button" role="radio" aria-checked={theme === option.value} className={theme === option.value ? 'active' : ''} onClick={() => selectTheme(option.value)}><Icon size={17} /><span>{option.label}</span></button> })}</div></fieldset><fieldset className="ui-theme-settings"><legend>{t('common.language')}</legend><div className="theme-options" role="radiogroup" aria-label={t('common.language')}>{availableLanguages.map((option) => <button key={option.code} type="button" role="radio" aria-checked={language === option.code} className={language === option.code ? 'active' : ''} onClick={() => { setDialogLanguage(option.code); onLanguagePreview(option.code) }}><Languages size={17} /><span>{option.label}</span></button>)}</div></fieldset><fieldset className="app-icon-settings"><legend>{t('app.appIcon')}</legend><div className="app-icon-options">{appIcons.options.map((icon) => <label key={icon.id} className={appIcon === icon.id ? 'selected' : ''}><input type="radio" name="app-icon" checked={appIcon === icon.id} onChange={() => setAppIcon(icon.id)} /><img src={icon.dataUrl} alt="" /><span>{t(appIconMessageKeys[icon.id])}</span></label>)}</div></fieldset></> : section === 'diagnostics' ? <DiagnosticsPanel onError={onError} /> : section === 'ssh' ? <div className="remote-agent-settings">
       <div className="settings-option-row"><div><strong>{t('app.remoteAgentIntegration')}</strong><span>{t('app.remoteAgentIntegrationDescription')}</span></div><label className="switch-control"><input type="checkbox" checked={remoteAgentIntegration} onChange={(event) => void changeRemoteAgentIntegration(event.target.checked)} /><span aria-hidden="true" /></label></div>
       <div className="settings-information"><ShieldAlert size={17} /><div><strong>{remoteAgentIntegration ? t('app.remoteAgentIntegrationOn') : t('app.remoteAgentIntegrationOff')}</strong><span>{remoteAgentIntegration ? t('app.remoteAgentIntegrationOnDescription') : t('app.remoteAgentIntegrationOffDescription')}</span></div></div>
     </div> : section === 'ai' ? <div className="ai-settings">
@@ -2383,7 +2382,21 @@ function formatActivity(value?: string | null): string {
 }
 
 function readableDiagnosticDetail(name: string, detail: string): string {
-  if (name === 'local_agents') return detail.replace(/;\s*/g, '\n')
+  if (name === 'executable') return `当前应用：${detail}`
+  if (name === 'local_agents') {
+    const entries = detail.split(';').map((entry) => entry.trim()).filter(Boolean)
+    const readable = entries.map((entry) => {
+      const match = entry.match(/^([^\[]+)\[([^\]]+)\]=(.*)$/)
+      if (!match) return entry
+      const agentName = match[1] ?? ''
+      const targetName = match[2] ?? ''
+      const result = match[3] ?? ''
+      const agent = agentName === 'codex' ? 'Codex' : agentName === 'claude' ? 'Claude Code' : agentName
+      const target = targetName.replace(/^local:/, '').replace(/^powershell5?$/, 'Windows PowerShell')
+      return `已找到 ${agent}（${target}）：${result}`
+    })
+    return readable.join('\n') || detail
+  }
   if (name === 'wsl_distributions') return detail.replace(/,\s*/g, '\n')
   if (name === 'wsl_interop_exe') return detail.replace(/;\s*/g, '\n')
   return detail
@@ -2396,10 +2409,12 @@ function DiagnosticsPanel({ onError }: { onError(message: string): void }): Reac
   const [copied, setCopied] = useState(false)
   const [diagnosticPath, setDiagnosticPath] = useState('')
   const [expandedAgents, setExpandedAgents] = useState<Record<string, boolean>>({})
+  const [expandedRuntimes, setExpandedRuntimes] = useState<Record<string, boolean>>({})
   const runDiagnostics = async (): Promise<void> => {
     setRunning(true)
     setCopied(false)
     setExpandedAgents({})
+    setExpandedRuntimes({})
     try {
       const next = await window.api.diagnostics.run()
       setReport(next)
@@ -2427,6 +2442,12 @@ function DiagnosticsPanel({ onError }: { onError(message: string): void }): Reac
       if (path) setDiagnosticPath(path)
     } catch (error) { onError(errorMessage(error)) }
   }
+  const repairRuntime = async (runtimeId: string): Promise<void> => {
+    try {
+      await window.api.diagnostics.repair(runtimeId, 'remoteHelper')
+      await runDiagnostics()
+    } catch (error) { onError(errorMessage(error)) }
+  }
   const statusIcon = (status: DoctorCheckStatus): React.JSX.Element => status === 'ok' ? <Check size={15} /> : status === 'warn' ? <ShieldAlert size={15} /> : <X size={15} />
   const statusLabel = (status: DoctorCheckStatus): string => status === 'ok' ? t('app.diagnosticsStatusOk') : status === 'warn' ? t('app.diagnosticsStatusWarn') : t('app.diagnosticsStatusError')
   const checkLabel = (name: string): string => {
@@ -2438,7 +2459,17 @@ function DiagnosticsPanel({ onError }: { onError(message: string): void }): Reac
     if (name === 'wsl_interop_exe') return t('app.diagnosticsCheckWslInterop')
     return name
   }
+  const checkDescription = (name: string): string => {
+    if (name === 'executable') return t('app.diagnosticsDescriptionExecutable')
+    if (name === 'local_agents') return t('app.diagnosticsDescriptionLocalAgents')
+    if (name === 'runtime_env_files') return t('app.diagnosticsDescriptionRuntimeEnv')
+    if (name === 'managed_agents') return t('app.diagnosticsDescriptionManagedAgents')
+    if (name === 'wsl_distributions') return t('app.diagnosticsDescriptionWsl')
+    if (name === 'wsl_interop_exe') return t('app.diagnosticsDescriptionWslInterop')
+    return ''
+  }
   const toggleAgent = (agentId: string): void => setExpandedAgents((current) => ({ ...current, [agentId]: !current[agentId] }))
+  const toggleRuntime = (runtimeId: string): void => setExpandedRuntimes((current) => ({ ...current, [runtimeId]: !current[runtimeId] }))
   const agentStatusLabel = (status: string): string => {
     const value = status.toLowerCase()
     if (value === 'working') return t('app.agentWorking')
@@ -2464,6 +2495,57 @@ function DiagnosticsPanel({ onError }: { onError(message: string): void }): Reac
     if (!value || value === 'missing') return t('app.diagnosticsMissing')
     return value
   }
+  const runtimeCheckLabel = (name: string): string => {
+    if (name === 'runtime') return t('app.diagnosticsRuntimeStatus')
+    if (name === 'luna_mcp') return t('app.diagnosticsRuntimeLunaMcp')
+    if (name === 'hook') return t('app.diagnosticsRuntimeHook')
+    if (name === 'agent_browser') return t('app.diagnosticsRuntimeBrowser')
+    if (name === 'remote_helper') return t('app.diagnosticsRuntimeRemoteHelper')
+    if (name === 'remote_helper_log') return t('app.diagnosticsRuntimeRemoteHelperLog')
+    if (name === 'browser_bridge') return t('app.diagnosticsRuntimeBrowserBridge')
+    return name
+  }
+  const runtimeTypeLabel = (targetId: string): string => {
+    if (targetId === 'local:powershell') return 'PowerShell 7'
+    if (targetId === 'local:powershell5') return 'PowerShell 5.1'
+    if (targetId === 'local:macos-shell') return 'macOS Shell'
+    if (targetId.startsWith('local:wsl:')) {
+      const distribution = targetId.slice('local:wsl:'.length)
+      return distribution ? `WSL · ${distribution}` : 'WSL'
+    }
+    if (targetId.startsWith('ssh-bookmark:')) return 'SSH'
+    return ''
+  }
+  const runtimeReportStatus = (checks: DoctorRuntimeCheck[]): DoctorCheckStatus => checks.some((check) => check.status === 'error') ? 'error' : checks.some((check) => check.status === 'warn') ? 'warn' : 'ok'
+  const runtimeCheckDetail = (check: DoctorRuntimeCheck): string => {
+    const code = check.code
+    if (code === 'runtime_not_running') return t('app.diagnosticsReasonRuntimeNotRunning', { value0: check.detail.replace(/^runtime status is\s*/i, '') })
+    if (code === 'luna_mcp_endpoint_missing') return t('app.diagnosticsReasonMcpEndpointMissing')
+    if (code === 'hook_endpoint_missing') return t('app.diagnosticsReasonHookEndpointMissing')
+    if (code === 'luna_mcp_authorization_missing' || code === 'hook_authorization_missing') return t('app.diagnosticsReasonAuthorizationMissing')
+    if (code === 'endpoint_tcp_unreachable') return t('app.diagnosticsReasonEndpointUnreachable')
+    if (code === 'endpoint_unauthorized') return t('app.diagnosticsReasonEndpointUnauthorized')
+    if (code === 'endpoint_not_found') return t('app.diagnosticsReasonEndpointNotFound')
+    if (code === 'endpoint_method_rejected') return t('app.diagnosticsReasonEndpointMethodRejected')
+    if (code === 'mcp_initialize_failed') return t('app.diagnosticsReasonMcpInitializeFailed')
+    if (code === 'browser_runtime_error') return t('app.diagnosticsReasonBrowserError')
+    if (code === 'browser_runtime_not_running') return t('app.diagnosticsReasonBrowserNotRunning')
+    if (code === 'remote_helper_missing') return t('app.diagnosticsReasonRemoteHelperMissing')
+    if (code === 'browser_reverse_forward_not_connected') return t('app.diagnosticsReasonBrowserForward')
+    if (code === 'browser_sidecar_start_failed') return t('app.diagnosticsReasonBrowserSidecar')
+    if (code === 'remote_helper_transport_failed') return t('app.diagnosticsReasonRemoteTransport')
+    if (code === 'browser_authentication_failed') return t('app.diagnosticsReasonBrowserAuth')
+    if (code === 'remote_helper_no_recent_success') return t('app.diagnosticsReasonNoRecentTransport')
+    if (check.status === 'ok' && check.name === 'runtime') return t('app.diagnosticsReasonRuntimeOk')
+    if (check.status === 'ok' && check.name === 'luna_mcp') return t('app.diagnosticsReasonMcpOk')
+    if (check.status === 'ok' && check.name === 'hook') return t('app.diagnosticsReasonHookOk')
+    if (check.status === 'ok' && check.name === 'agent_browser') return t('app.diagnosticsReasonBrowserOk')
+    if (check.status === 'ok' && check.name === 'remote_helper') return t('app.diagnosticsReasonRemoteHelperOk')
+    if (check.status === 'ok' && check.name === 'remote_helper_log') return t('app.diagnosticsReasonRemoteTransportOk')
+    if (check.status === 'ok' && check.name === 'browser_bridge') return t('app.diagnosticsReasonBrowserBridgeOk')
+    if (code === 'endpoint_http_error' || code === 'endpoint_no_http_response' || code === 'endpoint_read_failed' || code === 'endpoint_write_failed') return t('app.diagnosticsReasonEndpointCommunication')
+    return check.detail
+  }
   const renderCheckDetail = (check: DoctorCheck): React.JSX.Element => {
     if (check.name === 'managed_agents') {
       const agents = report?.managedAgents ?? []
@@ -2471,7 +2553,7 @@ function DiagnosticsPanel({ onError }: { onError(message: string): void }): Reac
       return <div className="diagnostics-agent-list">
         {agents.map((agent) => {
           const expanded = Boolean(expandedAgents[agent.agentId])
-          const paneLabel = agent.paneTitle || agent.sessionName || agent.paneId || '-'
+          const paneLabel = agent.paneTitle || agent.sessionName || '-'
           return <div className="diagnostics-agent" key={agent.agentId}>
             <button type="button" className="diagnostics-agent-summary" aria-expanded={expanded} onClick={() => toggleAgent(agent.agentId)}>
               <span className="diagnostics-agent-primary">
@@ -2483,11 +2565,9 @@ function DiagnosticsPanel({ onError }: { onError(message: string): void }): Reac
             </button>
             {expanded && <dl className="diagnostics-agent-details">
               <div><dt>{t('app.diagnosticsAgentType')}</dt><dd>{agentTypeLabel(agent.adapter)}</dd></div>
-              <div><dt>{t('app.diagnosticsAgentPane')}</dt><dd title={agent.paneId}>{agent.paneTitle || agent.paneId || '-'}</dd></div>
-              <div><dt>{t('app.diagnosticsAgentSession')}</dt><dd title={agent.muxSessionId}>{agent.sessionName || agent.muxSessionId || '-'}</dd></div>
+              <div><dt>{t('app.diagnosticsAgentPane')}</dt><dd>{agent.paneTitle || '-'}</dd></div>
+              <div><dt>{t('app.diagnosticsAgentSession')}</dt><dd>{agent.sessionName || '-'}</dd></div>
               <div><dt>{t('app.diagnosticsAgentLastActivity')}</dt><dd title={agent.lastActivity ?? ''}>{formatActivity(agent.lastActivity)}</dd></div>
-              <div><dt>{t('app.diagnosticsAgentId')}</dt><dd title={agent.agentId}>{agent.agentId}</dd></div>
-              <div><dt>{t('app.diagnosticsAgentRuntimeId')}</dt><dd title={agent.runtimeId}>{agent.runtimeId}</dd></div>
             </dl>}
           </div>
         })}
@@ -2509,7 +2589,7 @@ function DiagnosticsPanel({ onError }: { onError(message: string): void }): Reac
         {runtimes.map((runtime) => {
           const tokenMissing = runtime.tokens === 'missing'
           return <div className="diagnostics-runtime" key={runtime.runtimeId}>
-            <div className="diagnostics-runtime-heading"><strong>{t('app.diagnosticsRuntimeInstance')}</strong><code title={runtime.runtimeId}>{runtime.runtimeId}</code></div>
+            <div className="diagnostics-runtime-heading"><strong>{t('app.diagnosticsRuntimeInstance')}</strong></div>
             <dl className="diagnostics-runtime-details">
               <div><dt>{t('app.diagnosticsHookEndpoint')}</dt><dd className={runtimeStatus(runtime.hook)}>{runtimeStatusLabel(runtime.hook)}</dd></div>
               <div><dt>{t('app.diagnosticsMcpEndpoint')}</dt><dd className={runtimeStatus(runtime.mcp)}>{runtimeStatusLabel(runtime.mcp)}</dd></div>
@@ -2526,7 +2606,52 @@ function DiagnosticsPanel({ onError }: { onError(message: string): void }): Reac
     }
     return <code className="diagnostics-check-detail">{readableDiagnosticDetail(check.name, check.detail) || t('app.diagnosticsNoDetail')}</code>
   }
-  const overallStatus: DoctorCheckStatus = report ? report.ok ? report.checks.some((check) => check.status === 'warn') ? 'warn' : 'ok' : 'error' : 'ok'
+  const renderRuntimeReports = (): React.JSX.Element | null => {
+    if (!report?.runtimes?.length) return null
+    return <section className="diagnostics-runtime-reports">
+      <div className="diagnostics-runtime-reports-header">
+        <div className="diagnostics-runtime-reports-heading">
+          <strong>{t('app.diagnosticsTerminalSection')}</strong>
+          <span>{t('app.diagnosticsTerminalSectionDescription')}</span>
+        </div>
+        <span className="diagnostics-runtime-count">{t('app.diagnosticsTerminalCount', { value0: report.runtimes.length })}</span>
+      </div>
+      <div className="diagnostics-runtime-report-list">
+        {report.runtimes.map((runtime) => {
+          const expanded = expandedRuntimes[runtime.runtimeId] ?? report.runtimes!.length === 1
+          const status = runtimeReportStatus(runtime.checks)
+          const name = runtime.paneTitle || runtime.title || t('app.diagnosticsRuntimeInstance')
+          const type = runtimeTypeLabel(runtime.targetId)
+          return <article key={runtime.runtimeId} className={'diagnostics-runtime-report ' + status}>
+            <button type="button" className="diagnostics-runtime-report-summary" aria-expanded={expanded} onClick={() => toggleRuntime(runtime.runtimeId)}>
+              <span className="diagnostics-runtime-report-name">
+                <strong>{name}</strong>
+                {type && type !== name && <span>{t('app.diagnosticsTerminalType')}: {type}</span>}
+              </span>
+              <span className={'diagnostics-status ' + status}>{statusLabel(status)}</span>
+              {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            </button>
+            {expanded && <div className="diagnostics-runtime-report-body">
+              <div className="diagnostics-runtime-list">
+                {runtime.checks.map((check) => <div className={'diagnostics-runtime ' + check.status} key={check.name}>
+                  <div className="diagnostics-runtime-heading"><strong>{runtimeCheckLabel(check.name)}</strong><span className={'diagnostics-status ' + check.status}>{statusLabel(check.status)}</span></div>
+                  <span className="diagnostics-check-detail">{runtimeCheckDetail(check)}</span>
+                  {check.repairable && check.name === 'remote_helper' && <button type="button" className="secondary-button" onClick={() => void repairRuntime(runtime.runtimeId)}>{t('app.diagnosticsRepairRemoteHelper')}</button>}
+                </div>)}
+              </div>
+            </div>}
+          </article>
+        })}
+      </div>
+    </section>
+  }
+  const overallStatus: DoctorCheckStatus = report
+    ? report.ok
+      ? report.checks.some((check) => check.status === 'warn') || report.runtimes?.some((runtime) => runtime.checks.some((check) => check.status === 'warn'))
+        ? 'warn'
+        : 'ok'
+      : 'error'
+    : 'ok'
   const overallLabel = report ? overallStatus === 'ok' ? t('app.diagnosticsAllGood') : overallStatus === 'warn' ? t('app.diagnosticsNeedsAttention') : t('app.diagnosticsHasErrors') : t('app.diagnosticsReady')
   return <div className="diagnostics-panel">
     <section className={report ? 'diagnostics-summary ' + overallStatus : 'diagnostics-summary idle'}>
@@ -2549,11 +2674,12 @@ function DiagnosticsPanel({ onError }: { onError(message: string): void }): Reac
         <div className="diagnostics-check-icon">{statusIcon(check.status)}</div>
         <div className="diagnostics-check-main">
           <div className="diagnostics-check-heading"><strong>{checkLabel(check.name)}</strong><span className={'diagnostics-status ' + check.status}>{statusLabel(check.status)}</span></div>
-          {check.name === 'runtime_env_files' && <span className="diagnostics-check-description">{t('app.diagnosticsRuntimeEnvDescription')}</span>}
+          {checkDescription(check.name) && <span className="diagnostics-check-description">{checkDescription(check.name)}</span>}
           {renderCheckDetail(check)}
         </div>
       </article>)}
     </section>}
+    {renderRuntimeReports()}
   </div>
 }
 
