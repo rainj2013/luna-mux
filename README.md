@@ -29,7 +29,7 @@ Luna Mux 是一个面向 Coding Agent 的终端工作台。它以项目目录为
 
 ## 终端里的 Agent
 
-在任意终端窗格里启动 `codex` 或 `claude`，Luna Mux 会自动发现这个 Agent，并注入 Hook 和 MCP 来扩展它的能力。
+在任意终端窗格里启动受支持的 Agent（目前包括 Codex 和 Claude Code），Luna Mux 会自动发现这个 Agent，并注入 Hook 和 MCP 来扩展它的能力。
 
 ### 状态监控（Hook）
 
@@ -68,7 +68,9 @@ Agent 可以自主操作浏览器完成网页任务：打开页面、点击、�
 
 ## AI 命令助手
 
-AI 命令助手与 Codex/Claude Agent 相互独立，使用用户配置的 OpenAI 兼容服务，为当前本地或 SSH 终端生成 Linux Shell、PowerShell、CMD 或 macOS 命令。
+AI 命令助手与 Codex、Claude Code 等 Agent 相互独立，使用用户配置的 OpenAI 兼容服务，为当前本地或 SSH 终端生成 Linux Shell、PowerShell、CMD 或 macOS 命令。
+
+设计这一功能是为了让不使用 Agent 的场景也能获得 AI 辅助：无论是在本地终端还是 SSH 远程终端中，都可以让 AI 协助编写命令。
 
 - 结果包含说明、前提、警告和风险等级，可复制、只填入终端，或经风险确认后执行。
 - 附带终端上下文时，可选的常见个人信息脱敏在请求前执行。

@@ -29,7 +29,7 @@ A Session corresponds to one project directory and persists its project root and
 
 ## Agents in the Terminal
 
-Launch `codex` or `claude` in any pane and Luna Mux detects the agent and injects a Hook and MCP servers to extend it.
+Launch a supported agent (currently including Codex and Claude Code) in any pane and Luna Mux detects it, then injects a Hook and MCP servers to extend its capabilities.
 
 ### Status Monitoring (Hook)
 
@@ -68,7 +68,9 @@ The complete SSH and SFTP capabilities are ported from Luna Remote.
 
 ## AI Command Assistant
 
-The AI command assistant is independent of Codex and Claude agents. It uses a user-configured OpenAI-compatible service to generate Linux Shell, PowerShell, CMD, or macOS commands for the focused local or SSH terminal.
+The AI command assistant is independent of Codex, Claude Code, and other agents. It uses a user-configured OpenAI-compatible service to generate Linux Shell, PowerShell, CMD, or macOS commands for the focused local or SSH terminal.
+
+This feature is designed to keep AI assistance available even when no coding agent is running: users can ask for help writing commands directly from either local or SSH terminals.
 
 - Suggestions include explanations, assumptions, warnings, and a risk level, and can be copied, inserted without Enter, or executed after risk confirmation.
 - Optional terminal context is processed by common personal-data redaction before the request is sent.
