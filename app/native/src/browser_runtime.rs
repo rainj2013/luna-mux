@@ -24,6 +24,29 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 #[cfg(not(windows))]
 const AGENT_BROWSER_SOCKET_DIR: &str = "/tmp/luna-mux-ab";
 
+/// Keep remote Browser MCP failures inspectable even when Luna Mux is started
+/// from a GUI and stderr is not attached to a visible console.  Do not include
+/// bridge tokens or request payloads in this log.
+pub(crate) fn record_remote_bridge_diagnostic(message: &str) {
+    let root = std::env::temp_dir().join("luna-mux");
+    if std::fs::create_dir_all(&root).is_err() {
+        return;
+    }
+    let path = root.join("remote-browser-bridge.log");
+    let Ok(metadata) = std::fs::metadata(&path) else {
+        let _ = std::fs::write(&path, format!("{message}\n"));
+        return;
+    };
+    if metadata.len() > 1024 * 1024 {
+        let _ = std::fs::write(&path, format!("{message}\n"));
+        return;
+    }
+    use std::io::Write;
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(file, "{message}");
+    }
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct BrowserWarmupGate {
     sessions: Arc<Mutex<HashMap<String, Arc<tokio::sync::Mutex<Option<String>>>>>>,
@@ -216,6 +239,7 @@ impl BrowserRuntimeManager {
         let event_sink: BrowserRuntimeEventSink = Arc::new(move |event| {
             let _ = app_handle.emit("browser-runtime:event", event);
         });
+        cleanup_stale_agent_browser_configs();
         let profiles_root = data_dir.join("browser-profiles");
         let registry_path = data_dir.join("browser-runtimes.json");
         #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -1002,6 +1026,9 @@ pub(crate) async fn bridge_remote_agent_browser_mcp<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
+    record_remote_bridge_diagnostic(&format!(
+        "bridge connection accepted: session={mux_session_id}, cdp_port={cdp_port}"
+    ));
     let mut preamble = Vec::with_capacity(128);
     loop {
         if preamble.len() >= 512 {
@@ -1011,19 +1038,46 @@ where
             .await
             .map_err(|_| "远程 Browser MCP 认证超时".to_string())?
             .map_err(|error| error.to_string())?;
-        if byte == b'\n' {
-            break;
+        match byte {
+            b'\n' => break,
+            // Older remote-agent helpers accidentally emitted the two-byte
+            // escape sequence `\\n` instead of a newline. Accept that exact
+            // legacy delimiter so an already-running SSH Runtime can recover
+            // without requiring a reconnect; the authenticated token is
+            // still compared byte-for-byte below.
+            b'\\' => {
+                let next = tokio::time::timeout(Duration::from_secs(5), stream.read_u8())
+                    .await
+                    .map_err(|_| "远程 Browser MCP 认证超时".to_string())?
+                    .map_err(|error| error.to_string())?;
+                if next == b'n' {
+                    break;
+                }
+                preamble.push(byte);
+                preamble.push(next);
+            }
+            _ => preamble.push(byte),
         }
-        preamble.push(byte);
     }
     let expected = format!("{REMOTE_MCP_BRIDGE_PREAMBLE}{expected_token}");
     if preamble != expected.as_bytes() {
+        record_remote_bridge_diagnostic(&format!(
+            "bridge authentication failed: session={mux_session_id}, received_prefix_len={}",
+            preamble.len()
+        ));
         return Err("远程 Browser MCP 认证失败".into());
     }
+    record_remote_bridge_diagnostic(&format!(
+        "bridge authentication succeeded: session={mux_session_id}, cdp_port={cdp_port}"
+    ));
 
     let binary = resolve_agent_browser_binary()?;
     let scope = agent_browser_scope(mux_session_id);
     let config_path = create_agent_browser_mcp_config(&scope, cdp_port)?;
+    record_remote_bridge_diagnostic(&format!(
+        "starting agent-browser MCP: session={mux_session_id}, cdp_port={cdp_port}, binary={}",
+        binary.display()
+    ));
     let mut command = Command::new(binary);
     configure_agent_browser_command(&mut command);
     command
@@ -1034,11 +1088,18 @@ where
         .env("AGENT_BROWSER_NAMESPACE", &scope)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        // Keep stderr observable.  A remote MCP client only reports that the
+        // stdio connection closed when this child fails during startup;
+        // discarding stderr turns the actual startup error into an opaque
+        // handshake failure.
+        .stderr(Stdio::piped());
     let mut child = match tokio::process::Command::from(command).spawn() {
         Ok(child) => child,
         Err(error) => {
             let _ = std::fs::remove_file(config_path);
+            record_remote_bridge_diagnostic(&format!(
+                "agent-browser spawn failed: session={mux_session_id}, error={error}"
+            ));
             return Err(format!("无法启动远程 agent-browser MCP：{error}"));
         }
     };
@@ -1050,6 +1111,15 @@ where
         .stdout
         .take()
         .ok_or_else(|| "无法打开远程 agent-browser MCP 输出".to_string())?;
+    let mut child_stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "无法打开远程 agent-browser MCP 错误输出".to_string())?;
+    let stderr_task = tokio::spawn(async move {
+        let mut stderr = Vec::new();
+        let result = child_stderr.read_to_end(&mut stderr).await;
+        (result, stderr)
+    });
     let (mut remote_read, mut remote_write) = tokio::io::split(stream);
     let upstream = async {
         let result = tokio::io::copy(&mut remote_read, &mut child_stdin).await;
@@ -1063,20 +1133,96 @@ where
     };
     tokio::pin!(upstream);
     tokio::pin!(downstream);
-    let result = tokio::select! {
-        result = &mut upstream => result.map(|_| ()),
-        result = &mut downstream => result.map(|_| ()),
+    // A client may half-close its input after sending initialize.  That EOF
+    // must only be forwarded to agent-browser's stdin; killing the child at
+    // that point drops a valid initialize response.  Keep draining stdout
+    // until the child exits.  If stdout closes first, the child really did
+    // terminate before completing MCP startup and can be stopped immediately.
+    let (direction, result, stop_child) = tokio::select! {
+        result = &mut upstream => {
+            match result {
+                Ok(_) => ("remote input EOF", downstream.await, true),
+                Err(error) => ("remote input", Err(error), true),
+            }
+        },
+        result = &mut downstream => ("agent-browser output", result, true),
     };
-    let _ = child.kill().await;
-    let _ = child.wait().await;
+    if stop_child {
+        let _ = child.kill().await;
+    }
+    let status = child.wait().await.ok();
+    let stderr = match stderr_task.await {
+        Ok((Ok(_), bytes)) => String::from_utf8_lossy(&bytes).trim().to_string(),
+        Ok((Err(error), _)) => format!("读取 agent-browser stderr 失败：{error}"),
+        Err(error) => format!("收集 agent-browser stderr 失败：{error}"),
+    };
     let _ = std::fs::remove_file(config_path);
-    result.map_err(|error| format!("远程 Browser MCP 桥接失败：{error}"))
+    if let Err(error) = result {
+        record_remote_bridge_diagnostic(&format!(
+            "bridge copy failed: session={mux_session_id}, direction={direction}, exit={:?}, stderr={stderr}",
+            status.as_ref().and_then(std::process::ExitStatus::code)
+        ));
+        return Err(format!(
+            "远程 Browser MCP 桥接失败（{direction}）：{error}{}",
+            if stderr.is_empty() {
+                String::new()
+            } else {
+                format!("；agent-browser stderr: {stderr}")
+            }
+        ));
+    }
+
+    // The normal lifetime of an MCP server is longer than the first request.
+    // If its stdout closes first, report its exit status/stderr instead of
+    // silently turning that failure into the client's generic EOF error.
+    if direction == "agent-browser output" {
+        let exit = status
+            .as_ref()
+            .and_then(std::process::ExitStatus::code)
+            .map_or_else(|| "unknown".to_string(), |code| code.to_string());
+        record_remote_bridge_diagnostic(&format!(
+            "agent-browser stdout closed: session={mux_session_id}, exit={exit}, stderr={stderr}"
+        ));
+        return Err(format!(
+            "agent-browser 在 MCP 初始化期间关闭了 stdout（退出码 {exit}）{}",
+            if stderr.is_empty() {
+                String::new()
+            } else {
+                format!("；stderr: {stderr}")
+            }
+        ));
+    }
+    if direction == "remote input EOF" {
+        if let Some(status) = status.as_ref().filter(|status| !status.success()) {
+            let exit = status
+                .code()
+                .map_or_else(|| "unknown".to_string(), |code| code.to_string());
+            record_remote_bridge_diagnostic(&format!(
+                "agent-browser exited after remote input EOF: session={mux_session_id}, exit={exit}, stderr={stderr}"
+            ));
+            return Err(format!(
+                "agent-browser 在远端输入结束后退出（退出码 {exit}）{}",
+                if stderr.is_empty() {
+                    String::new()
+                } else {
+                    format!("；stderr: {stderr}")
+                }
+            ));
+        }
+        return Ok(());
+    }
+    record_remote_bridge_diagnostic(&format!(
+        "remote input closed before agent-browser output: session={mux_session_id}, exit={:?}, stderr={stderr}",
+        status.as_ref().and_then(std::process::ExitStatus::code)
+    ));
+    Ok(())
 }
 
 #[cfg(test)]
 mod remote_mcp_bridge_tests {
     use super::bridge_remote_agent_browser_mcp;
-    use tokio::io::AsyncWriteExt;
+    use serde_json::Value;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
     #[tokio::test]
     async fn remote_bridge_rejects_the_wrong_token_before_starting_a_sidecar() {
@@ -1092,6 +1238,81 @@ mod remote_mcp_bridge_tests {
             .unwrap_err();
         request.await.unwrap();
         assert_eq!(error, "远程 Browser MCP 认证失败");
+    }
+
+    #[tokio::test]
+    async fn remote_bridge_accepts_legacy_literal_newline_delimiter() {
+        let (mut client, server) = tokio::io::duplex(1024);
+        let bridge = tokio::spawn(async move {
+            bridge_remote_agent_browser_mcp(server, "expected-token", "session-1", 43129).await
+        });
+        client
+            .write_all(
+                b"LUNA_MUX_BROWSER_MCP_V1 expected-token\\n{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{},\"clientInfo\":{\"name\":\"test\",\"version\":\"1\"}}}\n",
+            )
+            .await
+            .unwrap();
+        let mut response = String::new();
+        BufReader::new(&mut client)
+            .read_line(&mut response)
+            .await
+            .expect("read initialize response");
+        let response: Value = serde_json::from_str(response.trim()).expect("valid MCP JSON");
+        assert_eq!(response["result"]["serverInfo"]["name"], "agent-browser");
+        drop(client);
+        bridge.abort();
+    }
+
+    #[tokio::test]
+    async fn remote_bridge_forwards_a_real_initialize_response() {
+        // This exercises the complete local half of the SSH path with the
+        // bundled sidecar, without requiring a remote host or a live Chrome
+        // page: agent-browser can answer MCP initialize before any browser
+        // target is touched.
+        let (mut client, server) = tokio::io::duplex(64 * 1024);
+        let bridge = tokio::spawn(async move {
+            bridge_remote_agent_browser_mcp(server, "expected-token", "session-1", 43129).await
+        });
+        client
+            .write_all(
+                b"LUNA_MUX_BROWSER_MCP_V1 expected-token\n{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{},\"clientInfo\":{\"name\":\"test\",\"version\":\"1\"}}}\n",
+            )
+            .await
+            .unwrap();
+        client.flush().await.unwrap();
+        let mut response = String::new();
+        BufReader::new(&mut client)
+            .read_line(&mut response)
+            .await
+            .expect("read initialize response");
+        let response: Value = serde_json::from_str(response.trim()).expect("valid MCP JSON");
+        assert_eq!(response["result"]["serverInfo"]["name"], "agent-browser");
+        drop(client);
+        bridge.abort();
+    }
+
+    #[tokio::test]
+    async fn remote_bridge_does_not_drop_initialize_when_client_half_closes_input() {
+        let (mut client, server) = tokio::io::duplex(64 * 1024);
+        let bridge = tokio::spawn(async move {
+            bridge_remote_agent_browser_mcp(server, "expected-token", "session-1", 43129).await
+        });
+        client
+            .write_all(
+                b"LUNA_MUX_BROWSER_MCP_V1 expected-token\n{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{},\"clientInfo\":{\"name\":\"test\",\"version\":\"1\"}}}\n",
+            )
+            .await
+            .unwrap();
+        client.shutdown().await.unwrap();
+        let mut response = String::new();
+        BufReader::new(&mut client)
+            .read_line(&mut response)
+            .await
+            .expect("read initialize response");
+        let response: Value = serde_json::from_str(response.trim()).expect("valid MCP JSON");
+        assert_eq!(response["result"]["serverInfo"]["name"], "agent-browser");
+        drop(client);
+        bridge.abort();
     }
 }
 
@@ -1221,6 +1442,57 @@ fn create_agent_browser_mcp_config(scope: &str, cdp_port: u16) -> Result<PathBuf
     let contents = serde_json::to_vec_pretty(&config).map_err(|error| error.to_string())?;
     std::fs::write(&path, contents).map_err(|error| error.to_string())?;
     Ok(path)
+}
+
+/// Remove configuration files left behind by an interrupted agent-browser
+/// process.  The config is only needed while the MCP process starts; normal
+/// shutdown removes it, but a forced app/process termination can skip that
+/// cleanup.  Keep the matcher deliberately narrow so unrelated files in the
+/// shared temporary directory are never touched.
+fn cleanup_stale_agent_browser_configs() {
+    let root = std::env::temp_dir().join("luna-mux").join("agent-browser");
+    cleanup_agent_browser_config_dir(&root);
+}
+
+fn cleanup_agent_browser_config_dir(root: &Path) {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_file()
+            || !entry
+                .file_name()
+                .to_str()
+                .is_some_and(is_agent_browser_config_filename)
+        {
+            continue;
+        }
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+fn is_agent_browser_config_filename(name: &str) -> bool {
+    let Some(stem) = name.strip_suffix(".json") else {
+        return false;
+    };
+    // UUIDs contain hyphens themselves, so parse the fixed-width suffix
+    // instead of splitting on the last hyphen.
+    let Some(uuid_start) = stem.len().checked_sub(36) else {
+        return false;
+    };
+    let Some((scope, uuid)) = stem.get(..uuid_start).and_then(|prefix| {
+        prefix
+            .strip_suffix('-')
+            .and_then(|scope| stem.get(uuid_start..).map(|uuid| (scope, uuid)))
+    }) else {
+        return false;
+    };
+    (scope.starts_with("luna-mux-") || scope.starts_with("lm-"))
+        && Uuid::parse_str(uuid).is_ok()
 }
 
 pub(crate) async fn warm_agent_browser_session(
@@ -2155,7 +2427,8 @@ mod tests {
     use super::{
         BrowserRuntimeCreateRequest, BrowserRuntimeManager, BrowserRuntimeStatus,
         BrowserWarmupGate, close_agent_browser_session, close_process_tree,
-        configure_process_group, create_agent_browser_mcp_config, discover_chrome,
+        cleanup_agent_browser_config_dir, configure_process_group, create_agent_browser_mcp_config,
+        discover_chrome,
         mark_chrome_profile_clean, normalize_url, page_websocket_url, parse_shortcut,
         reserve_loopback_port, resolve_agent_browser_binary, select_page_websocket_url,
         wait_for_cdp, warm_agent_browser_session,
@@ -2349,6 +2622,29 @@ mod tests {
         }
         #[cfg(windows)]
         assert_eq!(first, "luna-mux-cc469b2c-f1b2-4397-8eb2-21847984b6c7");
+    }
+
+    #[test]
+    fn agent_browser_config_cleanup_only_removes_owned_json_files() {
+        let root = std::env::temp_dir().join(format!(
+            "luna-mux-agent-browser-cleanup-{}",
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        // The scope may contain hyphens; the final UUID is the ownership marker.
+        let owned = root.join(format!("luna-mux-session-{}.json", Uuid::new_v4()));
+        let other_json = root.join("notes.json");
+        let other_text = root.join("luna-mux-session.txt");
+        std::fs::write(&owned, b"{}").unwrap();
+        std::fs::write(&other_json, b"{}").unwrap();
+        std::fs::write(&other_text, b"{}").unwrap();
+
+        cleanup_agent_browser_config_dir(&root);
+
+        assert!(!owned.exists());
+        assert!(other_json.exists());
+        assert!(other_text.exists());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[cfg(target_os = "macos")]
