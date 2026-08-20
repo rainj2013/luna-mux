@@ -70,6 +70,8 @@ The complete SSH and SFTP capabilities are ported from Luna Remote.
 
 The AI command assistant is independent of Codex, Claude Code, and other agents. It uses a user-configured OpenAI-compatible service to generate Linux Shell, PowerShell, CMD, or macOS commands for the focused local or SSH terminal.
 
+This feature is designed to keep AI assistance available even when no coding agent is running: users can ask for help writing commands directly from either local or SSH terminals.
+
 - Suggestions include explanations, assumptions, warnings, and a risk level, and can be copied, inserted without Enter, or executed after risk confirmation.
 - Optional terminal context is processed by common personal-data redaction before the request is sent.
 - Leaving AI unconfigured does not affect any other feature.
