@@ -133,6 +133,14 @@ impl LunaMcpService {
         }
     }
 
+    pub(crate) fn diagnostic_token_for_runtime(&self, runtime_id: &str) -> Option<String> {
+        self.runtime_tokens
+            .read()
+            .ok()?
+            .get(runtime_id)
+            .and_then(|tokens| tokens.last().cloned())
+    }
+
     pub fn issue_runtime_token(
         &self,
         context: &TerminalManagedAgentContext,
@@ -630,7 +638,10 @@ fn operation_routing_guidance(operation: &str) -> &'static str {
             " Use only for the Luna Mux desktop application's own theme or terminal rendering preferences. Do not use for webpage CSS/theme, repository configuration, or operating-system appearance."
         }
         "diagnostics.run" => {
-            " Runs Luna Mux's built-in integration diagnostics: local codex/claude availability, persistent runtime hook/MCP environment files and endpoint reachability, and WSL distributions. Returns a machine-readable report suitable for self-analysis before changing settings or launching Agents."
+            " Runs evidence-based Luna Mux integration diagnostics. It probes authenticated Hook and Luna MCP HTTP/MCP initialize paths, reports per-Runtime/Pane failures with error codes and redacted log evidence, and checks SSH remote helper/browser bridge state."
+        }
+        "diagnostics.repair" => {
+            " Repairs only a named Runtime using a whitelisted action (currently remoteHelper, which re-installs the Luna Mux SSH helper). It never executes arbitrary shell commands or restarts an Agent; the Agent may need to be restarted afterward."
         }
         "connections.list" => {
             " Lists credential-free summaries of connections saved in Luna Mux. This is not browser network traffic, an HTTP connection list, or a general host/network scan."
@@ -670,6 +681,12 @@ fn operation_routing_guidance(operation: &str) -> &'static str {
 
 fn control_arguments_schema(operation: &str) -> Value {
     match operation {
+        "diagnostics.repair" => json!({
+            "type": "object",
+            "properties": { "action": { "type": "string", "enum": ["remoteHelper"] } },
+            "required": ["action"],
+            "additionalProperties": false
+        }),
         "settings.appearance.get"
         | "connections.list"
         | "agents.list"

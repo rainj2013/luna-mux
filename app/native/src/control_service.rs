@@ -1,6 +1,6 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, RwLock},
 };
 
 use async_trait::async_trait;
@@ -19,6 +19,7 @@ use crate::control_contract::{
     ControlResponse, ControlResult,
 };
 use crate::database::Database;
+use crate::luna_mcp::LunaMcpService;
 use crate::models::{
     ControlAuditRecord, MuxPaneInput, MuxPaneKind, MuxSessionInput, MuxSplitDirection,
     MuxSplitNode, PortForwardProfile, TerminalSettings, TransferDirection, TransferRequest,
@@ -135,6 +136,7 @@ pub struct InProcessControlService {
     events: Arc<ControlEventBuffer>,
     approvals: ControlApprovalPolicy,
     agent_hooks: Arc<AgentHookService>,
+    luna_mcp: RwLock<Option<Arc<LunaMcpService>>>,
     mux_mutations: tokio::sync::Mutex<()>,
     idempotent_results: Mutex<HashMap<(String, String, String), IdempotencyEntry>>,
 }
@@ -213,6 +215,26 @@ pub trait ControlSideEffects: Send + Sync {
     -> Result<(), String>;
     async fn browser_close(&self, runtime_id: &str) -> Result<(), String>;
     async fn browser_runtimes_list(&self) -> Result<Vec<BrowserRuntime>, String>;
+    async fn diagnostics_repair(
+        &self,
+        _runtime_id: &str,
+        _action: &str,
+    ) -> Result<serde_json::Value, String> {
+        Err("当前运行环境不支持诊断修复".into())
+    }
+    async fn diagnostics_remote_helper(
+        &self,
+        _runtime_id: &str,
+        _context_runtime_id: &str,
+    ) -> Result<(bool, Option<String>), String> {
+        Ok((false, None))
+    }
+    async fn diagnostics_browser_runtime(
+        &self,
+        _mux_session_id: &str,
+    ) -> Result<Option<String>, String> {
+        Ok(None)
+    }
 }
 
 pub struct InProcessControlSideEffects {
@@ -221,6 +243,7 @@ pub struct InProcessControlSideEffects {
     transfers: Arc<TransferManager>,
     tunnels: Arc<TunnelManager>,
     browser_runtimes: Arc<BrowserRuntimeManager>,
+    sessions: Arc<crate::sessions::SessionManager>,
 }
 
 impl InProcessControlSideEffects {
@@ -230,6 +253,7 @@ impl InProcessControlSideEffects {
         transfers: Arc<TransferManager>,
         tunnels: Arc<TunnelManager>,
         browser_runtimes: Arc<BrowserRuntimeManager>,
+        sessions: Arc<crate::sessions::SessionManager>,
     ) -> Arc<Self> {
         Arc::new(Self {
             window,
@@ -237,6 +261,7 @@ impl InProcessControlSideEffects {
             transfers,
             tunnels,
             browser_runtimes,
+            sessions,
         })
     }
 }
@@ -408,6 +433,45 @@ impl ControlSideEffects for InProcessControlSideEffects {
     async fn browser_runtimes_list(&self) -> Result<Vec<BrowserRuntime>, String> {
         self.browser_runtimes.list()
     }
+
+    async fn diagnostics_repair(
+        &self,
+        runtime_id: &str,
+        action: &str,
+    ) -> Result<serde_json::Value, String> {
+        if action != "remoteHelper" {
+            return Err("不支持的诊断修复操作".into());
+        }
+        let path = self
+            .sessions
+            .install_remote_agent_helper(runtime_id)
+            .await?;
+        Ok(
+            json!({ "action": action, "runtimeId": runtime_id, "path": path, "requiresAgentRestart": true }),
+        )
+    }
+
+    async fn diagnostics_remote_helper(
+        &self,
+        runtime_id: &str,
+        context_runtime_id: &str,
+    ) -> Result<(bool, Option<String>), String> {
+        self.sessions
+            .remote_agent_diagnostic(runtime_id, context_runtime_id)
+            .await
+    }
+
+    async fn diagnostics_browser_runtime(
+        &self,
+        mux_session_id: &str,
+    ) -> Result<Option<String>, String> {
+        Ok(self
+            .browser_runtimes
+            .list()?
+            .into_iter()
+            .find(|runtime| runtime.mux_session_id == mux_session_id)
+            .map(|runtime| format!("{:?} cdp={}", runtime.status, runtime.cdp_port)))
+    }
 }
 
 impl InProcessControlService {
@@ -424,9 +488,14 @@ impl InProcessControlService {
             events: Arc::new(ControlEventBuffer::default()),
             approvals: ControlApprovalPolicy::default(),
             agent_hooks,
+            luna_mcp: RwLock::new(None),
             mux_mutations: tokio::sync::Mutex::new(()),
             idempotent_results: Mutex::new(HashMap::new()),
         })
+    }
+
+    pub fn set_luna_mcp(&self, luna_mcp: Arc<LunaMcpService>) {
+        *self.luna_mcp.write().expect("luna mcp diagnostics lock") = Some(luna_mcp);
     }
 
     pub fn event_buffer(&self) -> Arc<ControlEventBuffer> {
@@ -560,6 +629,15 @@ impl InProcessControlService {
                 access: ControlAccess::Read,
                 resource_kind: ControlResourceKind::Settings,
                 mutating: false,
+                supports_idempotency: true,
+                approval: ControlApprovalRequirement::None,
+            },
+            ControlOperationDescriptor {
+                name: "diagnostics.repair".into(),
+                version: 1,
+                access: ControlAccess::Write,
+                resource_kind: ControlResourceKind::TerminalRuntime,
+                mutating: true,
                 supports_idempotency: true,
                 approval: ControlApprovalRequirement::None,
             },
@@ -1245,16 +1323,100 @@ impl LunaControlService for InProcessControlService {
                                 }
                             })
                             .collect::<Vec<_>>();
+                        let mut runtime_inputs = self
+                            .backend
+                            .list()
+                            .unwrap_or_default()
+                            .into_iter()
+                            .filter_map(|runtime| {
+                                let context = runtime.context.clone().or_else(|| {
+                                    runtime.managed_agent.as_ref().map(|agent| {
+                                        crate::terminal_runtime_contract::TerminalRuntimeContext {
+                                            mux_session_id: agent.mux_session_id.clone(),
+                                            pane_id: agent.pane_id.clone(),
+                                            runtime_id: agent.runtime_id.clone(),
+                                        }
+                                    })
+                                })?;
+                                Some(crate::doctor::DoctorRuntimeInput {
+                                    runtime_id: runtime.runtime_id.clone(),
+                                    target_id: runtime.target_id.clone(),
+                                    title: runtime.title.clone(),
+                                    status: format!("{:?}", runtime.status),
+                                    pane_id: Some(context.pane_id),
+                                    pane_title: None,
+                                    mux_session_id: Some(context.mux_session_id),
+                                    hook_endpoint: self.agent_hooks.endpoint().ok(),
+                                    hook_token: self
+                                        .agent_hooks
+                                        .diagnostic_token_for_runtime(&runtime.runtime_id),
+                                    mcp_endpoint: self.luna_mcp.read().ok().and_then(|service| {
+                                        service.as_ref().and_then(|service| service.endpoint().ok())
+                                    }),
+                                    mcp_token: self.luna_mcp.read().ok().and_then(|service| {
+                                        service.as_ref().and_then(|service| {
+                                            service
+                                                .diagnostic_token_for_runtime(&runtime.runtime_id)
+                                        })
+                                    }),
+                                    remote_helper_exists: None,
+                                    remote_helper_log: None,
+                                    remote_bridge_log: None,
+                                    integration_enabled: !runtime
+                                        .target_id
+                                        .starts_with("ssh-bookmark:")
+                                        || self
+                                            .database
+                                            .get_setting("remoteAgentIntegrationEnabled", false),
+                                    browser_runtime: None,
+                                })
+                            })
+                            .collect::<Vec<_>>();
+                        for input in &mut runtime_inputs {
+                            if input.target_id.starts_with("ssh-bookmark:") {
+                                let (exists, log) = self
+                                    .side_effects
+                                    .diagnostics_remote_helper(&input.runtime_id, &input.runtime_id)
+                                    .await
+                                    .unwrap_or((false, None));
+                                input.remote_helper_exists = Some(exists);
+                                input.remote_helper_log = log;
+                            }
+                            if let Some(session_id) = input.mux_session_id.as_deref() {
+                                if let Ok(Some(browser)) = self
+                                    .side_effects
+                                    .diagnostics_browser_runtime(session_id)
+                                    .await
+                                {
+                                    input.browser_runtime = Some(browser);
+                                }
+                            }
+                        }
                         let report = tauri::async_runtime::spawn_blocking(move || {
-                            crate::doctor::run_report_with_agents(
+                            crate::doctor::run_report_with_runtime_inputs(
                                 filter.as_deref(),
                                 &managed_agents,
+                                &runtime_inputs,
                             )
                         })
                         .await
                         .map_err(|error| internal_error(error.to_string()))?;
                         serde_json::to_value(report)
                             .map_err(|error| internal_error(error.to_string()))?
+                    }
+                    "diagnostics.repair" => {
+                        let arguments: DiagnosticsRepairArguments = parse_arguments(&request)?;
+                        let runtime_id = requested_id.ok_or_else(|| {
+                            invalid_arguments(
+                                "diagnostics.repair requires a terminal runtime resource",
+                            )
+                        })?;
+                        let result = self
+                            .side_effects
+                            .diagnostics_repair(runtime_id, &arguments.action)
+                            .await
+                            .map_err(internal_error)?;
+                        result
                     }
                     "connections.list" => {
                         require_empty_arguments(&request)?;
@@ -2439,6 +2601,12 @@ struct BrowserEvaluateArguments {
 struct DiagnosticsRunArguments {
     #[serde(default)]
     filter: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DiagnosticsRepairArguments {
+    action: String,
 }
 
 #[derive(Deserialize)]

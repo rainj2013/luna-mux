@@ -246,6 +246,25 @@ impl AgentHookService {
         }
     }
 
+    /// Returns a token for an active runtime only for an in-process diagnostic
+    /// probe. The token is never serialized or logged.
+    pub(crate) fn diagnostic_token_for_runtime(&self, runtime_id: &str) -> Option<String> {
+        self.agents
+            .read()
+            .ok()?
+            .iter()
+            .find(|(_, context)| context.runtime_id == runtime_id)
+            .map(|(token, _)| token.clone())
+            .or_else(|| {
+                self.bootstrap_tokens
+                    .read()
+                    .ok()?
+                    .iter()
+                    .find(|(_, context)| context.runtime_id == runtime_id)
+                    .map(|(token, _)| token.clone())
+            })
+    }
+
     pub fn events(&self) -> Vec<ManagedAgentEvent> {
         self.events
             .lock()
@@ -631,6 +650,11 @@ async fn receive_hook(
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": "invalidHookPayload" })),
         ));
+    }
+    // The doctor uses a dedicated authenticated probe. It verifies the exact
+    // token/context path without recording a fake agent lifecycle event.
+    if header_value(&headers, "x-luna-mux-diagnostic") == Some("1") {
+        return Ok(Json(json!({ "ok": true, "diagnostic": true })));
     }
     let mut hook_response = browser_routing_hook_response(&payload);
     let mux_session_id = match &authorization {
