@@ -2240,7 +2240,6 @@ function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, u
   const [apiKey, setApiKey] = useState('')
   const [testingAi, setTestingAi] = useState(false)
   const [aiTested, setAiTested] = useState(false)
-  const [diagnosticPath, setDiagnosticPath] = useState('')
   const [section, setSection] = useState<SettingsSection>(initialSection)
   const [systemFonts, setSystemFonts] = useState<string[] | null>(null)
   const [manualFontMode, setManualFontMode] = useState(false)
@@ -2319,7 +2318,7 @@ function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, u
       </div>
     </div>
     <div className={`settings-content ${section}`}>
-    {section === 'appearance' ? <><fieldset className="ui-theme-settings"><legend>{t('common.theme')}</legend><div className="theme-options" role="radiogroup" aria-label={t('common.theme')}>{themeOptions.map((option) => { const Icon = option.icon; return <button key={option.value} type="button" role="radio" aria-checked={theme === option.value} className={theme === option.value ? 'active' : ''} onClick={() => selectTheme(option.value)}><Icon size={17} /><span>{option.label}</span></button> })}</div></fieldset><fieldset className="ui-theme-settings"><legend>{t('common.language')}</legend><div className="theme-options" role="radiogroup" aria-label={t('common.language')}>{availableLanguages.map((option) => <button key={option.code} type="button" role="radio" aria-checked={language === option.code} className={language === option.code ? 'active' : ''} onClick={() => { setDialogLanguage(option.code); onLanguagePreview(option.code) }}><Languages size={17} /><span>{option.label}</span></button>)}</div></fieldset><fieldset className="app-icon-settings"><legend>{t('app.appIcon')}</legend><div className="app-icon-options">{appIcons.options.map((icon) => <label key={icon.id} className={appIcon === icon.id ? 'selected' : ''}><input type="radio" name="app-icon" checked={appIcon === icon.id} onChange={() => setAppIcon(icon.id)} /><img src={icon.dataUrl} alt="" /><span>{t(appIconMessageKeys[icon.id])}</span></label>)}</div></fieldset><section className="diagnostic-section"><strong>{t('app.diagnostics')}</strong><div className="diagnostic-export"><button type="button" className="secondary-button" onClick={async () => { try { const path = await window.api.diagnostics.export(); if (path) setDiagnosticPath(path) } catch (error) { onError(errorMessage(error)) } }}><FileInput size={15} />{t('app.exportDiagnostics')}</button>{diagnosticPath && <small title={diagnosticPath}>{diagnosticPath}</small>}</div></section></> : section === 'diagnostics' ? <DiagnosticsPanel onError={onError} /> : section === 'ssh' ? <div className="remote-agent-settings">
+    {section === 'appearance' ? <><fieldset className="ui-theme-settings"><legend>{t('common.theme')}</legend><div className="theme-options" role="radiogroup" aria-label={t('common.theme')}>{themeOptions.map((option) => { const Icon = option.icon; return <button key={option.value} type="button" role="radio" aria-checked={theme === option.value} className={theme === option.value ? 'active' : ''} onClick={() => selectTheme(option.value)}><Icon size={17} /><span>{option.label}</span></button> })}</div></fieldset><fieldset className="ui-theme-settings"><legend>{t('common.language')}</legend><div className="theme-options" role="radiogroup" aria-label={t('common.language')}>{availableLanguages.map((option) => <button key={option.code} type="button" role="radio" aria-checked={language === option.code} className={language === option.code ? 'active' : ''} onClick={() => { setDialogLanguage(option.code); onLanguagePreview(option.code) }}><Languages size={17} /><span>{option.label}</span></button>)}</div></fieldset><fieldset className="app-icon-settings"><legend>{t('app.appIcon')}</legend><div className="app-icon-options">{appIcons.options.map((icon) => <label key={icon.id} className={appIcon === icon.id ? 'selected' : ''}><input type="radio" name="app-icon" checked={appIcon === icon.id} onChange={() => setAppIcon(icon.id)} /><img src={icon.dataUrl} alt="" /><span>{t(appIconMessageKeys[icon.id])}</span></label>)}</div></fieldset></> : section === 'diagnostics' ? <DiagnosticsPanel onError={onError} /> : section === 'ssh' ? <div className="remote-agent-settings">
       <div className="settings-option-row"><div><strong>{t('app.remoteAgentIntegration')}</strong><span>{t('app.remoteAgentIntegrationDescription')}</span></div><label className="switch-control"><input type="checkbox" checked={remoteAgentIntegration} onChange={(event) => void changeRemoteAgentIntegration(event.target.checked)} /><span aria-hidden="true" /></label></div>
       <div className="settings-information"><ShieldAlert size={17} /><div><strong>{remoteAgentIntegration ? t('app.remoteAgentIntegrationOn') : t('app.remoteAgentIntegrationOff')}</strong><span>{remoteAgentIntegration ? t('app.remoteAgentIntegrationOnDescription') : t('app.remoteAgentIntegrationOffDescription')}</span></div></div>
     </div> : section === 'ai' ? <div className="ai-settings">
@@ -2389,9 +2388,12 @@ function readableDiagnosticDetail(name: string, detail: string): string {
     const readable = entries.map((entry) => {
       const match = entry.match(/^([^\[]+)\[([^\]]+)\]=(.*)$/)
       if (!match) return entry
-      const agent = match[1] === 'codex' ? 'Codex' : match[1] === 'claude' ? 'Claude Code' : match[1]
-      const target = match[2].replace(/^local:/, '').replace(/^powershell5?$/, 'Windows PowerShell')
-      return `已找到 ${agent}（${target}）：${match[3]}`
+      const agentName = match[1] ?? ''
+      const targetName = match[2] ?? ''
+      const result = match[3] ?? ''
+      const agent = agentName === 'codex' ? 'Codex' : agentName === 'claude' ? 'Claude Code' : agentName
+      const target = targetName.replace(/^local:/, '').replace(/^powershell5?$/, 'Windows PowerShell')
+      return `已找到 ${agent}（${target}）：${result}`
     })
     return readable.join('\n') || detail
   }
@@ -2407,10 +2409,12 @@ function DiagnosticsPanel({ onError }: { onError(message: string): void }): Reac
   const [copied, setCopied] = useState(false)
   const [diagnosticPath, setDiagnosticPath] = useState('')
   const [expandedAgents, setExpandedAgents] = useState<Record<string, boolean>>({})
+  const [expandedRuntimes, setExpandedRuntimes] = useState<Record<string, boolean>>({})
   const runDiagnostics = async (): Promise<void> => {
     setRunning(true)
     setCopied(false)
     setExpandedAgents({})
+    setExpandedRuntimes({})
     try {
       const next = await window.api.diagnostics.run()
       setReport(next)
@@ -2465,6 +2469,7 @@ function DiagnosticsPanel({ onError }: { onError(message: string): void }): Reac
     return ''
   }
   const toggleAgent = (agentId: string): void => setExpandedAgents((current) => ({ ...current, [agentId]: !current[agentId] }))
+  const toggleRuntime = (runtimeId: string): void => setExpandedRuntimes((current) => ({ ...current, [runtimeId]: !current[runtimeId] }))
   const agentStatusLabel = (status: string): string => {
     const value = status.toLowerCase()
     if (value === 'working') return t('app.agentWorking')
@@ -2500,6 +2505,18 @@ function DiagnosticsPanel({ onError }: { onError(message: string): void }): Reac
     if (name === 'browser_bridge') return t('app.diagnosticsRuntimeBrowserBridge')
     return name
   }
+  const runtimeTypeLabel = (targetId: string): string => {
+    if (targetId === 'local:powershell') return 'PowerShell 7'
+    if (targetId === 'local:powershell5') return 'PowerShell 5.1'
+    if (targetId === 'local:macos-shell') return 'macOS Shell'
+    if (targetId.startsWith('local:wsl:')) {
+      const distribution = targetId.slice('local:wsl:'.length)
+      return distribution ? `WSL · ${distribution}` : 'WSL'
+    }
+    if (targetId.startsWith('ssh-bookmark:')) return 'SSH'
+    return ''
+  }
+  const runtimeReportStatus = (checks: DoctorRuntimeCheck[]): DoctorCheckStatus => checks.some((check) => check.status === 'error') ? 'error' : checks.some((check) => check.status === 'warn') ? 'warn' : 'ok'
   const runtimeCheckDetail = (check: DoctorRuntimeCheck): string => {
     const code = check.code
     if (code === 'runtime_not_running') return t('app.diagnosticsReasonRuntimeNotRunning', { value0: check.detail.replace(/^runtime status is\s*/i, '') })
@@ -2536,7 +2553,7 @@ function DiagnosticsPanel({ onError }: { onError(message: string): void }): Reac
       return <div className="diagnostics-agent-list">
         {agents.map((agent) => {
           const expanded = Boolean(expandedAgents[agent.agentId])
-          const paneLabel = agent.paneTitle || agent.sessionName || agent.paneId || '-'
+          const paneLabel = agent.paneTitle || agent.sessionName || '-'
           return <div className="diagnostics-agent" key={agent.agentId}>
             <button type="button" className="diagnostics-agent-summary" aria-expanded={expanded} onClick={() => toggleAgent(agent.agentId)}>
               <span className="diagnostics-agent-primary">
@@ -2548,11 +2565,9 @@ function DiagnosticsPanel({ onError }: { onError(message: string): void }): Reac
             </button>
             {expanded && <dl className="diagnostics-agent-details">
               <div><dt>{t('app.diagnosticsAgentType')}</dt><dd>{agentTypeLabel(agent.adapter)}</dd></div>
-              <div><dt>{t('app.diagnosticsAgentPane')}</dt><dd title={agent.paneId}>{agent.paneTitle || agent.paneId || '-'}</dd></div>
-              <div><dt>{t('app.diagnosticsAgentSession')}</dt><dd title={agent.muxSessionId}>{agent.sessionName || agent.muxSessionId || '-'}</dd></div>
+              <div><dt>{t('app.diagnosticsAgentPane')}</dt><dd>{agent.paneTitle || '-'}</dd></div>
+              <div><dt>{t('app.diagnosticsAgentSession')}</dt><dd>{agent.sessionName || '-'}</dd></div>
               <div><dt>{t('app.diagnosticsAgentLastActivity')}</dt><dd title={agent.lastActivity ?? ''}>{formatActivity(agent.lastActivity)}</dd></div>
-              <div><dt>{t('app.diagnosticsAgentId')}</dt><dd title={agent.agentId}>{agent.agentId}</dd></div>
-              <div><dt>{t('app.diagnosticsAgentRuntimeId')}</dt><dd title={agent.runtimeId}>{agent.runtimeId}</dd></div>
             </dl>}
           </div>
         })}
@@ -2574,7 +2589,7 @@ function DiagnosticsPanel({ onError }: { onError(message: string): void }): Reac
         {runtimes.map((runtime) => {
           const tokenMissing = runtime.tokens === 'missing'
           return <div className="diagnostics-runtime" key={runtime.runtimeId}>
-            <div className="diagnostics-runtime-heading"><strong>{t('app.diagnosticsRuntimeInstance')}</strong><code title={runtime.runtimeId}>{runtime.runtimeId}</code></div>
+            <div className="diagnostics-runtime-heading"><strong>{t('app.diagnosticsRuntimeInstance')}</strong></div>
             <dl className="diagnostics-runtime-details">
               <div><dt>{t('app.diagnosticsHookEndpoint')}</dt><dd className={runtimeStatus(runtime.hook)}>{runtimeStatusLabel(runtime.hook)}</dd></div>
               <div><dt>{t('app.diagnosticsMcpEndpoint')}</dt><dd className={runtimeStatus(runtime.mcp)}>{runtimeStatusLabel(runtime.mcp)}</dd></div>
@@ -2593,21 +2608,41 @@ function DiagnosticsPanel({ onError }: { onError(message: string): void }): Reac
   }
   const renderRuntimeReports = (): React.JSX.Element | null => {
     if (!report?.runtimes?.length) return null
-    return <section className="diagnostics-checks diagnostics-runtime-reports">
-      {report.runtimes.map((runtime) => <article key={runtime.runtimeId} className="diagnostics-check">
-        <div className="diagnostics-check-main">
-          <div className="diagnostics-check-heading"><strong>{runtime.title || runtime.paneTitle || t('app.diagnosticsRuntimeInstance')}</strong><code title={runtime.runtimeId}>{runtime.runtimeId}</code></div>
-          <span className="diagnostics-runtime-context">{runtime.paneTitle || runtime.paneId || runtime.targetId}</span>
-          <div className="diagnostics-runtime-list">
-            {runtime.checks.map((check) => <div className={'diagnostics-runtime ' + check.status} key={check.name}>
-              <div className="diagnostics-runtime-heading"><strong>{runtimeCheckLabel(check.name)}</strong><span className={'diagnostics-status ' + check.status}>{statusLabel(check.status)}</span></div>
-              <span className="diagnostics-check-detail">{runtimeCheckDetail(check)}</span>
-              {check.evidence?.map((evidence) => <details key={evidence.kind} className="diagnostics-evidence-disclosure"><summary>{t('app.diagnosticsViewEvidence')}</summary><pre className="diagnostics-evidence">{evidence.detail}</pre></details>)}
-              {check.repairable && check.name === 'remote_helper' && <button type="button" className="secondary-button" onClick={() => void repairRuntime(runtime.runtimeId)}>{t('app.diagnosticsRepairRemoteHelper')}</button>}
-            </div>)}
-          </div>
+    return <section className="diagnostics-runtime-reports">
+      <div className="diagnostics-runtime-reports-header">
+        <div className="diagnostics-runtime-reports-heading">
+          <strong>{t('app.diagnosticsTerminalSection')}</strong>
+          <span>{t('app.diagnosticsTerminalSectionDescription')}</span>
         </div>
-      </article>)}
+        <span className="diagnostics-runtime-count">{t('app.diagnosticsTerminalCount', { value0: report.runtimes.length })}</span>
+      </div>
+      <div className="diagnostics-runtime-report-list">
+        {report.runtimes.map((runtime) => {
+          const expanded = expandedRuntimes[runtime.runtimeId] ?? report.runtimes!.length === 1
+          const status = runtimeReportStatus(runtime.checks)
+          const name = runtime.paneTitle || runtime.title || t('app.diagnosticsRuntimeInstance')
+          const type = runtimeTypeLabel(runtime.targetId)
+          return <article key={runtime.runtimeId} className={'diagnostics-runtime-report ' + status}>
+            <button type="button" className="diagnostics-runtime-report-summary" aria-expanded={expanded} onClick={() => toggleRuntime(runtime.runtimeId)}>
+              <span className="diagnostics-runtime-report-name">
+                <strong>{name}</strong>
+                {type && type !== name && <span>{t('app.diagnosticsTerminalType')}: {type}</span>}
+              </span>
+              <span className={'diagnostics-status ' + status}>{statusLabel(status)}</span>
+              {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            </button>
+            {expanded && <div className="diagnostics-runtime-report-body">
+              <div className="diagnostics-runtime-list">
+                {runtime.checks.map((check) => <div className={'diagnostics-runtime ' + check.status} key={check.name}>
+                  <div className="diagnostics-runtime-heading"><strong>{runtimeCheckLabel(check.name)}</strong><span className={'diagnostics-status ' + check.status}>{statusLabel(check.status)}</span></div>
+                  <span className="diagnostics-check-detail">{runtimeCheckDetail(check)}</span>
+                  {check.repairable && check.name === 'remote_helper' && <button type="button" className="secondary-button" onClick={() => void repairRuntime(runtime.runtimeId)}>{t('app.diagnosticsRepairRemoteHelper')}</button>}
+                </div>)}
+              </div>
+            </div>}
+          </article>
+        })}
+      </div>
     </section>
   }
   const overallStatus: DoctorCheckStatus = report
