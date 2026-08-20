@@ -1,7 +1,7 @@
 # Luna Mux 设计方案
 
 状态：已批准的设计基线  
-最后更新：2026-08-16
+最后更新：2026-08-20
 
 ## 1. 产品定义
 
@@ -92,13 +92,38 @@ Luna Mux 桌面应用
 - macOS 使用 Unix PTY 和用户配置的 zsh/bash，并通过进程组和信号清理。
 - 关闭活动 Pane 需要确认；退出应用时一次确认并清理全部 PTY、SSH Channel 和受管 Chrome。
 
+#### 4.2.1 数据流与输出背压
+
+```text
+Terminal Runtime
+  -> backend (SSH russh / local portable-pty)
+  -> Rust UTF-8 增量解码与 runtime event
+  -> Tauri `terminal-runtime:event`
+  -> React TerminalPane
+  -> xterm.js
+```
+
+应用不嵌入 Terminal.app、Ghostty 或 Windows Terminal。每个终端 Pane 对应一个独立的 Terminal Runtime；当前 SSH 实现由一条 Rust SSH connection 和 PTY channel 承载，断开其中一个不会影响其他 Pane。
+
+Rust 后端通过 `russh` 请求 `xterm-256color` PTY，并把窗口尺寸变化直接发给远端。本地 PTY 采用 `portable-pty`；Windows ConPTY 启动时可能发送 `ESC[6n` 光标位置查询，正式的 xterm.js `TerminalPane` 负责响应，PTY 后端不自行实现终端仿真。
+
+SSH 和本地 PTY 数据块在 Rust 端用增量 UTF-8 解码器处理，跨数据块的多字节字符不会被截断。Runtime 输出使用有界环形缓冲区和 UTF-8 字节游标，`TerminalPane` 挂载时从游标增量追赶。xterm 写入队列积压时，前端通过流控暂停后端读取，积压恢复后再继续，避免大量输出长期占用 WebView 事件循环。
+
+运行中的 Pane 在跨 Session 和 Session 内视图切换时保持同一个 xterm 实例，非当前工作区只隐藏并停用 WebGL 渲染。确实需要卸载组件（如布局重排）时，使用 xterm 官方序列化格式暂存正常屏幕、备用屏幕和滚动缓冲区，并从最后完成渲染的 UTF-8 字节游标继续追赶；不能只重放有界 PTY 原始输出，因为全屏 TUI 的清屏和光标控制序列无法重建已丢失的滚动历史。删除 Pane 或 Session 时同步丢弃对应快照。
+
+终端启用 WebGL 插件，初始化失败时自动回退到 xterm 默认渲染器。透明背景由 xterm 透明画布与终端容器背景图组合实现，不改变整个系统窗口透明度。
+
+#### 4.2.2 安全边界
+
+WebView 只能通过 Tauri 命令调用显式注册的 Rust 能力。外部链接仅允许 HTTP/HTTPS，文件选择使用原生对话框，凭据保存在 macOS 钥匙串或 Windows 凭据管理器。终端和文件传输不启动 Node.js 子进程或辅助进程。
+
 ### 4.3 Mux Session 与窗格
 
 Mux Session 通常对应一个项目，项目根目录为本地终端和项目工具提供默认工作目录，也允许为空。每个 Pane 可单独覆盖工作目录和目标。Agent 是终端中的被检测进程，不是 Pane 类型。
 
 布局是由 Pane 叶节点和横向/纵向分割节点组成的递归树，每个分割节点带比例。用户可以分割、缩放、聚焦、最大化、恢复、重命名和关闭 Pane，也可以应用平衡横排、竖排或网格预设。布局变化不应重启已有 Runtime。
 
-数据库持久化 Session、项目根目录、布局、Pane 目标/工作目录/标题、兼容用启动配置字段和 Browser Resource。重启应用只恢复定义，不自动重连、执行 Shell、启动 Chrome 或恢复滚动缓冲区；Runtime ID 和进程 ID 不跨应用重启复用。
+数据库持久化 Session、项目根目录、布局、Pane 目标/工作目录/标题和 Browser Resource。重启应用只恢复定义，不自动重连、执行 Shell、启动 Chrome 或恢复滚动缓冲区；Runtime ID 和进程 ID 不跨应用重启复用。
 
 主侧边栏只包含 Session 和 Pane 树。新增工作始终从选中的 Session 开始：`新增窗格` 创建普通终端并选择本地或 SSH 环境；用户可在其中运行 `codex`、`claude` 或其他命令。Browser Resource 从 Session 的浏览器视图管理。SSH 连接保存在次级资源库，不与 Session 并列为主导航。
 
@@ -108,15 +133,12 @@ Mux Session 通常对应一个项目，项目根目录为本地终端和项目�
 
 `AgentAdapter` 是原生扩展边界。每个适配器负责：
 
-- 内置启动配置和自动配置编号；
-- 手动命令 shim 与托管启动命令；
+- 手动命令 shim；
 - Hook/MCP 配置；
 - 远程 Hook 传输要求；
 - 可选持久化用户 Hook 的兼容策略。
 
 Runtime、面板、Hook 接收器、Luna MCP、Browser Resource、授权和审计保持提供方无关。增加 Agent 提供方时，应实现并注册一个适配器，再补充契约测试。
-
-`启动 Agent` 只是便利入口：它创建普通 Terminal Pane、保存所选配置，并在 Shell 就绪后启动 Agent 命令。普通 `新增窗格` 仍只启动终端。
 
 Codex 与 Claude Code 的结构化 Hook 统一为：
 
@@ -131,7 +153,7 @@ Codex 使用进程级 TOML 覆盖和命令 Hook；Claude Code 使用进程级 `-
 
 启用后，支持文件全部放在 `~/.luna-mux/runtime/<runtime-id>`；该目录只加入当前 Pane 的 `PATH`。Luna Mux 不改远程 Shell 启动文件或用户 Agent 配置，正常断开前通过 SFTP 删除该精确目录。网络中断或进程崩溃时无法保证远程清理。
 
-权限请求仍由 Agent TUI 审批；Luna Mux 负责通知并聚焦对应终端。Agent 视图显示提供方、所有者 Pane、目标、启动方式、Hook、Luna MCP 和 Browser MCP 健康信息；未读和注意状态继续体现在侧边栏和终端边框。
+权限请求仍由 Agent TUI 审批；Luna Mux 负责通知并聚焦对应终端。Agent 视图显示提供方、所有者 Pane、目标、Hook、Luna MCP 和 Browser MCP 健康信息；未读和注意状态继续体现在侧边栏和终端边框。
 
 ### 4.5 统一 Luna 控制 API
 
@@ -238,5 +260,3 @@ Windows 和 macOS 都是首版平台。里程碑只有在适用的双平台验�
 6. 实现 Luna Control Service，再通过该边界提供 Luna MCP 和跨 Agent 操作。
 7. 加入 Session 级受管 Chrome、原生浏览器 MCP 和远程服务转发。
 8. 按需参考相关产品能力，由 AI 重新实现并执行跨平台回归。
-
-可执行任务和长期状态分别维护在 [DEVELOPMENT_TASKS.md](DEVELOPMENT_TASKS.md) 与 [DEVELOPMENT_PROGRESS.md](DEVELOPMENT_PROGRESS.md)。

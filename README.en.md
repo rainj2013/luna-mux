@@ -1,7 +1,7 @@
 <div align="center">
   <img src="assets/icons/luna.png" width="96" alt="Luna Mux icon">
   <h1>Luna Mux</h1>
-  <p>A local and remote terminal workspace built for coding agents</p>
+  <p>A terminal workspace built for coding agents</p>
   <p>
     <a href="https://github.com/rainj2013/luna-mux/actions/workflows/release.yml"><img src="https://github.com/rainj2013/luna-mux/actions/workflows/release.yml/badge.svg" alt="Build status"></a>
     <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-5b8def?style=flat-square" alt="Supported platforms">
@@ -16,57 +16,57 @@
 
 <div align="center">English · <a href="README.md">简体中文</a></div>
 
-Luna Mux brings project terminals, coding agents, remote machines, and browser automation into one workspace. A Session persists its project root, local or SSH Panes, and recursive split layout. Codex, Claude Code, and other agents still run in ordinary terminals, while gaining status notifications, browser tooling, and narrowly scoped control over Luna Mux itself.
+Luna Mux is a terminal workspace built for coding agents. It maintains a Session per project directory; each Session holds multiple terminal panes, and each pane can be a local terminal or an SSH remote terminal. When you launch Codex, Claude Code, or another agent in a terminal, Luna Mux automatically injects a Hook and MCP servers to extend it: the Hook monitors status, the Luna Mux MCP lets the agent control Luna Mux itself, and the agent-browser MCP lets it drive the browser. It also ships the complete SSH and SFTP capabilities ported from Luna Remote.
 
-> [!NOTE]
-> Luna Mux is currently a **0.1.0 preview** and is not recommended as unattended production infrastructure.
+## Project Sessions and Terminal Panes
 
-## Project Sessions and terminal Panes
+A Session corresponds to one project directory and persists its project root and pane layout.
 
-- A Session represents one project context and persists its project root, local or SSH Panes, and recursive split layout.
-- Layout controls include horizontal and vertical splits, draggable ratios, presets, rename, maximize, and restore.
-- macOS uses a local zsh/bash PTY. Windows supports PowerShell and WSL. Both platforms can create SSH terminals.
+- A Session holds multiple terminal panes with horizontal and vertical splits, draggable ratios, presets, rename, and maximize.
+- Each pane can be a local terminal (macOS zsh/bash, Windows PowerShell or WSL) or an SSH remote terminal.
 - Local and remote terminals share one xterm.js UI, including search, clipboard handling, themes, fonts, backgrounds, and output flow control.
-- Restarting the application restores Session and layout definitions without reconnecting hosts or launching processes behind the user's back.
+- Restarting the app restores Sessions and layouts without reconnecting hosts or restarting processes behind the user's back.
 
-## Coding agents in ordinary terminals
+## Agents in the Terminal
 
-There is no special “Agent Pane.” Run `codex` or `claude` manually in any terminal, or use a built-in launch shortcut.
+Launch `codex` or `claude` in any pane and Luna Mux detects the agent and injects a Hook and MCP servers to extend it.
 
-- Unified working, waiting-for-input, waiting-for-permission, completed, and error states.
-- Attention indicators in the sidebar and Pane border, plus desktop notifications that route back to the owning Session and Pane.
-- An Agent Environment view for inspecting the real Adapter, Hook, Luna MCP, and Browser MCP health state.
-- Agent lifetime follows the application; managed terminals, agents, and Chrome close with Luna Mux.
+### Status Monitoring (Hook)
 
-## Let agents control Luna Mux
+- The Hook reports working, waiting-for-input, waiting-for-permission, completed, and error states back to Luna Mux.
+- Panes that need attention are flagged in the sidebar, the pane border, and desktop notifications that route back to the owning Session and Pane.
+- The Agent Environment view shows health state for the Adapter, Hook, Luna MCP, and Browser MCP.
+- Agent lifetime follows the app; managed terminals, agents, and Chrome close with Luna Mux.
 
-Luna MCP exposes Luna Mux's full functionality to agents in the terminal, covering Sessions, Panes, terminals, agents, connections, settings, diagnostics, transfers, and tunnels. Agents can:
+### Controlling Luna Mux (Luna Mux MCP)
 
-- discover Sessions, Panes, Terminal Runtimes, and other managed agents;
-- create Panes, update layouts, read bounded terminal output, and write terminal input;
-- inspect agent state, send tasks, and interrupt managed agents;
-- read safe connection summaries, update themes or terminal appearance, and run built-in diagnostics;
-- close Runtimes or start transfers and tunnels, important side effects that may still require desktop approval.
+- The Luna Mux MCP exposes Sessions, Panes, terminals, agents, connections, settings, diagnostics, transfers, and tunnels to agents.
+- Agents can discover Sessions, Panes, Terminal Runtimes, and other managed agents.
+- Agents can create Panes, update layouts, read bounded terminal output, and write terminal input.
+- Agents can inspect agent state, send tasks, and interrupt managed agents.
+- Agents can read safe connection summaries, update themes and terminal appearance, and run built-in diagnostics.
+- Closing Runtimes or starting transfers and tunnels requires desktop confirmation first.
+- Credentials, private keys, and API keys are never exposed to agents through MCP.
 
-Credentials, private-key contents, and API keys are never exposed through MCP.
+### Browser Automation (agent-browser MCP)
 
-## Browser automation
+Agents drive the browser on their own to complete web tasks: opening pages, clicking, filling forms, taking snapshots, capturing screenshots, and inspecting the console and network. They operate a Session-scoped, isolated Chrome through the [`agent-browser`](https://github.com/vercel-labs/agent-browser) MCP, which runs as a standalone window you can take over at any time.
 
-Each Session can own one isolated Chrome that agents use to automate web tasks. It runs as a standard external window that the user can take over at any time.
-
-- Browsers are not terminal Panes and don't join the split layout — they stay a full, standalone window that's easier to browse and operate.
-- Agents use a native `agent-browser` MCP for snapshots, interaction, waits, tabs, screenshots, console inspection, network requests, and HAR capture.
-- Chrome starts lazily on the first real browser tool call, then the same Runtime and page are reused.
+- Snapshots, interaction, waits, tabs, screenshots, console inspection, network requests, and HAR capture are supported.
+- Chrome starts lazily on first use, then the same Runtime and page are reused.
 - Remote SSH agents reach the desktop's Chrome through an authenticated proxy; raw CDP is not exposed to the remote host.
 
-## SSH, SFTP, and port forwarding
+## SSH and SFTP
+
+The complete SSH and SFTP capabilities are ported from Luna Remote.
 
 - SSH supports passwords, private keys, SSH Agent, host-key verification, keepalive, and one jump host.
+- Agents launched in SSH terminals get the same Hook and MCP injection, so they can remotely control the local Luna Mux and drive the local browser through agent-browser MCP.
 - Connections can be grouped, reordered, backed up, and imported from OpenSSH Config or a Luna Remote database.
-- SFTP supports local/remote browsing, upload, download, preview, drag and drop, transfer queues, and retry.
+- SFTP supports local/remote browsing, upload, download, preview, drag and drop, queues, and retry.
 - Local, remote, and SOCKS5 dynamic forwarding are supported.
 
-## AI command assistant
+## AI Command Assistant
 
 The AI command assistant is independent of Codex and Claude agents. It uses a user-configured OpenAI-compatible service to generate Linux Shell, PowerShell, CMD, or macOS commands for the focused local or SSH terminal.
 

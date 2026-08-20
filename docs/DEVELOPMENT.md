@@ -14,7 +14,7 @@ assets/icons/ 应用及界面图标
 docs/         架构、开发和设计资料
 ```
 
-终端的数据流、PTY、输出背压和安全边界另见 [终端架构](TERMINAL_ARCHITECTURE.md)。
+终端的数据流、PTY、输出背压和安全边界见 [设计方案](LUNA_MUX_DESIGN.md) 的「终端后端」一节。
 
 ## 开发环境
 
