@@ -164,7 +164,7 @@ export function createChineseHelpSections(commandKey: string): HelpSection[] {
           <tr><th scope="row">停止</th><td>关闭 Chrome 进程，并保留会话 Profile 供下次启动使用。</td></tr>
         </tbody></table>
         <p>诊断区显示运行状态、PID、CDP 地址、Profile 路径和启动错误。安装 Chrome 后，可点击重新检测刷新可用状态。</p>
-        <div className="help-warning"><TriangleAlert size={15} aria-hidden="true" /><div><strong>使用受管浏览器入口</strong><p>通过“浏览器”页或 agent-browser 工具启动和重启 Chrome，可保持会话 Profile、CDP 路由和 Agent 浏览器授权一致。</p></div></div>
+        <div className="help-warning"><TriangleAlert size={15} aria-hidden="true" /><div><strong>Agent 浏览器自动化</strong><p>Agent 可以通过注入的 <code>agent_browser</code> 工具按需启动并操作当前会话的受管 Chrome；“浏览器”页提供同一个 Browser Resource 的人工启动、聚焦、重启和诊断入口。</p></div></div>
       </>
     },
     {
@@ -501,7 +501,7 @@ export function createEnglishHelpSections(commandKey: string): HelpSection[] {
           <tr><th scope="row">Stop</th><td>Closes the Chrome process and keeps the Session Profile for the next start.</td></tr>
         </tbody></table>
         <p>Diagnostics show runtime state, PID, CDP endpoint, Profile path, and startup errors. After installing Chrome, use the refresh button to update availability.</p>
-        <div className="help-warning"><TriangleAlert size={15} /><div><strong>Use the managed browser entry points</strong><p>Starting and restarting Chrome from the Browser view or agent-browser tools keeps the Session Profile, CDP routing, and Agent browser authorization aligned.</p></div></div>
+        <div className="help-warning"><TriangleAlert size={15} /><div><strong>Agent browser automation</strong><p>Agents can use the injected <code>agent_browser</code> tools to start and operate the current Session's managed Chrome on demand. The Browser view provides manual start, focus, restart, and diagnostics for the same Browser Resource.</p></div></div>
       </>
     },
     {
