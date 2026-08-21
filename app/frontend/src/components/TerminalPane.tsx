@@ -12,6 +12,11 @@ import { useI18n } from '../i18n'
 
 const terminalHighWaterMark = 1024 * 1024
 const terminalLowWaterMark = 256 * 1024
+// Chromium/xterm can report the committed value of a Windows IME twice (once from
+// the composition path and once from the textarea input path).  Keep this short:
+// it is long enough to collapse that duplicate, while still allowing a user to
+// intentionally commit the same CJK character twice in normal typing.
+const duplicateImeInputWindowMs = 40
 const terminalSelectionTheme = {
   selectionBackground: '#ffd43b',
   selectionInactiveBackground: '#ffd43b',
@@ -251,18 +256,28 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     let pendingOutput = 0
     let paused = false
     let disposed = false
-    let lastTerminalInput = { data: '', timestamp: 0 }
+    let lastTerminalInput = { data: '', timestamp: 0, runtimeId: '' }
     const pendingImePunctuation = new Set<PendingImePunctuation>()
 
     const writeTerminalInput = (data: string): void => {
-      lastTerminalInput = { data, timestamp: performance.now() }
+      const now = performance.now()
+      const activeRuntimeId = runtimeIdRef.current ?? ''
+      const hasCommittedNonAscii = data.length > 0 && [...data].some((character) => {
+        const codePoint = character.codePointAt(0) ?? 0
+        return codePoint > 0x7f && !/\p{Control}/u.test(character)
+      })
+      if (hasCommittedNonAscii && lastTerminalInput.runtimeId === activeRuntimeId && lastTerminalInput.data === data && now - lastTerminalInput.timestamp < duplicateImeInputWindowMs) {
+        // Do not send the same committed IME payload twice.  This is deliberately
+        // limited to non-ASCII text so ordinary terminal key repeats are untouched.
+        return
+      }
+      lastTerminalInput = { data, timestamp: now, runtimeId: activeRuntimeId }
       for (const pending of pendingImePunctuation) {
         if (!data.includes(pending.text)) continue
         window.clearTimeout(pending.timer)
         pendingImePunctuation.delete(pending)
         break
       }
-      const activeRuntimeId = runtimeIdRef.current
       if (connectedRef.current && activeRuntimeId) {
         void window.api.terminalRuntimes.write(activeRuntimeId, data).catch((error) => reportRuntimeInputError(activeRuntimeId, error))
       } else if (connectingRef.current && activeRuntimeId) {
@@ -355,7 +370,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
           if (disposed || !connectedRef.current || !runtimeIdRef.current) return
           writer.markInteractive()
           const activeRuntimeId = runtimeIdRef.current
-          if (activeRuntimeId) void window.api.terminalRuntimes.write(activeRuntimeId, text).catch((error) => reportRuntimeInputError(activeRuntimeId, error))
+          if (activeRuntimeId) writeTerminalInput(text)
         }, 32)
       }
       pendingImePunctuation.add(pending)
