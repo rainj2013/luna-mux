@@ -1391,7 +1391,7 @@ export function App(): React.JSX.Element {
           {!activeMuxSession ? <div className="welcome-state"><div className="welcome-icon"><SquareTerminal size={30} /></div><h2>{t('app.createYourFirstSession')}</h2><div className="welcome-actions"><button className="primary-button" onClick={() => setMuxSessionDialog({ mode: 'create' })}><CirclePlus size={16} />{t('app.newSession')}</button></div></div>
             : sessionTabs.length === 0 && sessionBrowserResources.length === 0 ? <div className="welcome-state"><div className="welcome-icon"><SquareTerminal size={30} /></div><h2>{activeMuxSession.name}</h2>{activeMuxSession.rootPath && <p>{activeMuxSession.rootPath}</p>}<div className="welcome-actions"><button className="primary-button" onClick={() => void openPaneLauncher()}><CirclePlus size={16} />{t('app.addFirstPane')}</button></div></div>
               : workspaceView === 'terminal' && sessionTabs.length === 0 ? <div className="welcome-state pane-empty-state"><div className="welcome-icon"><SquareTerminal size={30} /></div><h2>{t('app.noPanes')}</h2><p>{t('app.addPaneDescription')}</p><div className="welcome-actions"><button className="primary-button" onClick={() => void openPaneLauncher()}><CirclePlus size={16} />{t('app.addFirstPane')}</button></div></div>
-                : workspaceView === 'agents' ? <AgentEnvironmentPanel agents={allAgents} session={activeMuxSession} panes={sessionTabs} browserResources={sessionBrowserResources} browserRuntimes={browserRuntimes.filter((runtime) => runtime.muxSessionId === activeMuxSession.id)} chromeInstallation={chromeInstallation} bookmarks={bookmarks} />
+                : workspaceView === 'agents' ? <AgentEnvironmentPanel agents={allAgents} panes={sessionTabs} bookmarks={bookmarks} agentAttentionByPane={agentAttentionByPane} onOpenPane={(agent) => { setActiveKey(agent.paneId); setWorkspaceView('terminal'); markAgentRead(agent.agentId) }} onDismissWaiting={dismissAgentWaitingAttention} />
                   : workspaceView === 'browser' ? <BrowserResourceManager resources={sessionBrowserResources} panes={sessionTabs} chromeInstallation={chromeInstallation} onRefreshChrome={refreshChromeInstallation} onStart={(resource) => void startBrowserResource(resource)} onFocus={(resource) => { if (resource.runtime) void window.api.browserRuntimes.focusExternal(resource.runtime.id).catch((error) => showError(errorMessage(error))) }} onRestart={(resource) => void restartBrowserResource(resource)} onStop={(resource) => void stopBrowserResource(resource)} />
                     : workspaceView === 'files' && activeTab && activeBookmark ? <div className="session-view active files"><div className="sftp-region"><SftpPane sessionId={activeSshRuntimeId} bookmarkId={activeTab.bookmarkId} connected={activeTab.status === 'connected'} visible onError={showError} onConnect={() => reconnectPane(activeTab)} /></div></div>
                       : null}
@@ -1665,60 +1665,48 @@ function AiDiagnosticsDialog({ exchange, onClose, onClear }: { exchange: AiRawEx
   </div></Modal>
 }
 
-function AgentEnvironmentPanel({ agents, session, panes, browserResources, browserRuntimes, chromeInstallation, bookmarks }: { agents: ManagedAgentSummary[]; session: MuxSession; panes: WorkspaceTab[]; browserResources: BrowserResourceState[]; browserRuntimes: BrowserRuntime[]; chromeInstallation: ChromeInstallation | null | undefined; bookmarks: Bookmark[] }): React.JSX.Element {
+function AgentEnvironmentPanel({ agents, panes, bookmarks, agentAttentionByPane, onOpenPane, onDismissWaiting }: { agents: ManagedAgentSummary[]; panes: WorkspaceTab[]; bookmarks: Bookmark[]; agentAttentionByPane: Map<string, AgentAttentionTone>; onOpenPane(agent: ManagedAgentSummary): void; onDismissWaiting(agent: ManagedAgentSummary): void }): React.JSX.Element {
   const { t } = useI18n()
   const paneMap = new Map(panes.map((pane) => [pane.id, pane]))
   const bookmarkMap = new Map(bookmarks.map((bookmark) => [bookmark.id, bookmark]))
   const sessionAgents = agents.filter((agent) => paneMap.has(agent.paneId))
-  const runningBrowserRuntimes = browserRuntimes.filter((runtime) => runtime.status === 'running')
-  const localBrowserResources = browserResources.filter((resource) => !resource.sourcePaneId)
-  const browserEnvironment = (() => {
-    if (runningBrowserRuntimes.length === 1) {
-      const runtime = runningBrowserRuntimes[0]!
-      const resource = browserResources.find((item) => item.id === runtime.browserResourceId)
-      return { tone: 'ready', label: t('app.browserMcpReady'), detail: `${resource?.name ?? runtime.browserResourceId} · CDP :${runtime.cdpPort}` }
-    }
-    if (runningBrowserRuntimes.length > 1) return { tone: 'conflict', label: t('app.browserMcpConflict'), detail: t('app.browserMcpConflictDetail') }
-    if (chromeInstallation === undefined) return { tone: 'passive', label: t('app.checking'), detail: t('app.checkingBrowserAvailability') }
-    if (chromeInstallation === null) return { tone: 'unavailable', label: t('app.browserMcpUnavailable'), detail: t('app.installChromeFirst') }
-    if (localBrowserResources.length === 1) return { tone: 'on-demand', label: t('app.browserMcpOnDemand'), detail: localBrowserResources[0]!.name }
-    if (localBrowserResources.length > 1) return { tone: 'selection', label: t('app.browserMcpNeedsSelection'), detail: t('app.browserMcpNeedsSelectionDetail') }
-    return { tone: 'unavailable', label: t('app.browserMcpUnavailable'), detail: t('app.browserMcpUnavailableDetail') }
-  })()
-
+  const actionAgents = sessionAgents.filter((agent) => agentAttentionByPane.has(agent.paneId) || agent.status === 'working')
   return <div className="agent-environment">
-    <section className="agent-environment-summary" aria-label={t('app.sessionEnvironment')}>
-      <div className="agent-environment-summary-item">
-        <FolderOpen size={17} />
-        <span><small>{t('app.projectRoot')}</small><code title={session.rootPath || t('app.notConfigured')}>{session.rootPath || t('app.notConfigured')}</code></span>
-      </div>
-      <div className="agent-environment-summary-item">
-        <Globe2 size={17} />
-        <span><small>{t('app.browserMcp')}</small><strong className={`agent-environment-state ${browserEnvironment.tone}`}><i />{browserEnvironment.label}</strong><em title={browserEnvironment.detail}>{browserEnvironment.detail}</em></span>
-      </div>
-    </section>
     <section className="agent-environment-agents">
-      <header><Sparkles size={15} /><strong>{t('app.activeAgentEnvironment')}</strong></header>
-      {sessionAgents.length === 0 ? <div className="agent-environment-empty"><Bot size={24} /><span>{t('app.noActiveAgents')}</span></div> : <div className="agent-environment-table-wrap"><table className="agent-environment-table">
-        <thead><tr><th>{t('app.agentAdapter')}</th><th>{t('app.owningPane')}</th><th>{t('app.terminalTarget')}</th><th>{t('app.launchMode')}</th><th>{t('app.hookStatus')}</th><th>{t('app.lunaMcp')}</th></tr></thead>
-        <tbody>{sessionAgents.map((agent) => {
-          const pane = paneMap.get(agent.paneId)
-          if (!pane) return null
-          const bookmark = pane.bookmarkId ? bookmarkMap.get(pane.bookmarkId) : undefined
-          const targetLabel = bookmark ? bookmark.name : t('app.localEnvironment')
-          const targetDetail = bookmark ? `${bookmark.username}@${bookmark.host}:${bookmark.port}` : pane.targetId
-          return <tr key={agent.agentId}>
-            <td><span className="agent-environment-primary"><Sparkles size={14} />{agentAdapterLabel(agent.latest?.adapterId ?? t('app.agentGeneric'))}</span></td>
-            <td><span className="agent-environment-primary"><SquareTerminal size={14} /><span title={pane.title}>{pane.title}</span></span></td>
-            <td><span className="agent-environment-target">{bookmark ? <Server size={14} /> : <Monitor size={14} />}<span><strong title={targetLabel}>{targetLabel}</strong><code title={targetDetail}>{targetDetail}</code></span></span></td>
-            <td>{pane.launchProfileId ? t('app.managedLaunch') : t('app.manualLaunch')}</td>
-            <td><span className={`agent-environment-state ${agent.hasStructuredEvents ? 'ready' : 'passive'}`}><i />{agent.hasStructuredEvents ? t('app.hookConnected') : t('app.terminalDetection')}</span></td>
-            <td><span className="agent-environment-state ready"><i />{t('app.mcpConfigured')}</span></td>
-          </tr>
-        })}</tbody>
-      </table></div>}
+      <header><Sparkles size={15} /><strong>{t('app.activeAgentEnvironment')}</strong><span>{t('app.agentNeedsAttentionCount', { value0: actionAgents.filter((agent) => agentAttentionByPane.has(agent.paneId)).length })}</span></header>
+      {sessionAgents.length === 0 ? <div className="agent-environment-empty"><Bot size={24} /><span>{t('app.noActiveAgents')}</span></div> : <div className="agent-work-list">{sessionAgents.map((agent) => {
+        const pane = paneMap.get(agent.paneId)
+        if (!pane) return null
+        const bookmark = pane.bookmarkId ? bookmarkMap.get(pane.bookmarkId) : undefined
+        const targetLabel = bookmark ? `${bookmark.username}@${bookmark.host}:${bookmark.port}` : pane.targetId
+        const attention = agent.latestAttention
+        const state = attention ?? agent.latest
+        const tone = agentAttentionByPane.get(agent.paneId)
+        const statusLabel = agentPaneStatusLabel(pane, tone, t)
+        return <article key={agent.agentId} className={['agent-work-item', tone ? `tone-${tone}` : ''].filter(Boolean).join(' ')}>
+          <button className="agent-work-main" onClick={() => onOpenPane(agent)}>
+            <span className={`status-dot ${pane.status}`} />
+            <span className="agent-work-status"><strong>{statusLabel}</strong><small>{agent.hasStructuredEvents ? t('app.hookConnected') : t('app.terminalDetection')}</small></span>
+            <span className="agent-work-copy"><strong>{agentAdapterLabel(agent.latest?.adapterId ?? t('app.agentGeneric'))}</strong><small><SquareTerminal size={13} />{pane.title}<em>{targetLabel}</em></small></span>
+            <time>{formatActivity(state?.timestamp)}</time>
+            <ArrowRight size={15} />
+          </button>
+          {attention?.status === 'waiting' && <button className="text-button" onClick={() => onDismissWaiting(agent)}>{t('app.dismissWaiting')}</button>}
+        </article>
+      })}</div>}
     </section>
   </div>
+}
+
+function agentPaneStatusLabel(pane: WorkspaceTab, tone: AgentAttentionTone | undefined, t: (key: MessageKey, params?: Record<string, string | number>) => string): string {
+  if (pane.error) return t('app.connectionFailed')
+  if (tone === 'error') return t('app.agentError')
+  if (tone === 'warning') return t('app.agentWaiting')
+  if (tone === 'info') return t('app.unreadAgentEvents')
+  if (pane.status === 'connected') return t('app.connected')
+  if (pane.status === 'connecting') return t('app.connecting')
+  if (pane.status === 'error') return t('app.connectionFailed')
+  return t('app.disconnected')
 }
 
 function summarizeManagedAgents(panes: WorkspaceTab[], events: ManagedAgentEvent[], readSequences: Set<number>, dismissedAttentionSequences: Set<number>): ManagedAgentSummary[] {
@@ -1973,9 +1961,11 @@ function BrowserResourceManager({ resources, panes, chromeInstallation, onRefres
       const live = resource.status === 'running' && Boolean(resource.runtime)
       const sourcePane = resource.sourcePaneId ? paneMap.get(resource.sourcePaneId) : undefined
       const statusLabel = resource.status === 'starting' ? t('app.connecting') : live ? t('app.browserRunning') : resource.status === 'error' ? t('app.browserRuntimeFailed') : t('app.browserRuntimeStopped')
+      const agentAccessLabel = live ? t('app.browserAgentAccessReady') : chromeInstallation ? t('app.browserAgentAccessOnStart') : t('app.browserAgentAccessBlocked')
+      const serviceLabel = sourcePane ? `${t('app.viaSshPane')} ${sourcePane.title}` : t('app.localService')
       return <section className={`browser-resource-detail ${live ? 'running' : resource.status}`} key={resource.id}>
         <header>
-          <div className="browser-resource-identity"><span className={`status-dot ${live ? 'connected' : resource.status === 'error' ? 'error' : resource.status === 'starting' ? 'connecting' : 'disconnected'}`} /><Globe2 size={18} /><span><strong>{resource.name}</strong><small>{sourcePane ? `${t('app.viaSshPane')} ${sourcePane.title}` : t('app.localService')}</small></span></div>
+          <div className="browser-resource-identity"><span className={`status-dot ${live ? 'connected' : resource.status === 'error' ? 'error' : resource.status === 'starting' ? 'connecting' : 'disconnected'}`} /><Globe2 size={18} /><span><strong>{resource.name}</strong><small>{serviceLabel}</small></span></div>
           <div className="browser-resource-actions">
             {live ? <button className="secondary-button" onClick={() => onFocus(resource)}><ExternalLink size={15} />{t('app.openManagedChrome')}</button> : <button className="primary-button" disabled={!chromeInstallation || resource.status === 'starting'} onClick={() => onStart(resource)}><Play size={15} />{t('app.startBrowser')}</button>}
             <button className="icon-button" title={t('app.restartBrowser')} aria-label={t('app.restartBrowser')} disabled={!resource.runtime || resource.status === 'starting'} onClick={() => onRestart(resource)}><RotateCcw size={15} /></button>
@@ -1986,9 +1976,9 @@ function BrowserResourceManager({ resources, panes, chromeInstallation, onRefres
         {resource.error && <div className="browser-resource-error" title={resource.error}><ShieldAlert size={15} />{resource.error}</div>}
         <dl className="browser-resource-diagnostics">
           <div><dt>{t('app.runtimeStatus')}</dt><dd><span className={`status-dot ${live ? 'connected' : resource.status === 'error' ? 'error' : resource.status === 'starting' ? 'connecting' : 'disconnected'}`} />{statusLabel}</dd></div>
-          <div><dt>{t('app.chromeProcess')}</dt><dd><code>{resource.runtime ? `PID ${resource.runtime.processId}` : '—'}</code></dd></div>
-          <div><dt>CDP</dt><dd><code>{resource.runtime ? `127.0.0.1:${resource.runtime.cdpPort}` : '—'}</code></dd></div>
-          <div><dt>{t('app.browserProfile')}</dt><dd><code title={resource.runtime?.profilePath}>{resource.runtime?.profilePath || '—'}</code></dd></div>
+          <div><dt>{t('app.agentBrowserAccess')}</dt><dd>{agentAccessLabel}</dd></div>
+          <div><dt>{sourcePane ? t('app.remoteServiceUrl') : t('app.initialUrl')}</dt><dd><code title={resource.url || 'about:blank'}>{resource.url || 'about:blank'}</code></dd></div>
+          <div><dt>{t('app.chromeProcess')}</dt><dd><code>{resource.runtime ? `PID ${resource.runtime.processId} · CDP ${resource.runtime.cdpPort}` : '—'}</code></dd></div>
         </dl>
       </section>
     })}</div>
