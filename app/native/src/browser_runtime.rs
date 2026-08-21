@@ -19,6 +19,7 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungsten
 use uuid::Uuid;
 
 const AGENT_BROWSER_TOOLS: &str = "core,network,debug,tabs";
+const AGENT_BROWSER_CONFIG_STALE_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 #[cfg(not(windows))]
@@ -1001,6 +1002,11 @@ pub fn try_run_mcp_browser(args: &[String]) -> Option<i32> {
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
+    if let Err(error) = ensure_agent_browser_mcp_config(&config_path, cdp_port) {
+        let _ = std::fs::remove_file(&config_path);
+        eprintln!("Luna Mux 无法恢复 Browser MCP 配置：{error}");
+        return Some(1);
+    }
     let status = command.status();
     let _ = std::fs::remove_file(&config_path);
     match status {
@@ -1093,6 +1099,7 @@ where
         // discarding stderr turns the actual startup error into an opaque
         // handshake failure.
         .stderr(Stdio::piped());
+    ensure_agent_browser_mcp_config(&config_path, cdp_port)?;
     let mut child = match tokio::process::Command::from(command).spawn() {
         Ok(child) => child,
         Err(error) => {
@@ -1433,6 +1440,11 @@ fn create_agent_browser_mcp_config(scope: &str, cdp_port: u16) -> Result<PathBuf
     let root = std::env::temp_dir().join("luna-mux").join("agent-browser");
     std::fs::create_dir_all(&root).map_err(|error| error.to_string())?;
     let path = root.join(format!("{scope}-{}.json", Uuid::new_v4()));
+    write_agent_browser_mcp_config(&path, cdp_port)?;
+    Ok(path)
+}
+
+fn write_agent_browser_mcp_config(path: &Path, cdp_port: u16) -> Result<(), String> {
     let config = AgentBrowserMcpConfig {
         cdp: cdp_port.to_string(),
         content_boundaries: true,
@@ -1440,8 +1452,19 @@ fn create_agent_browser_mcp_config(scope: &str, cdp_port: u16) -> Result<PathBuf
         pin_tab: true,
     };
     let contents = serde_json::to_vec_pretty(&config).map_err(|error| error.to_string())?;
-    std::fs::write(&path, contents).map_err(|error| error.to_string())?;
-    Ok(path)
+    let parent = path
+        .parent()
+        .ok_or_else(|| "Browser MCP 配置目录无效".to_string())?;
+    std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    std::fs::write(path, contents).map_err(|error| error.to_string())
+}
+
+fn ensure_agent_browser_mcp_config(path: &Path, cdp_port: u16) -> Result<(), String> {
+    if path.exists() {
+        Ok(())
+    } else {
+        write_agent_browser_mcp_config(path, cdp_port)
+    }
 }
 
 /// Remove configuration files left behind by an interrupted agent-browser
@@ -1455,6 +1478,10 @@ fn cleanup_stale_agent_browser_configs() {
 }
 
 fn cleanup_agent_browser_config_dir(root: &Path) {
+    cleanup_agent_browser_config_dir_at(root, std::time::SystemTime::now());
+}
+
+fn cleanup_agent_browser_config_dir_at(root: &Path, now: std::time::SystemTime) {
     let Ok(entries) = std::fs::read_dir(root) else {
         return;
     };
@@ -1468,6 +1495,14 @@ fn cleanup_agent_browser_config_dir(root: &Path) {
                 .file_name()
                 .to_str()
                 .is_some_and(is_agent_browser_config_filename)
+            || !entry
+                .metadata()
+                .ok()
+                .and_then(|metadata| metadata.modified().ok())
+                .is_some_and(|modified| {
+                    now.duration_since(modified)
+                        .is_ok_and(|age| age >= AGENT_BROWSER_CONFIG_STALE_AGE)
+                })
         {
             continue;
         }
@@ -2427,7 +2462,9 @@ mod tests {
     use super::{
         BrowserRuntimeCreateRequest, BrowserRuntimeManager, BrowserRuntimeStatus,
         BrowserWarmupGate, close_agent_browser_session, close_process_tree,
-        cleanup_agent_browser_config_dir, configure_process_group, create_agent_browser_mcp_config,
+        cleanup_agent_browser_config_dir_at,
+        configure_process_group, create_agent_browser_mcp_config,
+        ensure_agent_browser_mcp_config,
         discover_chrome,
         mark_chrome_profile_clean, normalize_url, page_websocket_url, parse_shortcut,
         reserve_loopback_port, resolve_agent_browser_binary, select_page_websocket_url,
@@ -2639,11 +2676,44 @@ mod tests {
         std::fs::write(&other_json, b"{}").unwrap();
         std::fs::write(&other_text, b"{}").unwrap();
 
-        cleanup_agent_browser_config_dir(&root);
+        cleanup_agent_browser_config_dir_at(
+            &root,
+            std::time::SystemTime::now() + super::AGENT_BROWSER_CONFIG_STALE_AGE,
+        );
 
         assert!(!owned.exists());
         assert!(other_json.exists());
         assert!(other_text.exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn agent_browser_config_cleanup_keeps_recent_owned_files() {
+        let root = std::env::temp_dir().join(format!(
+            "luna-mux-agent-browser-recent-{}",
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let recent = root.join(format!("luna-mux-session-{}.json", Uuid::new_v4()));
+        std::fs::write(&recent, b"{}").unwrap();
+        cleanup_agent_browser_config_dir_at(
+            &root,
+            std::time::SystemTime::now() + Duration::from_secs(6 * 24 * 60 * 60),
+        );
+        assert!(recent.exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn missing_agent_browser_config_is_recreated_on_demand() {
+        let root = std::env::temp_dir().join(format!(
+            "luna-mux-agent-browser-recreate-{}",
+            Uuid::new_v4()
+        ));
+        let path = root.join("session.json");
+        ensure_agent_browser_mcp_config(&path, 43_129).unwrap();
+        let config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(config["cdp"], "43129");
         let _ = std::fs::remove_dir_all(root);
     }
 
