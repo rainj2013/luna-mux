@@ -19,12 +19,13 @@
 
   ; Give the user a chance to close the old app cleanly before any forced
   ; termination.  The prompt is only shown when a matching process was found.
-  IfFileExists "$R4" luna_mux_running_app luna_mux_no_running_app
-    MessageBox MB_ICONEXCLAMATION|MB_OKCANCEL "Luna Mux is still running. Please completely close the old version before installing the new version. Click OK to continue; if it is still running, the installer will terminate it and its child processes. Click Cancel to stop the installation." IDOK luna_mux_continue IDCANCEL luna_mux_cancel
-  luna_mux_cancel:
-    Abort
-  luna_mux_continue:
-  luna_mux_no_running_app:
+  ${If} ${FileExists} "$R4"
+    MessageBox MB_ICONEXCLAMATION|MB_OKCANCEL "Luna Mux is still running. Please completely close the old version before installing the new version. Click OK to continue; if it is still running, the installer will terminate it and its child processes. Click Cancel to stop the installation." /SD IDOK
+    Pop $0
+    ${If} $0 == IDCANCEL
+      Abort
+    ${EndIf}
+  ${EndIf}
 
   !insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
 
@@ -44,7 +45,7 @@
   Pop $R0
   Pop $R1
 
-  IfFileExists "$INSTDIR\agent-browser.exe" 0 luna_mux_sidecar_done
+  ${If} ${FileExists} "$INSTDIR\agent-browser.exe"
     ${If} ${RunningX64}
       ; NSIS is 32-bit, so Sysnative is required to inspect a 64-bit process path.
       StrCpy $R3 "$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
@@ -56,19 +57,20 @@
     Pop $R1
 
     StrCpy $R2 0
-  luna_mux_delete_sidecar:
-    ClearErrors
-    Delete "$INSTDIR\agent-browser.exe"
-    ${If} ${Errors}
-      IntOp $R2 $R2 + 1
-      ${If} $R2 < 8
-        Sleep 250
-        Goto luna_mux_delete_sidecar
+    ${Do}
+      ClearErrors
+      Delete "$INSTDIR\agent-browser.exe"
+      ${IfNot} ${Errors}
+        ${ExitDo}
       ${EndIf}
-      MessageBox MB_ICONSTOP|MB_OK "Luna Mux could not stop its browser automation process. Close Luna Mux and retry the installer." /SD IDOK
-      Abort
-    ${EndIf}
-  luna_mux_sidecar_done:
+      IntOp $R2 $R2 + 1
+      ${If} $R2 >= 8
+        MessageBox MB_ICONSTOP|MB_OK "Luna Mux could not stop its browser automation process. Close Luna Mux and retry the installer." /SD IDOK
+        Abort
+      ${EndIf}
+      Sleep 250
+    ${Loop}
+  ${EndIf}
 !macroend
 
 !macro NSIS_HOOK_PREINSTALL
