@@ -37,14 +37,19 @@ export function AgentNotificationWindow(): React.JSX.Element {
     if (!notification || paused) return
     const timer = window.setTimeout(() => {
       setNotification(null)
-      void notificationWindow.hide()
+      void notificationWindow.hide().catch((error) => console.warn('Failed to hide Agent notification window', error))
     }, 8_000)
     return () => window.clearTimeout(timer)
   }, [notification, paused])
 
+  useEffect(() => {
+    if (notification) return
+    void notificationWindow.hide().catch((error) => console.warn('Failed to hide empty Agent notification window', error))
+  }, [notification])
+
   const hide = (): void => {
     setNotification(null)
-    void notificationWindow.hide()
+    void notificationWindow.hide().catch((error) => console.warn('Failed to hide Agent notification window', error))
   }
 
   const activate = async (): Promise<void> => {

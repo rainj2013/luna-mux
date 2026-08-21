@@ -22,6 +22,8 @@ Luna Mux is a terminal workspace built for coding agents. It maintains a Session
 
 A Session corresponds to one project directory and persists its project root and pane layout.
 
+![Luna Mux terminal workspace](assets/screenshots/terminal.png)
+
 - A Session holds multiple terminal panes with horizontal and vertical splits, draggable ratios, presets, rename, and maximize.
 - Each pane can be a local terminal (macOS zsh/bash, Windows PowerShell or WSL) or an SSH remote terminal.
 - Local and remote terminals share one xterm.js UI, including search, clipboard handling, themes, fonts, backgrounds, and output flow control.
