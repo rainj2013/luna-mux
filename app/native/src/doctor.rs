@@ -148,6 +148,11 @@ pub fn run_report_with_runtime_inputs(
         .collect::<Vec<_>>();
     let runtimes = runtime_inputs
         .iter()
+        // Terminal backends retain exited records briefly so their output can
+        // still be read. They are historical entries, not active terminals,
+        // and must not inflate the diagnostics terminal count or fail the
+        // current health summary.
+        .filter(|runtime| !runtime.status.eq_ignore_ascii_case("exited"))
         .filter(|runtime| {
             filter.is_none_or(|value| {
                 runtime.runtime_id.contains(value)
@@ -207,7 +212,10 @@ fn runtime_report(input: &DoctorRuntimeInput) -> DoctorRuntimeReport {
             false,
         ));
     }
-    if let Some(browser) = input.browser_runtime.as_deref() {
+    // A Browser Resource belongs to the session, but this Runtime may already
+    // have exited. Do not attach the session's current Browser status to a
+    // historical Runtime report.
+    if running && let Some(browser) = input.browser_runtime.as_deref() {
         let lower = browser.to_ascii_lowercase();
         let (status, code, repairable) = if lower.starts_with("running") {
             ("ok", None, false)
@@ -1173,6 +1181,45 @@ mod tests {
         assert_eq!(hook.code.as_deref(), Some("hook_endpoint_missing"));
         let encoded = serde_json::to_string(&report).unwrap();
         assert!(!encoded.contains("secret-token"));
+    }
+
+    #[test]
+    fn exited_runtime_is_not_reported_as_an_active_terminal() {
+        let report = run_report_with_runtime_inputs(
+            None,
+            &[],
+            &[DoctorRuntimeInput {
+                runtime_id: "runtime-exited".into(),
+                target_id: "local:powershell".into(),
+                title: "PowerShell 7".into(),
+                status: "Exited".into(),
+                browser_runtime: Some("Running cdp=51860".into()),
+                integration_enabled: true,
+                ..Default::default()
+            }],
+        );
+
+        assert!(report.ok);
+        assert!(report.runtimes.is_empty());
+    }
+
+    #[test]
+    fn exited_runtime_report_does_not_attach_browser_status() {
+        let report = runtime_report(&DoctorRuntimeInput {
+            runtime_id: "runtime-exited".into(),
+            target_id: "local:powershell".into(),
+            title: "PowerShell 7".into(),
+            status: "Exited".into(),
+            browser_runtime: Some("Running cdp=51860".into()),
+            ..Default::default()
+        });
+
+        assert!(
+            report
+                .checks
+                .iter()
+                .all(|check| check.name != "agent_browser")
+        );
     }
 
     #[test]
