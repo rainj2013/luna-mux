@@ -44,6 +44,7 @@ use crate::{
     ssh_config,
     ssh_terminal_backend::InProcessSshTerminalBackend,
     terminal_backend::TerminalBackend,
+    terminal_input_diagnostics::TerminalInputDiagnostics,
     terminal_runtime_contract::{
         TerminalRuntime, TerminalRuntimeAuthentication, TerminalRuntimeContext,
         TerminalRuntimeCreateRequest, TerminalRuntimeOutputReadResult, TerminalTarget,
@@ -65,6 +66,7 @@ pub struct AppState {
     pub ssh_terminal_backend: Arc<InProcessSshTerminalBackend>,
     pub local_pty_backend: Arc<InProcessLocalPtyTerminalBackend>,
     pub terminal_backend: Arc<CompositeTerminalBackend>,
+    pub terminal_input_diagnostics: Arc<TerminalInputDiagnostics>,
     pub control: Arc<InProcessControlService>,
     pub control_adapter: Arc<AuthenticatedControlAdapter>,
     pub luna_mcp: Arc<LunaMcpService>,
@@ -1453,8 +1455,16 @@ pub async fn terminal_runtime_write(
     state: State<'_, AppState>,
     runtime_id: String,
     data: String,
+    client_input_id: Option<u64>,
 ) -> Result<(), String> {
-    state.terminal_backend.write(&runtime_id, &data).await
+    let diagnostics = state.terminal_input_diagnostics.clone();
+    let backend = state.terminal_backend.clone();
+    let observation = diagnostics.observe("runtime_command", &runtime_id, &data, client_input_id);
+    let result = backend.write(&runtime_id, &data).await;
+    if let Some(observation) = observation {
+        diagnostics.record_observation(observation, if result.is_ok() { "ok" } else { "error" });
+    }
+    result
 }
 
 #[tauri::command]
