@@ -31,6 +31,7 @@ mod shell_quoting;
 mod ssh_config;
 mod ssh_terminal_backend;
 mod terminal_backend;
+mod terminal_input_diagnostics;
 mod terminal_output;
 mod terminal_runtime_contract;
 mod transfers;
@@ -75,6 +76,7 @@ use tauri::{
 };
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use terminal_backend::TerminalBackend;
+use terminal_input_diagnostics::TerminalInputDiagnostics;
 use terminal_runtime_contract::{TerminalRuntimeEvent, TerminalRuntimeStatus};
 use transfers::TransferManager;
 use tunnels::TunnelManager;
@@ -208,6 +210,10 @@ pub fn run() {
             let ssh_terminal_backend =
                 InProcessSshTerminalBackend::new(database.clone(), sessions.clone());
             let local_pty_backend = InProcessLocalPtyTerminalBackend::new();
+            let terminal_input_diagnostics = Arc::new(TerminalInputDiagnostics::new(
+                data_dir.join("logs"),
+            ));
+            local_pty_backend.set_input_diagnostics(terminal_input_diagnostics.clone());
             let terminal_backend = CompositeTerminalBackend::new(
                 ssh_terminal_backend.clone(),
                 local_pty_backend.clone(),
@@ -395,6 +401,7 @@ pub fn run() {
                 ssh_terminal_backend,
                 local_pty_backend,
                 terminal_backend,
+                terminal_input_diagnostics,
                 control,
                 control_adapter,
                 luna_mcp,

@@ -22,6 +22,7 @@ use crate::{
         TerminalBackend, TerminalBackendResult, TerminalRuntimeEventSink,
         standard_terminal_capabilities,
     },
+    terminal_input_diagnostics::TerminalInputDiagnostics,
     terminal_output::{OUTPUT_CAPACITY_BYTES, OutputBuffer},
     terminal_runtime_contract::{
         TerminalCapabilities, TerminalRuntime, TerminalRuntimeCreateRequest, TerminalRuntimeEvent,
@@ -70,6 +71,7 @@ struct RuntimeRecord {
 pub struct InProcessLocalPtyTerminalBackend {
     runtimes: RwLock<HashMap<String, Arc<RuntimeRecord>>>,
     event_sink: Arc<RwLock<Option<TerminalRuntimeEventSink>>>,
+    input_diagnostics: RwLock<Option<Arc<TerminalInputDiagnostics>>>,
 }
 
 impl InProcessLocalPtyTerminalBackend {
@@ -77,7 +79,14 @@ impl InProcessLocalPtyTerminalBackend {
         Arc::new(Self {
             runtimes: RwLock::new(HashMap::new()),
             event_sink: Arc::new(RwLock::new(None)),
+            input_diagnostics: RwLock::new(None),
         })
+    }
+
+    pub fn set_input_diagnostics(&self, diagnostics: Arc<TerminalInputDiagnostics>) {
+        if let Ok(mut slot) = self.input_diagnostics.write() {
+            *slot = Some(diagnostics);
+        }
     }
 
     pub fn is_local_target(target_id: &str) -> bool {
@@ -108,8 +117,9 @@ impl InProcessLocalPtyTerminalBackend {
             #[cfg(windows)]
             {
                 let executable = if request.target_id == POWERSHELL5_TARGET {
-                    windows_powershell5_executable()
-                        .ok_or_else(|| "未找到 Windows PowerShell 5.1（powershell.exe）".to_string())?
+                    windows_powershell5_executable().ok_or_else(|| {
+                        "未找到 Windows PowerShell 5.1（powershell.exe）".to_string()
+                    })?
                 } else {
                     windows_powershell7_executable()
                         .ok_or_else(|| "未找到 PowerShell 7（pwsh.exe）".to_string())?
@@ -780,6 +790,11 @@ impl TerminalBackend for InProcessLocalPtyTerminalBackend {
     }
 
     async fn write(&self, runtime_id: &str, data: &str) -> TerminalBackendResult<()> {
+        let diagnostics = self
+            .input_diagnostics
+            .read()
+            .ok()
+            .and_then(|slot| slot.clone());
         let runtimes = self
             .runtimes
             .read()
@@ -794,10 +809,20 @@ impl TerminalBackend for InProcessLocalPtyTerminalBackend {
         let writer = writer_guard
             .as_mut()
             .ok_or_else(|| "本地 PTY 已退出".to_string())?;
-        writer
+        let result = writer
             .write_all(data.as_bytes())
-            .map_err(|error| error.to_string())?;
-        writer.flush().map_err(|error| error.to_string())
+            .and_then(|_| writer.flush())
+            .map_err(|error| error.to_string());
+        drop(writer_guard);
+        drop(runtimes);
+        if result.is_ok()
+            && let Some(diagnostics) = diagnostics
+            && let Some(observation) =
+                diagnostics.observe("local_pty_write", runtime_id, data, None)
+        {
+            diagnostics.record_observation(observation, "ok");
+        }
+        result
     }
 
     async fn resize(&self, runtime_id: &str, cols: u32, rows: u32) -> TerminalBackendResult<()> {

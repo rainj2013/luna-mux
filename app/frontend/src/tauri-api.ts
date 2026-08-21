@@ -43,6 +43,7 @@ const readClipboardContent = async (): Promise<import('./types').ClipboardConten
 export async function createTauriApi(): Promise<AppApi> {
   const platform = await call<Platform>('platform')
   const currentWindow = getCurrentWindow()
+  let terminalInputSequence = 0
   await getCurrentWebview().onDragDropEvent((event) => {
     if (event.payload.type !== 'drop') return
     const scale = window.devicePixelRatio || 1
@@ -127,7 +128,10 @@ export async function createTauriApi(): Promise<AppApi> {
       list: () => call('terminal_runtimes_list'),
       create: (request) => call('terminal_runtime_create', { request }),
       readOutput: (runtimeId, fromCursor, maxBytes) => call('terminal_runtime_read_output', { runtimeId, fromCursor, maxBytes }),
-      write: (runtimeId, data) => call('terminal_runtime_write', { runtimeId, data }),
+      write: (runtimeId, data) => {
+        terminalInputSequence += 1
+        return call('terminal_runtime_write', { runtimeId, data, clientInputId: terminalInputSequence })
+      },
       resize: (runtimeId, cols, rows) => call('terminal_runtime_resize', { runtimeId, cols, rows }),
       flow: (runtimeId, paused) => call('terminal_runtime_flow', { runtimeId, paused }),
       interrupt: (runtimeId) => call('terminal_runtime_interrupt', { runtimeId }),
