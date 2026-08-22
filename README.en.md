@@ -8,9 +8,9 @@
     <a href="LICENSE"><img src="https://img.shields.io/github/license/rainj2013/luna-mux?style=flat-square" alt="MIT License"></a>
   </p>
   <p>
-    <a href="docs/DEVELOPMENT.md">Development guide</a>
+    <a href="docs/DEVELOPMENT.en.md">Development guide</a>
     ·
-    <a href="docs/LUNA_MUX_DESIGN.md">Design</a>
+    <a href="docs/LUNA_MUX_DESIGN.en.md">Design</a>
   </p>
 </div>
 
@@ -80,7 +80,7 @@ This feature is designed to keep AI assistance available even when no coding age
 
 ## Development
 
-Environment setup, checks, and packaging instructions are in the [development guide](docs/DEVELOPMENT.md).
+Environment setup, checks, and packaging instructions are in the [development guide](docs/DEVELOPMENT.en.md).
 
 ## Acknowledgments
 
