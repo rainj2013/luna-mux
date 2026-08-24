@@ -84,11 +84,13 @@ export async function createTauriApi(): Promise<AppApi> {
     muxSessions: {
       list: () => call('mux_sessions_list'),
       save: (input) => call('mux_sessions_save', { input }),
+      reorder: (ids) => call('mux_sessions_reorder', { ids }),
       remove: (id) => call('mux_sessions_remove', { id })
     },
     muxPanes: {
       list: (muxSessionId) => call('mux_panes_list', { muxSessionId }),
       save: (input) => call('mux_panes_save', { input }),
+      reorder: (muxSessionId, ids, layout) => call('mux_panes_reorder', { muxSessionId, ids, layout }),
       remove: (id) => call('mux_panes_remove', { id })
     },
     browserResources: {

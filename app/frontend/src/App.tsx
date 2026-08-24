@@ -22,6 +22,8 @@ interface MuxSessionDialogState { mode: 'create' | 'rename'; session?: MuxSessio
 type SettingsSection = 'appearance' | 'terminal' | 'diagnostics' | 'ssh' | 'ai'
 type SidebarPointerDrag = { pointerId: number; type: 'bookmark' | 'group'; value: string; startX: number; startY: number; active: boolean }
 type SidebarPointerDrop = { type: 'bookmark'; id: string; group: string; position: 'before' | 'after' } | { type: 'group'; group: string; position: 'before' | 'after' | 'inside' }
+type MuxPointerDrag = { pointerId: number; type: 'session' | 'pane'; id: string; muxSessionId?: string; startX: number; startY: number; active: boolean }
+type MuxPointerDrop = { type: 'session' | 'pane'; id: string; position: 'before' | 'after' }
 type ConfirmationOptions = { title: string; message: string; detail?: string; kind: 'warning' | 'danger'; confirmLabel: string }
 type ConfirmAction = (options: ConfirmationOptions) => Promise<boolean>
 type PendingConfirmation = ConfirmationOptions & { resolve(value: boolean): void }
@@ -154,6 +156,8 @@ export function App(): React.JSX.Element {
   const [bookmarkDrop, setBookmarkDrop] = useState<{ id: string; position: 'before' | 'after' } | null>(null)
   const [draggedGroupName, setDraggedGroupName] = useState<string | null>(null)
   const [groupDrop, setGroupDrop] = useState<{ group: string; position: 'before' | 'after' | 'inside' } | null>(null)
+  const [draggedMuxItem, setDraggedMuxItem] = useState<{ type: 'session' | 'pane'; id: string } | null>(null)
+  const [muxDrop, setMuxDrop] = useState<MuxPointerDrop | null>(null)
   const [sidebarWidth, setSidebarWidth] = useState(defaultSidebarWidth)
   const [terminalSettings, setTerminalSettings] = useState<TerminalSettings>(DEFAULT_TERMINAL_SETTINGS)
   const [terminalBackground, setTerminalBackground] = useState('')
@@ -189,6 +193,9 @@ export function App(): React.JSX.Element {
   const sidebarWidthRef = useRef(defaultSidebarWidth)
   const sidebarPointerDragRef = useRef<SidebarPointerDrag | null>(null)
   const sidebarPointerDropRef = useRef<SidebarPointerDrop | null>(null)
+  const muxPointerDragRef = useRef<MuxPointerDrag | null>(null)
+  const muxPointerDropRef = useRef<MuxPointerDrop | null>(null)
+  const muxReorderInFlightRef = useRef(false)
   const suppressSidebarClickRef = useRef(false)
   const terminalPaneRefs = useRef(new Map<string, TerminalPaneHandle>())
   const browserResourceStartInFlightRef = useRef(new Set<string>())
@@ -696,7 +703,7 @@ export function App(): React.JSX.Element {
   }
 
   const startSidebarPointerDrag = (event: React.PointerEvent, type: 'bookmark' | 'group', value: string): void => {
-    if (event.button !== 0 || query || sidebarPointerDragRef.current) return
+    if (event.button !== 0 || query || sidebarPointerDragRef.current || muxPointerDragRef.current) return
     const drag: SidebarPointerDrag = { pointerId: event.pointerId, type, value, startX: event.clientX, startY: event.clientY, active: false }
     sidebarPointerDragRef.current = drag
     sidebarPointerDropRef.current = null
@@ -769,6 +776,105 @@ export function App(): React.JSX.Element {
         if (drop.type === 'bookmark') void moveBookmark(current.value, drop.group, drop.id, drop.position)
         else void moveBookmark(current.value, drop.group)
       } else if (drop.type === 'group') void reorderBookmarkGroup(current.value, drop.group, drop.position === 'inside' ? 'after' : drop.position)
+    }
+    const up = (upEvent: PointerEvent): void => finish(upEvent, true)
+    const cancel = (cancelEvent: PointerEvent): void => finish(cancelEvent, false)
+    window.addEventListener('pointermove', move, { passive: false })
+    window.addEventListener('pointerup', up)
+    window.addEventListener('pointercancel', cancel)
+  }
+
+  const reorderMuxSession = async (sourceId: string, targetId: string, position: 'before' | 'after'): Promise<void> => {
+    if (sourceId === targetId) return
+    const previousIds = muxSessions.map((session) => session.id)
+    const nextIds = previousIds.filter((id) => id !== sourceId)
+    const targetIndex = nextIds.indexOf(targetId)
+    if (!previousIds.includes(sourceId) || targetIndex < 0) return
+    nextIds.splice(targetIndex + (position === 'after' ? 1 : 0), 0, sourceId)
+    muxReorderInFlightRef.current = true
+    setMuxSessions((current) => reorderMuxSessionsByIds(current, nextIds))
+    try { await window.api.muxSessions.reorder(nextIds) }
+    catch (error) {
+      setMuxSessions((current) => reorderMuxSessionsByIds(current, previousIds))
+      showError(errorMessage(error))
+    } finally { muxReorderInFlightRef.current = false }
+  }
+
+  const reorderMuxPane = async (muxSessionId: string, sourceId: string, targetId: string, position: 'before' | 'after'): Promise<void> => {
+    if (sourceId === targetId) return
+    const session = muxSessions.find((item) => item.id === muxSessionId)
+    const previousPanes = tabs.filter((pane) => pane.muxSessionId === muxSessionId)
+    const source = previousPanes.find((pane) => pane.id === sourceId)
+    const nextPanes = previousPanes.filter((pane) => pane.id !== sourceId)
+    const targetIndex = nextPanes.findIndex((pane) => pane.id === targetId)
+    if (!session || !source || targetIndex < 0) return
+    nextPanes.splice(targetIndex + (position === 'after' ? 1 : 0), 0, source)
+    const orderedPanes = nextPanes.map((pane, sortOrder) => ({ ...pane, sortOrder }))
+    const orderedPaneIds = orderedPanes.map((pane) => pane.id)
+    const currentLayout = layoutFromPanes(session.layout, previousPanes)
+    if (!currentLayout) return
+    const layout = remapLayoutPaneIds(currentLayout, orderedPaneIds)
+    muxReorderInFlightRef.current = true
+    setTabs((current) => reorderTabsByPaneIds(current, muxSessionId, orderedPaneIds))
+    setMuxSessions((current) => current.map((item) => item.id === muxSessionId ? { ...item, layout } : item))
+    try { await window.api.muxPanes.reorder(muxSessionId, orderedPaneIds, layout) }
+    catch (error) {
+      setTabs((current) => reorderTabsByPaneIds(current, muxSessionId, previousPanes.map((pane) => pane.id)))
+      setMuxSessions((current) => current.map((item) => item.id === muxSessionId ? { ...item, layout: session.layout } : item))
+      showError(errorMessage(error))
+    } finally { muxReorderInFlightRef.current = false }
+  }
+
+  const startMuxPointerDrag = (event: React.PointerEvent, type: 'session' | 'pane', id: string, muxSessionId?: string): void => {
+    if (event.button !== 0 || muxPointerDragRef.current || sidebarPointerDragRef.current || muxReorderInFlightRef.current) return
+    event.preventDefault()
+    const drag: MuxPointerDrag = { pointerId: event.pointerId, type, id, muxSessionId, startX: event.clientX, startY: event.clientY, active: false }
+    muxPointerDragRef.current = drag
+    muxPointerDropRef.current = null
+
+    const move = (moveEvent: PointerEvent): void => {
+      const current = muxPointerDragRef.current
+      if (!current || moveEvent.pointerId !== current.pointerId) return
+      if (!current.active && Math.hypot(moveEvent.clientX - current.startX, moveEvent.clientY - current.startY) < 5) return
+      if (!current.active) {
+        current.active = true
+        document.body.classList.add('sidebar-item-dragging')
+        setDraggedMuxItem({ type: current.type, id: current.id })
+      }
+      moveEvent.preventDefault()
+      const target = document.elementFromPoint(moveEvent.clientX, moveEvent.clientY) as HTMLElement | null
+      const element = current.type === 'session'
+        ? target?.closest<HTMLElement>('[data-mux-session-id]')
+        : target?.closest<HTMLElement>('[data-mux-pane-id]')
+      const targetId = current.type === 'session' ? element?.dataset.muxSessionId : element?.dataset.muxPaneId
+      const samePaneSession = current.type !== 'pane' || element?.dataset.paneSessionId === current.muxSessionId
+      if (element && targetId && targetId !== current.id && samePaneSession) {
+        const bounds = element.getBoundingClientRect()
+        const position = moveEvent.clientY < bounds.top + bounds.height / 2 ? 'before' : 'after'
+        const drop: MuxPointerDrop = { type: current.type, id: targetId, position }
+        muxPointerDropRef.current = drop
+        setMuxDrop(drop)
+        return
+      }
+      muxPointerDropRef.current = null
+      setMuxDrop(null)
+    }
+
+    const finish = (finishEvent: PointerEvent, commit: boolean): void => {
+      const current = muxPointerDragRef.current
+      if (!current || finishEvent.pointerId !== current.pointerId) return
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointercancel', cancel)
+      document.body.classList.remove('sidebar-item-dragging')
+      const drop = muxPointerDropRef.current
+      muxPointerDragRef.current = null
+      muxPointerDropRef.current = null
+      setDraggedMuxItem(null)
+      setMuxDrop(null)
+      if (!commit || !current.active || !drop || drop.type !== current.type) return
+      if (current.type === 'session') void reorderMuxSession(current.id, drop.id, drop.position)
+      else if (current.muxSessionId) void reorderMuxPane(current.muxSessionId, current.id, drop.id, drop.position)
     }
     const up = (upEvent: PointerEvent): void => finish(upEvent, true)
     const cancel = (cancelEvent: PointerEvent): void => finish(cancelEvent, false)
@@ -1317,8 +1423,10 @@ export function App(): React.JSX.Element {
             const active = session.id === activeMuxSessionId
             const expanded = !collapsedMuxSessionIds.has(session.id)
             const panes = tabs.filter((pane) => pane.muxSessionId === session.id)
+            const sessionDropClass = muxDrop?.type === 'session' && muxDrop.id === session.id ? `drop-${muxDrop.position}` : ''
             return <div className={`mux-session-item ${active ? 'active' : ''}`} key={session.id}>
-              <div className="mux-session-row" onContextMenu={(event) => openMuxSidebarContextMenu(event, { session })}>
+              <div data-mux-session-id={session.id} className={`mux-session-row ${draggedMuxItem?.type === 'session' && draggedMuxItem.id === session.id ? 'dragging' : ''} ${sessionDropClass}`} onContextMenu={(event) => openMuxSidebarContextMenu(event, { session })}>
+                <span className="mux-drag-handle" title={t('app.dragToReorder')} onPointerDown={(event) => startMuxPointerDrag(event, 'session', session.id)}><GripVertical size={13} /></span>
                 <button className="mux-session-select" aria-expanded={expanded} title={session.rootPath || session.name} onClick={() => selectMuxSession(session.id)}>
                   {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                   <span><strong>{session.name}</strong>{session.rootPath && <small>{session.rootPath}</small>}</span>
@@ -1333,7 +1441,9 @@ export function App(): React.JSX.Element {
                   const tone = agentAttentionByPane.get(pane.id)
                   const attentionLabel = tone === 'error' ? t('app.agentError') : tone === 'warning' ? t('app.agentWaiting') : t('app.unreadAgentEvents')
                   const paneLabel = pane.error ? `${pane.title} - ${t('app.connectionFailed')}: ${pane.error}` : tone ? `${pane.title} - ${attentionLabel}` : pane.title
-                  return <div className={`mux-pane-item ${pane.key === activeKey ? 'active' : ''} ${agent?.unread ? 'unread' : ''} ${tone ? `attention-${tone}` : ''} ${pane.error ? 'has-error' : ''}`} key={pane.key} onContextMenu={(event) => openMuxSidebarContextMenu(event, { pane })}>
+                  const paneDropClass = muxDrop?.type === 'pane' && muxDrop.id === pane.id ? `drop-${muxDrop.position}` : ''
+                  return <div data-mux-pane-id={pane.id} data-pane-session-id={session.id} className={`mux-pane-item ${pane.key === activeKey ? 'active' : ''} ${agent?.unread ? 'unread' : ''} ${tone ? `attention-${tone}` : ''} ${pane.error ? 'has-error' : ''} ${draggedMuxItem?.type === 'pane' && draggedMuxItem.id === pane.id ? 'dragging' : ''} ${paneDropClass}`} key={pane.key} onContextMenu={(event) => openMuxSidebarContextMenu(event, { pane })}>
+                    <span className="mux-drag-handle" title={t('app.dragToReorder')} onPointerDown={(event) => startMuxPointerDrag(event, 'pane', pane.id, session.id)}><GripVertical size={12} /></span>
                     <button className="mux-pane-select" title={paneLabel} onClick={() => { setActiveMuxSessionId(pane.muxSessionId); setActiveKey(pane.key); setWorkspaceView('terminal'); if (agent) markAgentRead(agent.agentId) }} onDoubleClick={() => { if (pane.status !== 'connected') reconnectPane(pane) }}>
                       <span className={`status-dot ${pane.status}`} />
                       {agent ? <Sparkles size={14} /> : pane.bookmarkId ? <Server size={14} /> : <SquareTerminal size={14} />}
@@ -1838,6 +1948,32 @@ function setSplitRatio(layout: MuxSplitNode, path: string, ratio: number, curren
 
 function paneIdsInLayout(layout: MuxSplitNode): string[] {
   return layout.type === 'pane' ? [layout.paneId] : [...paneIdsInLayout(layout.first), ...paneIdsInLayout(layout.second)]
+}
+
+function remapLayoutPaneIds(layout: MuxSplitNode, paneIds: string[]): MuxSplitNode {
+  let index = 0
+  const remap = (node: MuxSplitNode): MuxSplitNode => node.type === 'pane'
+    ? { ...node, paneId: paneIds[index++] ?? node.paneId }
+    : { ...node, first: remap(node.first), second: remap(node.second) }
+  return remap(layout)
+}
+
+function reorderTabsByPaneIds(tabs: WorkspaceTab[], muxSessionId: string, paneIds: string[]): WorkspaceTab[] {
+  const panes = new Map(tabs.filter((pane) => pane.muxSessionId === muxSessionId).map((pane) => [pane.id, pane]))
+  let index = 0
+  return tabs.map((pane) => {
+    if (pane.muxSessionId !== muxSessionId) return pane
+    const paneId = paneIds[index]
+    const next = paneId ? panes.get(paneId) ?? pane : pane
+    return { ...next, sortOrder: index++ }
+  })
+}
+
+function reorderMuxSessionsByIds(sessions: MuxSession[], ids: string[]): MuxSession[] {
+  const byId = new Map(sessions.map((session) => [session.id, session]))
+  const supplied = new Set(ids)
+  return [...ids.flatMap((id) => byId.get(id) ?? []), ...sessions.filter((session) => !supplied.has(session.id))]
+    .map((session, sortOrder) => ({ ...session, sortOrder }))
 }
 
 function balancedLayout(nodes: MuxSplitNode[], direction: 'horizontal' | 'vertical'): MuxSplitNode {

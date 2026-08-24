@@ -1555,6 +1555,11 @@ pub fn mux_sessions_save(
 }
 
 #[tauri::command]
+pub fn mux_sessions_reorder(state: State<AppState>, ids: Vec<String>) -> Result<(), String> {
+    state.db.reorder_mux_sessions(&ids)
+}
+
+#[tauri::command]
 pub fn mux_sessions_remove(state: State<AppState>, id: String) -> Result<(), String> {
     state.db.delete_mux_session(&id)
 }
@@ -1570,6 +1575,16 @@ pub fn mux_panes_list(
 #[tauri::command]
 pub fn mux_panes_save(state: State<AppState>, input: MuxPaneInput) -> Result<MuxPane, String> {
     state.db.save_mux_pane(input)
+}
+
+#[tauri::command]
+pub fn mux_panes_reorder(
+    state: State<AppState>,
+    mux_session_id: String,
+    ids: Vec<String>,
+    layout: MuxSplitNode,
+) -> Result<(), String> {
+    state.db.reorder_mux_panes(&mux_session_id, &ids, &layout)
 }
 
 #[tauri::command]
