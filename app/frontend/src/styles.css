@@ -161,8 +161,14 @@ body.sidebar-item-dragging, body.sidebar-item-dragging * { cursor: grabbing !imp
 .mux-session-list { flex: 1 1 auto; min-height: 76px; padding: 5px 7px 8px; overflow: auto; }
 .mux-session-item { margin: 1px 0; border-radius: 5px; }
 .mux-session-item.active { background: var(--selection-bg); }
-.mux-session-row { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; border-radius: 5px; }
+.mux-session-row { position: relative; min-width: 0; display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; border-radius: 5px; }
 .mux-session-row:hover { background: var(--surface-hover); }
+.mux-session-row.dragging, .mux-pane-item.dragging { opacity: .42; }
+.mux-session-row.drop-before::before, .mux-session-row.drop-after::after, .mux-pane-item.drop-before::before, .mux-pane-item.drop-after::after { content: ""; position: absolute; z-index: 2; right: 4px; left: 4px; height: 2px; border-radius: 1px; background: var(--accent); pointer-events: none; }
+.mux-session-row.drop-before::before, .mux-pane-item.drop-before::before { top: -2px; }
+.mux-session-row.drop-after::after, .mux-pane-item.drop-after::after { bottom: -2px; }
+.mux-drag-handle { width: 16px; height: 30px; padding: 0; display: grid; place-items: center; color: var(--text-subtle); border: 0; background: transparent; cursor: grab; touch-action: none; }
+.mux-session-row:hover > .mux-drag-handle, .mux-pane-item:hover > .mux-drag-handle { color: var(--text-muted); }
 .mux-session-select { min-width: 0; min-height: 40px; padding: 5px 4px 5px 7px; display: grid; grid-template-columns: 15px minmax(0, 1fr); align-items: center; gap: 5px; color: inherit; text-align: left; border: 0; border-radius: 5px; background: transparent; cursor: pointer; }
 .mux-session-select:hover { background: var(--surface-hover); }
 .mux-session-select > span { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
@@ -172,7 +178,7 @@ body.sidebar-item-dragging, body.sidebar-item-dragging * { cursor: grabbing !imp
 .mux-session-actions { height: 30px; padding-right: 4px; display: flex; align-items: center; gap: 1px; color: var(--text-subtle); }
 .mux-session-actions .icon-button { width: 25px; height: 25px; }
 .mux-pane-list { padding: 0 4px 5px 22px; }
-.mux-pane-item { min-height: 31px; display: grid; grid-template-columns: minmax(0, 1fr) 25px; align-items: center; border-radius: 4px; }
+.mux-pane-item { position: relative; min-height: 31px; display: grid; grid-template-columns: 16px minmax(0, 1fr) 25px; align-items: center; border-radius: 4px; }
 .mux-pane-item.has-error { min-height: 45px; }
 .mux-pane-item:hover { background: var(--surface-hover); }
 .mux-pane-item.active { color: var(--text-strong); background: var(--selection-bg); }

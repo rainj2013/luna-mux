@@ -703,11 +703,13 @@ export interface AppApi {
   muxSessions: {
     list(): Promise<MuxSession[]>
     save(input: MuxSessionInput): Promise<MuxSession>
+    reorder(ids: string[]): Promise<void>
     remove(id: string): Promise<void>
   }
   muxPanes: {
     list(muxSessionId?: string): Promise<MuxPane[]>
     save(input: MuxPaneInput): Promise<MuxPane>
+    reorder(muxSessionId: string, ids: string[], layout: MuxSplitNode): Promise<void>
     remove(id: string): Promise<void>
   }
   browserResources: {

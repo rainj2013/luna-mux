@@ -56,6 +56,16 @@ fn prune_mux_layout(
     }
 }
 
+fn mux_layout_pane_ids<'a>(node: &'a MuxSplitNode, ids: &mut Vec<&'a str>) {
+    match node {
+        MuxSplitNode::Pane { pane_id } => ids.push(pane_id),
+        MuxSplitNode::Split { first, second, .. } => {
+            mux_layout_pane_ids(first, ids);
+            mux_layout_pane_ids(second, ids);
+        }
+    }
+}
+
 pub struct Database {
     connection: Mutex<Connection>,
     credential_service: String,
@@ -622,6 +632,28 @@ impl Database {
         Ok(session)
     }
 
+    pub fn reorder_mux_sessions(&self, ids: &[String]) -> Result<(), String> {
+        let existing = self.list_mux_sessions()?;
+        let expected = existing
+            .iter()
+            .map(|session| session.id.as_str())
+            .collect::<HashSet<_>>();
+        let supplied = ids.iter().map(String::as_str).collect::<HashSet<_>>();
+        if ids.len() != existing.len() || supplied != expected {
+            return Err("Session 排序数据已过期，请刷新后重试".into());
+        }
+        self.with_conn(|db| {
+            let transaction = db.transaction()?;
+            for (index, id) in ids.iter().enumerate() {
+                transaction.execute(
+                    "UPDATE mux_sessions SET sortOrder=? WHERE id=?",
+                    params![index as i64, id],
+                )?;
+            }
+            transaction.commit()
+        })
+    }
+
     pub fn delete_mux_session(&self, id: &str) -> Result<(), String> {
         self.with_conn(|db| {
             let transaction = db.transaction()?;
@@ -892,6 +924,43 @@ impl Database {
         };
         self.with_conn(|db| db.execute("INSERT INTO mux_panes(id,muxSessionId,kind,title,targetId,bookmarkId,cwd,command,launchProfileId,sortOrder,createdAt,updatedAt) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET muxSessionId=excluded.muxSessionId,kind=excluded.kind,title=excluded.title,targetId=excluded.targetId,bookmarkId=excluded.bookmarkId,cwd=excluded.cwd,command=excluded.command,launchProfileId=excluded.launchProfileId,updatedAt=excluded.updatedAt", params![pane.id,pane.mux_session_id,pane.kind.as_str(),pane.title,pane.target_id,pane.bookmark_id,pane.cwd,pane.command,pane.launch_profile_id,pane.sort_order,pane.created_at,pane.updated_at]).map(|_| ()))?;
         Ok(pane)
+    }
+
+    pub fn reorder_mux_panes(
+        &self,
+        mux_session_id: &str,
+        ids: &[String],
+        layout: &MuxSplitNode,
+    ) -> Result<(), String> {
+        let existing = self.list_mux_panes(Some(mux_session_id))?;
+        let expected = existing
+            .iter()
+            .map(|pane| pane.id.as_str())
+            .collect::<HashSet<_>>();
+        let supplied = ids.iter().map(String::as_str).collect::<HashSet<_>>();
+        if ids.len() != existing.len() || supplied != expected {
+            return Err("Pane 排序数据已过期，请刷新后重试".into());
+        }
+        let mut layout_ids = Vec::new();
+        mux_layout_pane_ids(layout, &mut layout_ids);
+        if layout_ids != ids.iter().map(String::as_str).collect::<Vec<_>>() {
+            return Err("Pane 排序与布局不一致，请刷新后重试".into());
+        }
+        let layout_json = serde_json::to_string(layout).map_err(|error| error.to_string())?;
+        self.with_conn(|db| {
+            let transaction = db.transaction()?;
+            for (index, id) in ids.iter().enumerate() {
+                transaction.execute(
+                    "UPDATE mux_panes SET sortOrder=? WHERE id=? AND muxSessionId=?",
+                    params![index as i64, id, mux_session_id],
+                )?;
+            }
+            transaction.execute(
+                "UPDATE mux_sessions SET layoutJson=?, updatedAt=? WHERE id=?",
+                params![layout_json, Utc::now().to_rfc3339(), mux_session_id],
+            )?;
+            transaction.commit()
+        })
     }
 
     pub fn delete_mux_pane(&self, id: &str) -> Result<(), String> {
@@ -1787,6 +1856,54 @@ mod tests {
         assert_eq!(panes.len(), 2);
         assert_eq!(panes[0].id, local.id);
         assert_eq!(panes[1].id, ssh.id);
+        let reordered_layout = MuxSplitNode::Split {
+            direction: MuxSplitDirection::Horizontal,
+            ratio: 0.5,
+            first: Box::new(MuxSplitNode::Pane {
+                pane_id: ssh.id.clone(),
+            }),
+            second: Box::new(MuxSplitNode::Pane {
+                pane_id: local.id.clone(),
+            }),
+        };
+        db.reorder_mux_panes(
+            &session.id,
+            &[ssh.id.clone(), local.id.clone()],
+            &reordered_layout,
+        )
+        .expect("reorder mux panes");
+        let panes = db
+            .list_mux_panes(Some(&session.id))
+            .expect("list reordered mux panes");
+        assert_eq!(panes[0].id, ssh.id);
+        assert_eq!(panes[1].id, local.id);
+        assert_eq!(
+            db.list_mux_sessions().expect("list updated session")[0].layout,
+            Some(reordered_layout.clone())
+        );
+        assert!(
+            db.reorder_mux_panes(
+                &session.id,
+                &[local.id.clone(), ssh.id.clone()],
+                &reordered_layout,
+            )
+            .is_err()
+        );
+
+        let second_session = db
+            .save_mux_session(MuxSessionInput {
+                id: None,
+                name: "Project Beta".into(),
+                root_path: String::new(),
+                layout: None,
+            })
+            .expect("save second mux session");
+        db.reorder_mux_sessions(&[second_session.id.clone(), session.id.clone()])
+            .expect("reorder mux sessions");
+        let sessions = db.list_mux_sessions().expect("list reordered sessions");
+        assert_eq!(sessions[0].id, second_session.id);
+        assert_eq!(sessions[1].id, session.id);
+        assert!(db.reorder_mux_sessions(&[session.id.clone()]).is_err());
         let browser = db
             .list_browser_resources(Some(&session.id))
             .expect("list implicit browser resources");
@@ -1802,6 +1919,8 @@ mod tests {
         db.delete_mux_session(&session.id)
             .expect("delete mux session");
         assert!(db.list_mux_panes(None).expect("list panes").is_empty());
+        db.delete_mux_session(&second_session.id)
+            .expect("delete second mux session");
 
         drop(db);
         let _ = std::fs::remove_file(&path);
