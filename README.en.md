@@ -8,9 +8,9 @@
     <a href="LICENSE"><img src="https://img.shields.io/github/license/rainj2013/luna-mux?style=flat-square" alt="MIT License"></a>
   </p>
   <p>
-    <a href="docs/DEVELOPMENT.md">Development guide</a>
+    <a href="docs/DEVELOPMENT.en.md">Development guide</a>
     ·
-    <a href="docs/LUNA_MUX_DESIGN.md">Design</a>
+    <a href="docs/LUNA_MUX_DESIGN.en.md">Design</a>
   </p>
 </div>
 
@@ -80,7 +80,21 @@ This feature is designed to keep AI assistance available even when no coding age
 
 ## Development
 
-Environment setup, checks, and packaging instructions are in the [development guide](docs/DEVELOPMENT.md).
+Environment setup, checks, and packaging instructions are in the [development guide](docs/DEVELOPMENT.en.md).
+
+## Acknowledgments
+
+Luna Mux is built on many outstanding open-source projects. Thanks to their authors and maintainers:
+
+- [Tauri](https://tauri.app) — desktop application framework
+- [agent-browser](https://github.com/vercel-labs/agent-browser) — browser automation MCP for agents
+- [React](https://react.dev) — user interface
+- [xterm.js](https://xtermjs.org) — terminal emulator
+- [russh](https://github.com/Eugeny/russh) — Rust SSH client & server library, powering the SSH/SFTP capabilities
+- [rmcp](https://github.com/modelcontextprotocol/rust-sdk) — official Rust SDK for the Model Context Protocol
+- [tokio](https://tokio.rs) — async runtime
+
+And thanks to the authors of every other open-source library this project uses directly or indirectly.
 
 ## License
 

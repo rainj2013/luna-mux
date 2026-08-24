@@ -387,11 +387,62 @@ impl AgentHookService {
         adapter_id: Option<&str>,
     ) -> Result<TerminalManagedAgentContext, String> {
         let identity = format!("{token}:process:{process_id}");
+        self.resolve_bootstrap_agent(identity, context, adapter_id)
+    }
+
+    /// Returns every agent bound to a token, regardless of which lookup key
+    /// (bare token, session, or process) currently aliases it.
+    fn agents_for_token(&self, token: &str) -> Vec<TerminalManagedAgentContext> {
+        self.agents
+            .read()
+            .map(|agents| {
+                agents
+                    .iter()
+                    .filter(|(key, _)| key.as_str() == token || key.starts_with(&format!("{token}:")))
+                    .map(|(_, context)| context.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Removes an agent and every alias (token/session/process keys), its
+    /// session bindings, and its structured-hook marker. This is the single
+    /// cleanup path so an exit can never leave an orphan key behind.
+    fn remove_agent_by_id(&self, agent_id: &str) {
+        if let Ok(mut agents) = self.agents.write() {
+            agents.retain(|_, context| context.agent_id != agent_id);
+        }
+        if let Ok(mut sessions) = self.agent_sessions.write() {
+            sessions.retain(|_, id| id.as_str() != agent_id);
+        }
+        if let Ok(mut structured) = self.structured_agents.lock() {
+            structured.remove(agent_id);
+        }
+    }
+
+    /// Creates or resolves the managed agent for a bootstrap identity. A single
+    /// terminal runtime owns at most one agent: when a previous run left a stale
+    /// binding (for example after an interrupted exit), the existing agent is
+    /// reused instead of minting a second `agent_id` for the same pane.
+    fn resolve_bootstrap_agent(
+        &self,
+        identity: String,
+        context: &TerminalRuntimeContext,
+        adapter_id: Option<&str>,
+    ) -> Result<TerminalManagedAgentContext, String> {
         let mut agents = self
             .agents
             .write()
             .map_err(|_| "Agent Hook 授权锁已损坏".to_string())?;
         if let Some(agent) = agents.get(&identity).cloned() {
+            return Ok(agent);
+        }
+        if let Some(agent) = agents
+            .values()
+            .find(|candidate| candidate.runtime_id == context.runtime_id)
+            .cloned()
+        {
+            agents.insert(identity, agent.clone());
             return Ok(agent);
         }
         let agent = bootstrap_agent_context(context, adapter_id);
@@ -877,11 +928,12 @@ async fn receive_hook(
                 }
             }
             if event.hook_event_name == "SessionEnd" {
+                // A SessionEnd only ends the current session. The process binding
+                // and the structured-hook marker persist until AgentProcessExit so
+                // a still-running agent is never reclassified as a terminal
+                // heuristic (which would surface a second, duplicate agent).
                 if let Ok(mut agents) = service.agents.write() {
                     agents.remove(&token_key);
-                }
-                if let Ok(mut structured) = service.structured_agents.lock() {
-                    structured.remove(&context.agent_id);
                 }
                 if let Some(session_id) = event.agent_session_id.as_deref() {
                     if let Ok(mut sessions) = service.agent_sessions.write() {
@@ -890,16 +942,17 @@ async fn receive_hook(
                 }
             }
             if event.hook_event_name == "AgentProcessExit" {
-                if let Ok(mut agents) = service.agents.write() {
-                    agents.retain(|_, value| value.agent_id != context.agent_id);
+                service.remove_agent_by_id(&context.agent_id);
+                // A bootstrap token belongs to the runtime, not the agent process:
+                // it must survive so the pane can reconnect after a restart. Only
+                // managed-agent authorizations are tied to the process lifetime.
+                let is_bootstrap = service
+                    .bootstrap_tokens
+                    .read()
+                    .is_ok_and(|tokens| tokens.contains_key(&token));
+                if !is_bootstrap {
+                    service.remove_persisted_authorization(&token);
                 }
-                if let Ok(mut sessions) = service.agent_sessions.write() {
-                    sessions.retain(|_, agent_id| agent_id != &context.agent_id);
-                }
-                if let Ok(mut structured) = service.structured_agents.lock() {
-                    structured.remove(&context.agent_id);
-                }
-                service.remove_persisted_authorization(&token);
             }
             event
         }
@@ -940,6 +993,16 @@ async fn receive_hook(
                     hook_response.unwrap_or_else(|| json!({ "sequence": event.sequence })),
                 ));
             }
+            if hook_event_name == Some("AgentProcessExit") {
+                for agent in service.agents_for_token(&token) {
+                    service.record(
+                        agent.clone(),
+                        json!({ "hook_event_name": "AgentProcessExit" }),
+                    );
+                    service.remove_agent_by_id(&agent.agent_id);
+                }
+                return Ok(Json(json!({ "ok": true })));
+            }
             if !matches!(hook_event_name, Some("AgentProcessStart" | "SessionStart")) {
                 return Err((
                     StatusCode::UNAUTHORIZED,
@@ -970,27 +1033,14 @@ async fn receive_hook(
                     Some(agent_session_id.to_string()),
                 )
             };
-            if service
-                .agents
-                .read()
-                .is_ok_and(|agents| agents.contains_key(&identity.0))
-            {
-                return Err((
-                    StatusCode::CONFLICT,
-                    Json(json!({ "error": "agentAlreadyRegistered" })),
-                ));
-            }
-            let agent = bootstrap_agent_context(&context, adapter_id);
-            service
-                .agents
-                .write()
+            let agent = service
+                .resolve_bootstrap_agent(identity.0.clone(), &context, adapter_id)
                 .map_err(|_| {
                     (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(json!({ "error": "agentAuthUnavailable" })),
                     )
-                })?
-                .insert(identity.0, agent.clone());
+                })?;
             if let Some(agent_session_id) = identity.1
                 && let Ok(mut sessions) = service.agent_sessions.write()
             {
@@ -1594,6 +1644,84 @@ mod tests {
                 "hook_event_name": "AgentProcessExit",
                 "luna_mux_process_id": "process-1"
             }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(exit.status(), StatusCode::OK);
+        assert!(service.snapshots().is_empty());
+    }
+
+    #[tokio::test]
+    async fn repeated_agent_process_start_reuses_one_runtime_agent() {
+        let service = AgentHookService::new();
+        service.start().unwrap();
+        let token = service
+            .issue_bootstrap_token(TerminalRuntimeContext {
+                mux_session_id: "session-1".into(),
+                pane_id: "pane-1".into(),
+                runtime_id: "runtime-1".into(),
+            })
+            .unwrap();
+        let client = reqwest::Client::new();
+        let endpoint = service.endpoint().unwrap();
+
+        let first = client
+            .post(&endpoint)
+            .bearer_auth(&token)
+            .json(&json!({ "hook_event_name": "AgentProcessStart", "luna_mux_process_id": "process-1" }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+        assert_eq!(service.snapshots().len(), 1);
+        let agent_id = service.snapshots()[0].context.agent_id.clone();
+
+        // A second run with a new process id must reuse the pane's existing agent
+        // instead of minting a duplicate for the same runtime.
+        let second = client
+            .post(&endpoint)
+            .bearer_auth(&token)
+            .json(&json!({ "hook_event_name": "AgentProcessStart", "luna_mux_process_id": "process-2" }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(second.status(), StatusCode::OK);
+        let snapshots = service.snapshots();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].context.agent_id, agent_id);
+    }
+
+    #[tokio::test]
+    async fn bootstrap_exit_cleans_up_when_process_id_does_not_match() {
+        let service = AgentHookService::new();
+        service.start().unwrap();
+        let token = service
+            .issue_bootstrap_token(TerminalRuntimeContext {
+                mux_session_id: "session-1".into(),
+                pane_id: "pane-1".into(),
+                runtime_id: "runtime-1".into(),
+            })
+            .unwrap();
+        let client = reqwest::Client::new();
+        let endpoint = service.endpoint().unwrap();
+
+        let start = client
+            .post(&endpoint)
+            .bearer_auth(&token)
+            .json(&json!({ "hook_event_name": "AgentProcessStart", "luna_mux_process_id": "process-1" }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(start.status(), StatusCode::OK);
+        assert_eq!(service.snapshots().len(), 1);
+
+        // The exit reports a different process id, so it cannot authenticate via
+        // the process key and falls through to the bootstrap branch. It must still
+        // remove the agent rather than being rejected with 401.
+        let exit = client
+            .post(&endpoint)
+            .bearer_auth(&token)
+            .json(&json!({ "hook_event_name": "AgentProcessExit", "luna_mux_process_id": "process-2" }))
             .send()
             .await
             .unwrap();

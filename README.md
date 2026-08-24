@@ -16,18 +16,18 @@
 
 <div align="center"><a href="README.en.md">English</a> · 简体中文</div>
 
-Luna Mux 是一个面向 Coding Agent 的终端工作台。它以项目目录为单位维护 Session，一个 Session 里可以有多个终端窗格，每个窗格既可以是本地终端，也可以是 SSH 远程终端。在这些终端里启动 Codex、Claude Code 等 Agent 时，Luna Mux 会自动注入 Hook 和 MCP 来扩展 Agent 的能力：Hook 负责状态监控，Luna Mux MCP 让 Agent 控制 Luna Mux 自身的各个功能，agent-browser MCP 让 Agent 操作浏览器。此外还内置了移植自 Luna Remote 的完整 SSH 与 SFTP 能力。
+Luna Mux 是一个面向 Coding Agent 的终端工作台。它以项目目录为单位维护会话，一个会话里可以有多个终端窗格，每个窗格既可以是本地终端，也可以是 SSH 远程终端。在这些终端里启动 Codex、Claude Code 等 Agent 时，Luna Mux 会自动注入 Hook 和 MCP 来扩展 Agent 的能力：Hook 负责状态监控，Luna Mux MCP 让 Agent 控制 Luna Mux 自身的各个功能，agent-browser MCP 让 Agent 操作浏览器。此外还内置了移植自 Luna Remote 的完整 SSH 与 SFTP 能力。
 
-## 项目 Session 与终端窗格
+## 项目会话与终端窗格
 
-一个 Session 对应一个项目目录，保存项目根目录和窗格布局。
+一个会话对应一个项目目录，保存项目根目录和窗格布局。
 
 ![Luna Mux 终端工作区](assets/screenshots/terminal.png)
 
-- 一个 Session 里有多个终端窗格，支持横向/纵向分割、拖动比例、布局预设、重命名和最大化。
+- 一个会话里有多个终端窗格，支持横向/纵向分割、拖动比例、布局预设、重命名和最大化。
 - 每个窗格既可以是本地终端（macOS 的 zsh/bash、Windows 的 PowerShell 或 WSL），也可以是 SSH 远程终端。
 - 本地和远程终端共用 xterm.js 界面，包括搜索、复制粘贴、主题、字体、背景和输出流控。
-- 应用重启后恢复 Session 与布局，但不擅自重连服务器或重启进程。
+- 应用重启后恢复会话与布局，但不擅自重连服务器或重启进程。
 
 ## 终端里的 Agent
 
@@ -42,8 +42,8 @@ Luna Mux 是一个面向 Coding Agent 的终端工作台。它以项目目录为
 
 ### 控制 Luna Mux（Luna Mux MCP）
 
-- Luna Mux MCP 向 Agent 开放 Session、窗格、终端、Agent、连接、设置、诊断、传输和隧道等控制能力。
-- Agent 可以发现 Session、窗格、Terminal Runtime 和其他受管 Agent。
+- Luna Mux MCP 向 Agent 开放会话、窗格、终端、Agent、连接、设置、诊断、传输和隧道等控制能力。
+- Agent 可以发现会话、窗格、Terminal Runtime 和其他受管 Agent。
 - Agent 可以创建窗格、修改布局、读取有界终端输出、写入终端输入。
 - Agent 可以查询 Agent 状态、投递任务、发送中断。
 - Agent 可以读取安全的连接摘要、修改主题和终端外观、运行内置诊断。
@@ -52,7 +52,7 @@ Luna Mux 是一个面向 Coding Agent 的终端工作台。它以项目目录为
 
 ### 浏览器自动化（agent-browser MCP）
 
-Agent 可以自主操作浏览器完成网页任务：打开页面、点击、填表、读取快照、截图、检查控制台和网络。它通过 [`agent-browser`](https://github.com/vercel-labs/agent-browser) MCP 驱动一个 Session 专属的隔离 Chrome，浏览器以独立窗口运行，用户随时可以接管。
+Agent 可以自主操作浏览器完成网页任务：打开页面、点击、填表、读取快照、截图、检查控制台和网络。它通过 [`agent-browser`](https://github.com/vercel-labs/agent-browser) MCP 驱动一个会话专属的隔离 Chrome，浏览器以独立窗口运行，用户随时可以接管。
 
 - 支持快照、交互、等待、标签页、截图、控制台、网络请求和 HAR。
 - 首次使用时按需启动 Chrome，后续复用同一 Runtime 和页面。
@@ -81,6 +81,20 @@ AI 命令助手与 Codex、Claude Code 等 Agent 相互独立，使用用户配�
 ## 开发
 
 环境搭建、检查命令和打包发布说明见 [开发文档](docs/DEVELOPMENT.md)。
+
+## 致谢
+
+Luna Mux 建立在众多优秀的开源项目之上，在此向它们的作者和维护者表示感谢：
+
+- [Tauri](https://tauri.app) — 桌面应用框架
+- [agent-browser](https://github.com/vercel-labs/agent-browser) — 面向 Agent 的浏览器自动化 MCP
+- [React](https://react.dev) — 用户界面
+- [xterm.js](https://xtermjs.org) — 终端模拟器
+- [russh](https://github.com/Eugeny/russh) — Rust SSH 客户端与服务器库，支撑 SSH/SFTP 能力
+- [rmcp](https://github.com/modelcontextprotocol/rust-sdk) — Model Context Protocol 官方 Rust SDK
+- [tokio](https://tokio.rs) — 异步运行时
+
+同时感谢所有在本项目中直接或间接使用的其他开源库的作者。
 
 ## 许可证
 
