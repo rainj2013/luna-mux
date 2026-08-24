@@ -29,6 +29,37 @@ const HOOK_EVENTS: [&str; 9] = [
     "Stop",
 ];
 
+struct ResolvedCodexCommand {
+    executable: PathBuf,
+    #[cfg(windows)]
+    managed_package: Option<ManagedCodexPackage>,
+}
+
+#[cfg(windows)]
+struct ManagedCodexPackage {
+    root: PathBuf,
+    manager: CodexPackageManager,
+}
+
+#[cfg(windows)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CodexPackageManager {
+    Npm,
+    Pnpm,
+    Bun,
+}
+
+#[cfg(windows)]
+impl CodexPackageManager {
+    fn environment_variable(self) -> &'static str {
+        match self {
+            Self::Npm => "CODEX_MANAGED_BY_NPM",
+            Self::Pnpm => "CODEX_MANAGED_BY_PNPM",
+            Self::Bun => "CODEX_MANAGED_BY_BUN",
+        }
+    }
+}
+
 pub(crate) const LUNA_MUX_BROWSER_INSTRUCTIONS: &str = r#"Luna Mux tool routing contract (apply these routing rules before choosing any tool):
 - First classify each requested action into one of three domains. A request may contain actions from more than one domain; route each action separately.
 - Luna Mux application control: use the luna_mux MCP for the Luna Mux app's own theme or terminal appearance; saved connection summaries and terminal targets; Mux Sessions; 窗格/Pane creation, metadata, split, and layout; Luna-owned terminal Runtimes including another Pane's input/output/size/flow/lifecycle; managed Agent status/task/interrupt; SFTP transfers; and SSH tunnels/port forwards. Product-UI nouns such as 当前会话, 侧边栏里的连接, 终端窗格, Agent 面板, 传输队列, and 隧道 refer to this domain.
@@ -79,7 +110,9 @@ fn install_with_paths(
     executable: &Path,
     resolved_command: Option<&Path>,
 ) -> Result<Option<PathBuf>, String> {
-    let Some(real) = resolved_command.map(normalize_codex_executable) else {
+    // The native binary avoids cmd.exe's command-length limit. Restore the
+    // package launcher metadata so Codex can still offer interactive updates.
+    let Some(real) = resolved_command.map(resolve_codex_command) else {
         return Ok(None);
     };
     let root = std::env::temp_dir()
@@ -148,10 +181,11 @@ fn install_with_paths(
             .join(",");
         let forwarder = executable.to_string_lossy().replace('\'', "''");
         let quote_fn = powershell_native_arg_quote_script();
-        let process_invocation = powershell_command_invocation(
-            &real,
+        let process_invocation = powershell_command_invocation_with_managed_package(
+            &real.executable,
             "lunaMuxCodexArguments",
             "lunaMuxCodexExitCode",
+            real.managed_package.as_ref(),
         );
         let ps = format!(
             "{quote_fn}$overrides = @({overrides})\r\n\
@@ -230,8 +264,8 @@ fi\n\
 luna_mux_codex_exit_code=$?\n\
 printf '%s' '{{\"hook_event_name\":\"AgentProcessExit\"}}' | {forwarder} hook >/dev/null 2>&1 || true\n\
 exit \"$luna_mux_codex_exit_code\"\n",
-            shell_quote(&real.to_string_lossy()),
-            shell_quote(&real.to_string_lossy())
+            shell_quote(&real.executable.to_string_lossy()),
+            shell_quote(&real.executable.to_string_lossy())
         );
         let path = root.join("codex");
         fs::write(&path, script).map_err(|error| error.to_string())?;
@@ -532,6 +566,49 @@ pub(crate) fn powershell_command_invocation(
     arguments_variable: &str,
     exit_code_variable: &str,
 ) -> String {
+    powershell_command_invocation_with_environment(
+        executable,
+        arguments_variable,
+        exit_code_variable,
+        "",
+    )
+}
+
+#[cfg(windows)]
+fn powershell_command_invocation_with_managed_package(
+    executable: &Path,
+    arguments_variable: &str,
+    exit_code_variable: &str,
+    managed_package: Option<&ManagedCodexPackage>,
+) -> String {
+    let environment = managed_package
+        .map(|package| {
+            let root = package.root.to_string_lossy().replace('\'', "''");
+            let manager = package.manager.environment_variable();
+            format!(
+                "  $null = $psi.EnvironmentVariables.Remove('CODEX_MANAGED_BY_NPM')\r\n\
+  $null = $psi.EnvironmentVariables.Remove('CODEX_MANAGED_BY_PNPM')\r\n\
+  $null = $psi.EnvironmentVariables.Remove('CODEX_MANAGED_BY_BUN')\r\n\
+  $psi.EnvironmentVariables['CODEX_MANAGED_PACKAGE_ROOT'] = '{root}'\r\n\
+  $psi.EnvironmentVariables['{manager}'] = '1'\r\n"
+            )
+        })
+        .unwrap_or_default();
+    powershell_command_invocation_with_environment(
+        executable,
+        arguments_variable,
+        exit_code_variable,
+        &environment,
+    )
+}
+
+#[cfg(any(windows, test))]
+fn powershell_command_invocation_with_environment(
+    executable: &Path,
+    arguments_variable: &str,
+    exit_code_variable: &str,
+    environment: &str,
+) -> String {
     let executable = executable.to_string_lossy().replace('\'', "''");
     let native = Path::new(executable.as_str())
         .extension()
@@ -548,6 +625,7 @@ pub(crate) fn powershell_command_invocation(
   $psi = New-Object System.Diagnostics.ProcessStartInfo\r\n\
   $psi.FileName = '{executable}'\r\n\
   $psi.UseShellExecute = $false\r\n\
+{environment}\
   $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden\r\n\
   $psi.Arguments = $lunaMuxCommandLine\r\n\
   $process = [System.Diagnostics.Process]::Start($psi)\r\n\
@@ -562,47 +640,132 @@ pub(crate) fn powershell_command_invocation(
     }
 }
 
-fn normalize_codex_executable(path: &Path) -> PathBuf {
+fn resolve_codex_command(path: &Path) -> ResolvedCodexCommand {
     #[cfg(windows)]
+    if let Some((executable, managed_package)) = resolve_windows_managed_codex_launcher(path) {
+        return ResolvedCodexCommand {
+            executable,
+            managed_package: Some(managed_package),
+        };
+    }
+
+    ResolvedCodexCommand {
+        executable: path.to_path_buf(),
+        #[cfg(windows)]
+        managed_package: None,
+    }
+}
+
+#[cfg(windows)]
+fn resolve_windows_managed_codex_launcher(path: &Path) -> Option<(PathBuf, ManagedCodexPackage)> {
+    if !path
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("cmd"))
     {
-        if path
-            .extension()
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("cmd"))
-        {
-            let (package, target) = if cfg!(target_arch = "aarch64") {
-                ("codex-win32-arm64", "aarch64-pc-windows-msvc")
-            } else {
-                ("codex-win32-x64", "x86_64-pc-windows-msvc")
-            };
-            let launcher = canonicalize_windows_path(path);
-            if let Some(bin) = launcher.parent()
-                && let Some(native) = [
-                    bin.join("node_modules")
-                        .join("@openai")
-                        .join("codex")
-                        .join("node_modules")
-                        .join("@openai")
-                        .join(package)
-                        .join("vendor")
-                        .join(target)
-                        .join("bin")
-                        .join("codex.exe"),
-                    bin.join("node_modules")
-                        .join("@openai")
-                        .join("codex")
-                        .join("vendor")
-                        .join(target)
-                        .join("bin")
-                        .join("codex.exe"),
-                ]
-                .into_iter()
-                .find(|candidate| candidate.is_file())
-            {
-                return native;
+        return None;
+    }
+
+    let launcher = canonicalize_windows_path(path);
+    let bin = launcher.parent()?;
+    let mut package_roots = vec![bin
+        .join("node_modules")
+        .join("@openai")
+        .join("codex")];
+    if let Some(parent) = bin.parent() {
+        package_roots.push(
+            parent
+                .join("install")
+                .join("global")
+                .join("node_modules")
+                .join("@openai")
+                .join("codex"),
+        );
+    }
+    let (package, target) = if cfg!(target_arch = "aarch64") {
+        ("codex-win32-arm64", "aarch64-pc-windows-msvc")
+    } else {
+        ("codex-win32-x64", "x86_64-pc-windows-msvc")
+    };
+    for package_root in package_roots {
+        let package_root = canonicalize_windows_path(&package_root);
+        let executable = [
+            package_root
+                .join("node_modules")
+                .join("@openai")
+                .join(package)
+                .join("vendor")
+                .join(target)
+                .join("bin")
+                .join("codex.exe"),
+            package_root
+                .join("vendor")
+                .join(target)
+                .join("bin")
+                .join("codex.exe"),
+        ]
+        .into_iter()
+        .find(|candidate| candidate.is_file());
+        if let Some(executable) = executable {
+            let manager = detect_codex_package_manager(&package_root, &launcher);
+            return Some((
+                executable,
+                ManagedCodexPackage {
+                    root: package_root,
+                    manager,
+                },
+            ));
+        }
+    }
+    None
+}
+
+#[cfg(windows)]
+fn detect_codex_package_manager(package_root: &Path, launcher: &Path) -> CodexPackageManager {
+    if codex_has_pnpm_owner(package_root, launcher) {
+        return CodexPackageManager::Pnpm;
+    }
+
+    let package_path = package_root.to_string_lossy().replace('\\', "/");
+    if package_path.contains(".bun/install/global") {
+        CodexPackageManager::Bun
+    } else {
+        CodexPackageManager::Npm
+    }
+}
+
+#[cfg(windows)]
+fn codex_has_pnpm_owner(package_root: &Path, launcher: &Path) -> bool {
+    let lexical_entrypoint = launcher
+        .parent()
+        .unwrap_or(launcher)
+        .join("node_modules")
+        .join("@openai")
+        .join("codex")
+        .join("bin");
+    for start in [package_root, lexical_entrypoint.as_path()] {
+        for ancestor in start.ancestors() {
+            let node_modules = ancestor.join("node_modules");
+            if !node_modules.join(".modules.yaml").is_file() {
+                continue;
+            }
+            let owned_package =
+                canonicalize_windows_path(&node_modules.join("@openai").join("codex"));
+            if owned_package == package_root {
+                return true;
             }
         }
     }
-    path.to_path_buf()
+    false
+}
+
+#[cfg(windows)]
+fn canonicalize_windows_path(path: &Path) -> PathBuf {
+    let path = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let value = path.to_string_lossy();
+    value
+        .strip_prefix(r"\\?\")
+        .map(PathBuf::from)
+        .unwrap_or(path)
 }
 
 #[cfg(test)]
@@ -613,7 +776,6 @@ fn resolve_codex() -> Option<PathBuf> {
     crate::agent_command::discover(&["codex"], &target_id)
         .paths
         .remove("codex")
-        .map(|path| normalize_codex_executable(&path))
 }
 
 fn bundled_browser_skill_override() -> Option<String> {
@@ -745,16 +907,6 @@ fn skill_paths_equal(left: &str, right: &str) -> bool {
     normalize(left) == normalize(right)
 }
 
-#[cfg(windows)]
-fn canonicalize_windows_path(path: &Path) -> PathBuf {
-    let path = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let value = path.to_string_lossy();
-    value
-        .strip_prefix(r"\\?\")
-        .map(PathBuf::from)
-        .unwrap_or(path)
-}
-
 fn quote_path(path: &Path) -> String {
     format!("\"{}\"", path.to_string_lossy().replace('"', "\\\""))
 }
@@ -856,6 +1008,182 @@ mod tests {
         assert!(launcher.contains(r"& 'C:\Users\Test User\bin\claude.cmd' @agentArguments"));
         assert!(launcher.contains("$agentExitCode = $LASTEXITCODE"));
         assert!(!launcher.contains("ProcessStartInfo"));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn package_manager_detection_matches_codex_launcher_layouts() {
+        let standalone = Path::new(r"C:\Users\Test\.local\bin\codex.exe");
+        let standalone = resolve_codex_command(standalone);
+        assert_eq!(standalone.executable, Path::new(r"C:\Users\Test\.local\bin\codex.exe"));
+        assert!(standalone.managed_package.is_none());
+
+        let fixture = std::env::temp_dir().join(format!(
+            "luna-mux-codex-manager-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let node_modules = fixture.join("node_modules");
+        let package_root = node_modules.join("@openai").join("codex");
+        let launcher = fixture.join("codex.cmd");
+        std::fs::create_dir_all(&package_root).expect("create pnpm package fixture");
+        assert_eq!(
+            detect_codex_package_manager(&canonicalize_windows_path(&package_root), &launcher),
+            CodexPackageManager::Npm
+        );
+        std::fs::write(node_modules.join(".modules.yaml"), "virtualStoreDir: .pnpm")
+            .expect("write pnpm ownership marker");
+        assert_eq!(
+            detect_codex_package_manager(&canonicalize_windows_path(&package_root), &launcher),
+            CodexPackageManager::Pnpm
+        );
+
+        let bun_root = fixture
+            .join(".bun")
+            .join("install")
+            .join("global")
+            .join("node_modules")
+            .join("@openai")
+            .join("codex");
+        assert_eq!(
+            detect_codex_package_manager(&bun_root, &launcher),
+            CodexPackageManager::Bun
+        );
+        let _ = std::fs::remove_dir_all(fixture);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn windows_shim_keeps_package_manager_launcher_update_context() {
+        let mut powershells = Vec::new();
+        if let Some(powershell) = crate::local_pty_backend::windows_powershell5_executable() {
+            powershells.push(powershell);
+        }
+        if let Some(powershell) = crate::local_pty_backend::windows_powershell7_executable() {
+            powershells.push(powershell);
+        }
+        assert!(!powershells.is_empty(), "no PowerShell target is available");
+
+        let runtime_id = format!("codex-launcher-test-{}", uuid::Uuid::new_v4());
+        let context = TerminalRuntimeContext {
+            mux_session_id: "session-1".into(),
+            pane_id: "pane-1".into(),
+            runtime_id: runtime_id.clone(),
+        };
+        let fixture =
+            std::env::temp_dir().join(format!("luna-mux-codex launcher-{}", uuid::Uuid::new_v4()));
+        let launcher = fixture.join("codex.cmd");
+        let package_root = fixture.join("node_modules").join("@openai").join("codex");
+        let (native_package, native_target) = if cfg!(target_arch = "aarch64") {
+            ("codex-win32-arm64", "aarch64-pc-windows-msvc")
+        } else {
+            ("codex-win32-x64", "x86_64-pc-windows-msvc")
+        };
+        let native = package_root
+            .join("node_modules")
+            .join("@openai")
+            .join(native_package)
+            .join("vendor")
+            .join(native_target)
+            .join("bin")
+            .join("codex.exe");
+        std::fs::create_dir_all(native.parent().expect("native Codex parent"))
+            .expect("create fake npm Codex package");
+        std::fs::write(&native, b"not a real executable")
+            .expect("write native Codex marker fixture");
+        std::fs::write(
+            &launcher,
+            "@echo off\r\nnode \"%~dp0node_modules\\@openai\\codex\\bin\\codex.js\" %*\r\n",
+        )
+        .expect("write npm Codex launcher fixture");
+        let helper = fixture.join("luna-mux-helper.cmd");
+        std::fs::write(&helper, "@echo off\r\nexit /b 1\r\n")
+            .expect("write Luna Mux helper fixture");
+
+        let root = install_with_paths(
+            &context,
+            Some("http://127.0.0.1:43128/mcp"),
+            &helper,
+            Some(&launcher),
+        )
+        .expect("install Codex shim")
+        .expect("fake Codex launcher is available");
+        let generated_shim =
+            std::fs::read_to_string(root.join("codex.ps1")).expect("read generated Codex shim");
+        assert!(
+            generated_shim.contains(&native.to_string_lossy().replace('\'', "''")),
+            "generated shim did not retain the native Codex executable"
+        );
+        assert!(
+            !generated_shim.contains(&launcher.to_string_lossy().replace('\'', "''")),
+            "generated shim used the command-length-limited npm launcher"
+        );
+        assert!(generated_shim.contains("$psi.EnvironmentVariables['CODEX_MANAGED_PACKAGE_ROOT']"));
+        assert!(generated_shim.contains("$psi.EnvironmentVariables['CODEX_MANAGED_BY_NPM'] = '1'"));
+
+        let system_root = std::env::var_os("SystemRoot").expect("SystemRoot is available");
+        let cmd = PathBuf::from(system_root).join("System32").join("cmd.exe");
+        let managed_package = ManagedCodexPackage {
+            root: canonicalize_windows_path(&package_root),
+            manager: CodexPackageManager::Npm,
+        };
+        let expected_package_root = managed_package.root.to_string_lossy().into_owned();
+        let invocation = powershell_command_invocation_with_managed_package(
+            &cmd,
+            "agentArguments",
+            "agentExitCode",
+            Some(&managed_package),
+        );
+        let verifier = fixture.join("verify-update-context.ps1");
+        std::fs::write(
+            &verifier,
+            format!(
+                "{}$agentArguments = @('/d', '/c', 'set CODEX_MANAGED')\r\n\
+$agentExitCode = 1\r\n\
+{}exit $agentExitCode\r\n",
+                powershell_native_arg_quote_script(),
+                invocation
+            ),
+        )
+        .expect("write PowerShell update-context verifier");
+
+        for powershell in powershells {
+            let output = Command::new(&powershell)
+                .args([
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                ])
+                .arg(&verifier)
+                .env("CODEX_MANAGED_BY_PNPM", "1")
+                .env("CODEX_MANAGED_PACKAGE_ROOT", r"C:\stale-codex")
+                .output()
+                .expect("run update-context verifier through PowerShell");
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                output.status.success(),
+                "Codex environment injection failed through {powershell}: {stdout}{stderr}"
+            );
+            assert!(
+                stdout.contains("CODEX_MANAGED_BY_NPM=1"),
+                "npm update context was missing through {powershell}: {stdout}{stderr}"
+            );
+            assert!(
+                stdout.contains(&format!(
+                    "CODEX_MANAGED_PACKAGE_ROOT={expected_package_root}"
+                )),
+                "npm package root was missing through {powershell}: {stdout}{stderr}"
+            );
+            assert!(
+                !stdout.contains("CODEX_MANAGED_BY_PNPM="),
+                "stale pnpm update context survived through {powershell}: {stdout}{stderr}"
+            );
+        }
+
+        cleanup(&runtime_id);
+        let _ = std::fs::remove_dir_all(fixture);
     }
 
     #[test]
