@@ -1,7 +1,7 @@
 export default {
   "app.aFileWithThisNameAlreadyExists": "目标位置已有同名文件",
   "app.about": "关于",
-  "app.aboutDescription": "面向编码 Agent 的本地与远程终端工作区。",
+  "app.aboutDescription": "面向编码 Agent 的本地与远程终端工作台。",
   "app.alreadyLatestVersion": "当前已是最新版本（{{value0}}）",
   "app.aiCommand": "AI 命令",
   "app.advanced": "高级",
