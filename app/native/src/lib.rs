@@ -421,6 +421,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             platform,
             system_open_external,
+            system_check_for_updates,
             system_clipboard_has_image_file,
             browser_chrome_discover,
             browser_runtime_create,
