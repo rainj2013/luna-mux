@@ -1478,15 +1478,15 @@ export function App(): React.JSX.Element {
             {sidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
           </button></div>
           <div className="view-switcher" role="tablist" aria-label={t('app.sessionView')}>
-            <button role="tab" disabled={!activeMuxSession} aria-selected={workspaceView === 'terminal'} className={workspaceView === 'terminal' ? 'active' : ''} onClick={() => setWorkspaceView('terminal')}><Columns2 size={15} />{t('app.panes')}</button>
-            <button role="tab" disabled={!activeMuxSession} aria-selected={workspaceView === 'agents'} className={workspaceView === 'agents' ? 'active' : ''} onClick={() => setWorkspaceView('agents')}><Sparkles size={15} />{t('app.agents')}</button>
-            <button role="tab" disabled={!activeMuxSession} aria-selected={workspaceView === 'browser'} className={workspaceView === 'browser' ? 'active' : ''} onClick={() => setWorkspaceView('browser')}><Globe2 size={15} />{t('app.browserResources')}</button>
-            {activeBookmark && <button role="tab" aria-selected={workspaceView === 'files'} className={workspaceView === 'files' ? 'active' : ''} onClick={() => setWorkspaceView('files')}><FolderOpen size={15} />{t('app.files')}</button>}
+            <button role="tab" title={t('app.panes')} disabled={!activeMuxSession} aria-selected={workspaceView === 'terminal'} className={workspaceView === 'terminal' ? 'active' : ''} onClick={() => setWorkspaceView('terminal')}><Columns2 size={15} />{t('app.panes')}</button>
+            <button role="tab" title={t('app.agents')} disabled={!activeMuxSession} aria-selected={workspaceView === 'agents'} className={workspaceView === 'agents' ? 'active' : ''} onClick={() => setWorkspaceView('agents')}><Sparkles size={15} />{t('app.agents')}</button>
+            <button role="tab" title={t('app.browserResources')} disabled={!activeMuxSession} aria-selected={workspaceView === 'browser'} className={workspaceView === 'browser' ? 'active' : ''} onClick={() => setWorkspaceView('browser')}><Globe2 size={15} />{t('app.browserResources')}</button>
+            {activeBookmark && <button role="tab" title={t('app.files')} aria-selected={workspaceView === 'files'} className={workspaceView === 'files' ? 'active' : ''} onClick={() => setWorkspaceView('files')}><FolderOpen size={15} />{t('app.files')}</button>}
           </div>
           <div className="session-actions">
-            {workspaceView === 'files' && activeBookmark && activeSshRuntimeId && <button className="secondary-button" onClick={() => setDeploymentDialog(true)}><Rocket size={15} />{t('app.deploy')}</button>}
-            {workspaceView === 'terminal' && activeAiCommandTarget && <button className="secondary-button" onClick={() => setAiDialog(true)}><WandSparkles size={15} />{t('app.aiCommand')}</button>}
-            {workspaceView !== 'browser' && activeBookmark && activeTab?.status === 'connected' && activeSshRuntimeId && <button className="secondary-button" onClick={() => setTunnelDialog(true)}><Network size={15} />{t('app.portForwarding')}</button>}
+            {workspaceView === 'files' && activeBookmark && activeSshRuntimeId && <button className="secondary-button" title={t('app.deploy')} onClick={() => setDeploymentDialog(true)}><Rocket size={15} />{t('app.deploy')}</button>}
+            {workspaceView === 'terminal' && activeAiCommandTarget && <button className="secondary-button" title={t('app.aiCommand')} onClick={() => setAiDialog(true)}><WandSparkles size={15} />{t('app.aiCommand')}</button>}
+            {workspaceView !== 'browser' && activeBookmark && activeTab?.status === 'connected' && activeSshRuntimeId && <button className="secondary-button" title={t('app.portForwarding')} onClick={() => setTunnelDialog(true)}><Network size={15} />{t('app.portForwarding')}</button>}
             {workspaceView === 'terminal' && sessionTabs.length > 1 && <div className="layout-menu-anchor" onPointerDown={(event) => event.stopPropagation()}>
               <button className="icon-button" title={t('app.arrangePanes')} aria-label={t('app.arrangePanes')} aria-haspopup="menu" aria-expanded={layoutMenuOpen} onClick={() => setLayoutMenuOpen((open) => !open)}><LayoutGrid size={17} /></button>
               {layoutMenuOpen && <div className="layout-menu" role="menu" aria-label={t('app.arrangePanes')}>

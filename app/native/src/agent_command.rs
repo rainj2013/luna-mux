@@ -1,6 +1,6 @@
 use std::{
     collections::BTreeMap,
-    ffi::{OsStr, OsString},
+    ffi::OsStr,
     fs::{self, File},
     io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
@@ -8,6 +8,9 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+
+#[cfg(target_os = "macos")]
+use std::ffi::OsString;
 
 use uuid::Uuid;
 
@@ -149,7 +152,7 @@ fn run_powershell_probe(
     for name in commands {
         let quoted = crate::shell_quoting::powershell_quote(name);
         script.push_str(&format!(
-            "$lunaMuxCommand = Get-Command -Name {quoted} -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1; if ($null -ne $lunaMuxCommand) {{ [Console]::Out.WriteLine('{PATH_MARKER}{name}=' + $lunaMuxCommand.Source) }}\r\n"
+            "$lunaMuxCommand = Get-Command -Name {quoted} -CommandType Application -All -ErrorAction SilentlyContinue | Where-Object {{ $lunaMuxCommandBin = Split-Path -Parent $_.Source; $lunaMuxCommandRoot = Split-Path -Parent $lunaMuxCommandBin; !(Test-Path -LiteralPath (Join-Path $lunaMuxCommandRoot '.runtime-owner') -PathType Leaf) }} | Select-Object -First 1; if ($null -ne $lunaMuxCommand) {{ [Console]::Out.WriteLine('{PATH_MARKER}{name}=' + $lunaMuxCommand.Source) }}\r\n"
         ));
     }
     let mut command = Command::new(powershell);
@@ -235,13 +238,15 @@ fn parse_probe_output(
     let mut paths = BTreeMap::new();
     for name in commands {
         let prefix = format!("{PATH_MARKER}{name}=");
-        let path = stdout
-            .lines()
-            .rev()
-            .find_map(|line| line.trim().strip_prefix(&prefix))
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from);
+        let path = stdout.lines().rev().find_map(|line| {
+            let path = line
+                .trim()
+                .strip_prefix(&prefix)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)?;
+            (!is_luna_mux_runtime_agent_shim(name, &path)).then_some(path)
+        });
         if let Some(path) = path
             && (!require_local_file || path.is_file())
         {
@@ -268,12 +273,28 @@ fn find_in_path(command: &str, path: Option<&OsStr>) -> Option<PathBuf> {
         let names = vec![command.to_string()];
         for name in names {
             let candidate = directory.join(name);
-            if candidate.is_file() {
+            if candidate.is_file() && !is_luna_mux_runtime_agent_shim(command, &candidate) {
                 return Some(candidate);
             }
         }
     }
     None
+}
+
+pub(crate) fn is_luna_mux_runtime_agent_shim(command: &str, path: &Path) -> bool {
+    let is_runtime_entrypoint = path.file_name().is_some_and(|name| {
+        name.eq_ignore_ascii_case(command)
+            || name.eq_ignore_ascii_case(format!("{command}.cmd").as_str())
+            || name.eq_ignore_ascii_case(format!("{command}.ps1").as_str())
+    });
+    if !is_runtime_entrypoint {
+        return false;
+    }
+    let Some(bin) = path.parent() else {
+        return false;
+    };
+    bin.parent()
+        .is_some_and(|root| root.join(".runtime-owner").is_file())
 }
 
 #[cfg(windows)]
@@ -381,6 +402,32 @@ mod tests {
         let paths = parse_probe_output(&["codex"], &output, true, true, "").unwrap();
         assert_eq!(paths.get("codex"), Some(&known));
         let _ = fs::remove_file(known);
+    }
+
+    #[test]
+    fn parser_skips_a_luna_runtime_shim_and_keeps_the_real_command() {
+        let root = std::env::temp_dir().join(format!(
+            "luna-mux-agent-command-{}",
+            Uuid::new_v4().simple()
+        ));
+        let bin = root.join("bin");
+        let shim = bin.join("claude.cmd");
+        let shim_script = bin.join("claude.ps1");
+        let real = root.join("real").join("claude.exe");
+        fs::create_dir_all(&bin).unwrap();
+        fs::create_dir_all(real.parent().unwrap()).unwrap();
+        fs::write(root.join(".runtime-owner"), "runtime-1").unwrap();
+        fs::write(&shim, "@echo off\n").unwrap();
+        fs::write(&shim_script, "# shim\n").unwrap();
+        fs::write(&real, "real agent\n").unwrap();
+        let output = format!(
+            "{PATH_MARKER}claude={}\n{PATH_MARKER}claude={}\n",
+            real.display(),
+            shim.display()
+        );
+        let paths = parse_probe_output(&["claude"], &output, true, true, "").unwrap();
+        assert_eq!(paths.get("claude"), Some(&real));
+        let _ = fs::remove_dir_all(root);
     }
 
     #[cfg(target_os = "macos")]
