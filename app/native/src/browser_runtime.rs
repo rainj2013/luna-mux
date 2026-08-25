@@ -61,7 +61,7 @@ impl BrowserWarmupGate {
         warmup: F,
     ) -> Result<(), String>
     where
-        F: FnOnce() -> Fut,
+        F: Fn() -> Fut,
         Fut: Future<Output = Result<(), String>>,
     {
         // PreToolUse is emitted for every browser command. Serialize the first
@@ -79,9 +79,25 @@ impl BrowserWarmupGate {
         if warmed_runtime_id.as_deref() == Some(runtime_id) {
             return Ok(());
         }
-        warmup().await?;
-        *warmed_runtime_id = Some(runtime_id.to_string());
-        Ok(())
+        let mut last_error = None;
+        for attempt in 1..=2 {
+            match warmup().await {
+                Ok(()) => {
+                    *warmed_runtime_id = Some(runtime_id.to_string());
+                    return Ok(());
+                }
+                Err(error) => {
+                    last_error = Some(error);
+                    if attempt < 2 {
+                        // CDP and the agent-browser pin can become ready a
+                        // moment after Chrome reports its port. Give that
+                        // short startup race one bounded recovery attempt.
+                        tokio::time::sleep(Duration::from_millis(250)).await;
+                    }
+                }
+            }
+        }
+        Err(last_error.unwrap_or_else(|| "Browser 预热失败".into()))
     }
 }
 
@@ -2477,9 +2493,12 @@ mod tests {
         let attempts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
         let first_attempts = attempts.clone();
-        gate.warm_once("session-1", "runtime-1", || async move {
-            first_attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Ok(())
+        gate.warm_once("session-1", "runtime-1", || {
+            let attempts = first_attempts.clone();
+            async move {
+                attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            }
         })
         .await
         .unwrap();
@@ -2490,31 +2509,59 @@ mod tests {
         .unwrap();
 
         let restarted_attempts = attempts.clone();
-        gate.warm_once("session-1", "runtime-2", || async move {
-            restarted_attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Ok(())
+        gate.warm_once("session-1", "runtime-2", || {
+            let attempts = restarted_attempts.clone();
+            async move {
+                attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            }
         })
         .await
         .unwrap();
         assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
 
+        let transient_attempts = attempts.clone();
+        let transient_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let transient_count_for_probe = transient_count.clone();
+        gate.warm_once("session-2", "runtime-3", || {
+            let attempts = transient_attempts.clone();
+            let transient_count = transient_count_for_probe.clone();
+            async move {
+                attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if transient_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                    Err("probe not ready".into())
+                } else {
+                    Ok(())
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(transient_count.load(std::sync::atomic::Ordering::SeqCst), 2);
+
         let failed_attempts = attempts.clone();
         assert!(
-            gate.warm_once("session-2", "runtime-3", || async move {
-                failed_attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                Err("probe failed".into())
+            gate.warm_once("session-3", "runtime-4", || {
+                let attempts = failed_attempts.clone();
+                async move {
+                    attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Err("probe failed".into())
+                }
             })
             .await
             .is_err()
         );
         let retry_attempts = attempts.clone();
-        gate.warm_once("session-2", "runtime-3", || async move {
-            retry_attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Ok(())
+        gate.warm_once("session-3", "runtime-4", || {
+            let attempts = retry_attempts.clone();
+            async move {
+                attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            }
         })
         .await
         .unwrap();
-        assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 4);
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 7);
     }
 
     #[cfg(windows)]

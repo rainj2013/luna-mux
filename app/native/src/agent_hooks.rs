@@ -31,6 +31,10 @@ const EVENT_CAPACITY: usize = 2048;
 const MAX_HOOK_BYTES: usize = 1024 * 1024;
 const TERMINAL_ACTIVITY_INTERVAL: Duration = Duration::from_secs(3);
 const TERMINAL_SIGNAL_INTERVAL: Duration = Duration::from_secs(1);
+const HOOK_FORWARD_ATTEMPTS: usize = 3;
+const HOOK_FORWARD_TIMEOUT: Duration = Duration::from_secs(5);
+const BROWSER_HOOK_FORWARD_TIMEOUT: Duration = Duration::from_secs(25);
+const HOOK_FORWARD_RETRY_DELAY: Duration = Duration::from_millis(150);
 const AGENT_ADAPTER_HEADER: &str = "x-luna-mux-agent-adapter";
 const AGENT_PROCESS_ID_HEADER: &str = "x-luna-mux-agent-process-id";
 const HOOK_AUTH_FILE_EXTENSION: &str = "json";
@@ -1107,6 +1111,14 @@ pub fn try_run_hook_forwarder(args: &[String]) -> Option<i32> {
         .ok()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| agent_adapters::CODEX_ADAPTER_ID.into());
+    let request_timeout = if is_agent_browser_tool(&payload) {
+        // Browser startup and agent-browser warmup are bounded to 20 seconds
+        // by the receiver. Keep the hook connected long enough to receive the
+        // allow/deny decision instead of failing open after five seconds.
+        BROWSER_HOOK_FORWARD_TIMEOUT
+    } else {
+        HOOK_FORWARD_TIMEOUT
+    };
     let input = {
         if let Some(object) = payload.as_object_mut() {
             if let Some(process_id) = process_id.as_ref() {
@@ -1121,7 +1133,6 @@ pub fn try_run_hook_forwarder(args: &[String]) -> Option<i32> {
     };
     let client = match reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(3))
-        .timeout(Duration::from_secs(5))
         .build()
     {
         Ok(client) => client,
@@ -1132,17 +1143,16 @@ pub fn try_run_hook_forwarder(args: &[String]) -> Option<i32> {
         .build()
         .ok()?;
     let result = runtime.block_on(async move {
-        let response = client
-            .post(endpoint)
-            .bearer_auth(token)
-            .header(AGENT_ADAPTER_HEADER, adapter_id)
-            .header(AGENT_PROCESS_ID_HEADER, process_id.unwrap_or_default())
-            .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .body(input)
-            .send()
-            .await?
-            .error_for_status()?;
-        let response = response.json::<Value>().await?;
+        let response = forward_hook_request(
+            &client,
+            &endpoint,
+            &token,
+            &adapter_id,
+            process_id.as_deref().unwrap_or_default(),
+            &input,
+            request_timeout,
+        )
+        .await?;
         let has_hook_output =
             response.get("hookSpecificOutput").is_some() || response.get("decision").is_some();
         Ok::<_, reqwest::Error>(has_hook_output.then_some(response))
@@ -1156,6 +1166,65 @@ pub fn try_run_hook_forwarder(args: &[String]) -> Option<i32> {
         // agent when the local hook service is unreachable or restarts.
         Ok(None) | Err(_) => 0,
     })
+}
+
+async fn forward_hook_request(
+    client: &reqwest::Client,
+    endpoint: &str,
+    token: &str,
+    adapter_id: &str,
+    process_id: &str,
+    input: &[u8],
+    total_timeout: Duration,
+) -> Result<Value, reqwest::Error> {
+    let deadline = tokio::time::Instant::now() + total_timeout;
+    let mut last_error = None;
+    for attempt in 1..=HOOK_FORWARD_ATTEMPTS {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        let result = match client
+            .post(endpoint)
+            .bearer_auth(token)
+            .header(AGENT_ADAPTER_HEADER, adapter_id)
+            .header(AGENT_PROCESS_ID_HEADER, process_id)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .timeout(remaining)
+            .body(input.to_vec())
+            .send()
+            .await
+        {
+            Ok(response) => match response.error_for_status() {
+                Ok(response) => response.json::<Value>().await,
+                Err(error) => Err(error),
+            },
+            Err(error) => Err(error),
+        };
+        match result {
+            Ok(response) => return Ok(response),
+            Err(error)
+                if attempt < HOOK_FORWARD_ATTEMPTS && retryable_hook_forward_error(&error) =>
+            {
+                last_error = Some(error);
+                let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                if remaining.is_zero() {
+                    break;
+                }
+                tokio::time::sleep(HOOK_FORWARD_RETRY_DELAY.min(remaining)).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Err(last_error.expect("hook forwarding attempted at least once"))
+}
+
+fn retryable_hook_forward_error(error: &reqwest::Error) -> bool {
+    error.is_connect()
+        || error.is_timeout()
+        || error
+            .status()
+            .is_some_and(|status| status.is_server_error() || status.as_u16() == 429)
 }
 
 fn header_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
@@ -1180,6 +1249,48 @@ mod tests {
         path::PathBuf,
         process::{Command, Stdio},
     };
+
+    #[tokio::test]
+    async fn hook_forward_retries_a_transient_loopback_failure() {
+        let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let route_attempts = attempts.clone();
+        let app = Router::new().route(
+            "/v1/hooks",
+            post(move || {
+                let attempts = route_attempts.clone();
+                async move {
+                    if attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                        (
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            Json(json!({ "error": "notReady" })),
+                        )
+                    } else {
+                        (StatusCode::OK, Json(json!({ "ok": true })))
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let endpoint = format!("http://{}/v1/hooks", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let response = forward_hook_request(
+            &reqwest::Client::new(),
+            &endpoint,
+            "token",
+            "codex",
+            "process-1",
+            br#"{"hook_event_name":"AgentProcessStart"}"#,
+            Duration::from_secs(2),
+        )
+        .await
+        .unwrap();
+        server.abort();
+
+        assert_eq!(response, json!({ "ok": true }));
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
 
     #[test]
     fn persisted_hook_authorizations_survive_service_restart_and_are_revoked() {
