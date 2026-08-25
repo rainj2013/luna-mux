@@ -55,6 +55,7 @@ fn install_with_executable(
         .join("luna-mux")
         .join(&context.runtime_id)
         .join("bin");
+    crate::runtime_env::write_runtime_owner(&context.runtime_id)?;
     fs::create_dir_all(&root).map_err(|error| error.to_string())?;
     let settings = hook_settings_json(
         hook_endpoint.unwrap_or("http://127.0.0.1:0/v1/hooks"),
@@ -231,6 +232,7 @@ pub fn install_wsl_manual_bootstrap(
         .join("luna-mux")
         .join(&context.runtime_id)
         .join("bin");
+    crate::runtime_env::write_runtime_owner(&context.runtime_id)?;
     fs::create_dir_all(&root).map_err(|error| error.to_string())?;
     let env_source = environment_file
         .map(Path::new)

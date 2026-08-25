@@ -119,6 +119,7 @@ fn install_with_paths(
         .join("luna-mux")
         .join(&context.runtime_id)
         .join("bin");
+    crate::runtime_env::write_runtime_owner(&context.runtime_id)?;
     fs::create_dir_all(&root).map_err(|error| error.to_string())?;
     let hook = format!("{} hook", quote_path(&executable));
     let hook_value = toml_string(&hook);
@@ -473,6 +474,7 @@ pub fn install_wsl_manual_bootstrap(
         .join("luna-mux")
         .join(&context.runtime_id)
         .join("bin");
+    crate::runtime_env::write_runtime_owner(&context.runtime_id)?;
     fs::create_dir_all(&root).map_err(|error| error.to_string())?;
     let env_source = environment_file
         .map(Path::new)
