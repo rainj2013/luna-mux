@@ -109,6 +109,12 @@ function currentAgentIdsForRuntimes(events: ManagedAgentEvent[], runtimesByPane:
   return new Set([...latestByAgent.entries()].flatMap(([agentId, event]) => ['SessionEnd', 'RuntimeExit', 'AgentProcessExit'].includes(event.hookEventName) ? [] : [agentId]))
 }
 
+function mergeManagedAgentEvents(current: ManagedAgentEvent[], incoming: ManagedAgentEvent[]): ManagedAgentEvent[] {
+  const bySequence = new Map(current.map((event) => [event.sequence, event]))
+  for (const event of incoming) bySequence.set(event.sequence, event)
+  return [...bySequence.values()].sort((left, right) => left.sequence - right.sequence).slice(-2048)
+}
+
 function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.message
   return String(error)
@@ -257,7 +263,7 @@ export function App(): React.JSX.Element {
       const pane: WorkspaceTab = { ...savedPane, key: savedPane.id, runtimeId, status: 'connecting' }
       createdPaneKey = pane.key
       setTabs((current) => [...current, pane])
-      const layout = insertPaneInLayout(layoutFromPanes(muxSession.layout, sessionTabs), activeKey || undefined, pane.id, 'horizontal')
+      const layout = layoutForNewPane(muxSession, sessionTabs, pane.id, activeKey || undefined)
       await persistSessionLayout(muxSession, layout)
       setActiveKey(pane.key)
       setWorkspaceView('terminal')
@@ -403,7 +409,7 @@ export function App(): React.JSX.Element {
       setUiTheme(theme)
       setAiSettings(ai)
       setRemoteAgentIntegrationEnabled(remoteAgentIntegration)
-      setManagedAgentEvents(agentEvents.filter((event) => currentAgentIds.has(event.context.agentId)))
+      setManagedAgentEvents((current) => mergeManagedAgentEvents(current, agentEvents.filter((event) => currentAgentIds.has(event.context.agentId))))
       if (appearance.backgroundImagePath) void window.api.settings.loadTerminalBackground(appearance.backgroundImagePath).then(setTerminalBackground).catch(() => setTerminalBackground(''))
       stateRestored.current = true
     }).catch((error) => showError(errorMessage(error)))
@@ -577,15 +583,17 @@ export function App(): React.JSX.Element {
 
   useEffect(() => window.api.onManagedAgentEvent((event) => {
     const ended = ['SessionEnd', 'RuntimeExit', 'AgentProcessExit'].includes(event.hookEventName)
-    setManagedAgentEvents((current) => ended
-      ? current.filter((item) => item.context.agentId !== event.context.agentId)
-      : [...current.filter((item) => item.sequence !== event.sequence), event].sort((a, b) => a.sequence - b.sequence))
+    setTabs((current) => current.map((tab) => tab.id !== event.context.paneId || tab.runtimeId !== event.context.runtimeId
+      ? tab
+      : { ...tab, agentId: ended ? undefined : event.context.agentId }))
+    setManagedAgentEvents((current) => mergeManagedAgentEvents(current, [event]))
   }), [])
 
   useEffect(() => window.api.onManagedAgentNotificationActivate((event) => {
     setActiveMuxSessionId(event.muxSessionId)
     setActiveKey(event.paneId)
     setWorkspaceView('terminal')
+    setMaximizedPaneId('')
     setReadAgentSequences((current) => new Set(current).add(event.sequence))
   }), [])
 
@@ -601,6 +609,10 @@ export function App(): React.JSX.Element {
   const activeMuxSession = muxSessions.find((session) => session.id === activeMuxSessionId)
   const sessionTabs = tabs.filter((tab) => tab.muxSessionId === activeMuxSessionId)
   const sessionBrowserResources = browserResources.filter((resource) => resource.muxSessionId === activeMuxSessionId)
+  const visibleMaximizedPaneId = maximizedPaneId === activeKey && sessionTabs.some((pane) => pane.id === maximizedPaneId) ? maximizedPaneId : ''
+  useEffect(() => {
+    if (maximizedPaneId && (maximizedPaneId !== activeKey || !tabs.some((pane) => pane.id === maximizedPaneId && pane.muxSessionId === activeMuxSessionId))) setMaximizedPaneId('')
+  }, [activeKey, activeMuxSessionId, maximizedPaneId, tabs])
   const activeTab = sessionTabs.find((tab) => tab.key === activeKey)
   const activeBookmark = activeTab?.kind === 'terminal' && activeTab.bookmarkId ? bookmarkMap.get(activeTab.bookmarkId) : undefined
   const activeSshRuntimeId = activeBookmark ? activeTab?.runtimeId ?? activeTab?.sessionId : undefined
@@ -645,7 +657,7 @@ export function App(): React.JSX.Element {
         if (!runtime) return pane
         return { ...pane, runtimeId: runtime.runtimeId, agentId: runtime.managedAgent?.agentId, status: terminalRuntimeSessionStatus(runtime), error: runtime.error }
       }))
-      setManagedAgentEvents(events.filter((event) => currentAgentIds.has(event.context.agentId)))
+      setManagedAgentEvents((current) => mergeManagedAgentEvents(current, events.filter((event) => currentAgentIds.has(event.context.agentId))))
       if (workspaceView === 'agents') {
         setBrowserRuntimes(activeBrowserRuntimes)
         setBrowserResources((current) => current.map((resource) => {
@@ -1002,7 +1014,7 @@ export function App(): React.JSX.Element {
         key = savedPane.id
         pane = { ...savedPane, key: savedPane.id, status: 'connecting' }
         setTabs((current) => [...current, pane!])
-        const layout = insertPaneInLayout(layoutFromPanes(muxSession.layout, sessionTabs), activeKey || undefined, savedPane.id, 'horizontal')
+        const layout = layoutForNewPane(muxSession, sessionTabs, savedPane.id, activeKey || undefined)
         await persistSessionLayout(muxSession, layout)
       } else setTabs((current) => current.map((tab) => tab.key === key ? { ...tab, sessionId: undefined, runtimeId: undefined, status: 'connecting', error: undefined } : tab))
       setActiveKey(key); setAuthRequest(null)
@@ -1445,7 +1457,7 @@ export function App(): React.JSX.Element {
                   const paneDropClass = muxDrop?.type === 'pane' && muxDrop.id === pane.id ? `drop-${muxDrop.position}` : ''
                   return <div data-mux-pane-id={pane.id} data-pane-session-id={session.id} className={`mux-pane-item ${pane.key === activeKey ? 'active' : ''} ${agent?.unread ? 'unread' : ''} ${tone ? `attention-${tone}` : ''} ${pane.error ? 'has-error' : ''} ${draggedMuxItem?.type === 'pane' && draggedMuxItem.id === pane.id ? 'dragging' : ''} ${paneDropClass}`} key={pane.key} onContextMenu={(event) => openMuxSidebarContextMenu(event, { pane })}>
                     <span className="mux-drag-handle" title={t('app.dragToReorder')} onPointerDown={(event) => startMuxPointerDrag(event, 'pane', pane.id, session.id)}><GripVertical size={12} /></span>
-                    <button className="mux-pane-select" title={paneLabel} onClick={() => { setActiveMuxSessionId(pane.muxSessionId); setActiveKey(pane.key); setWorkspaceView('terminal'); if (agent) markAgentRead(agent.agentId) }} onDoubleClick={() => { if (pane.status !== 'connected') reconnectPane(pane) }}>
+                    <button className="mux-pane-select" title={paneLabel} onClick={() => { setActiveMuxSessionId(pane.muxSessionId); setActiveKey(pane.key); setWorkspaceView('terminal'); setMaximizedPaneId(''); if (agent) markAgentRead(agent.agentId) }} onDoubleClick={() => { if (pane.status !== 'connected') reconnectPane(pane) }}>
                       <span className={`status-dot ${pane.status}`} />
                       {agent ? <Sparkles size={14} /> : pane.bookmarkId ? <Server size={14} /> : <SquareTerminal size={14} />}
                       <span className="mux-pane-copy">
@@ -1471,15 +1483,15 @@ export function App(): React.JSX.Element {
             {sidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
           </button></div>
           <div className="view-switcher" role="tablist" aria-label={t('app.sessionView')}>
-            <button role="tab" disabled={!activeMuxSession} aria-selected={workspaceView === 'terminal'} className={workspaceView === 'terminal' ? 'active' : ''} onClick={() => setWorkspaceView('terminal')}><Columns2 size={15} />{t('app.panes')}</button>
-            <button role="tab" disabled={!activeMuxSession} aria-selected={workspaceView === 'agents'} className={workspaceView === 'agents' ? 'active' : ''} onClick={() => setWorkspaceView('agents')}><Sparkles size={15} />{t('app.agents')}</button>
-            <button role="tab" disabled={!activeMuxSession} aria-selected={workspaceView === 'browser'} className={workspaceView === 'browser' ? 'active' : ''} onClick={() => setWorkspaceView('browser')}><Globe2 size={15} />{t('app.browserResources')}</button>
-            {activeBookmark && <button role="tab" aria-selected={workspaceView === 'files'} className={workspaceView === 'files' ? 'active' : ''} onClick={() => setWorkspaceView('files')}><FolderOpen size={15} />{t('app.files')}</button>}
+            <button role="tab" title={t('app.panes')} disabled={!activeMuxSession} aria-selected={workspaceView === 'terminal'} className={workspaceView === 'terminal' ? 'active' : ''} onClick={() => setWorkspaceView('terminal')}><Columns2 size={15} />{t('app.panes')}</button>
+            <button role="tab" title={t('app.agents')} disabled={!activeMuxSession} aria-selected={workspaceView === 'agents'} className={workspaceView === 'agents' ? 'active' : ''} onClick={() => setWorkspaceView('agents')}><Sparkles size={15} />{t('app.agents')}</button>
+            <button role="tab" title={t('app.browserResources')} disabled={!activeMuxSession} aria-selected={workspaceView === 'browser'} className={workspaceView === 'browser' ? 'active' : ''} onClick={() => setWorkspaceView('browser')}><Globe2 size={15} />{t('app.browserResources')}</button>
+            {activeBookmark && <button role="tab" title={t('app.files')} aria-selected={workspaceView === 'files'} className={workspaceView === 'files' ? 'active' : ''} onClick={() => setWorkspaceView('files')}><FolderOpen size={15} />{t('app.files')}</button>}
           </div>
           <div className="session-actions">
-            {workspaceView === 'files' && activeBookmark && activeSshRuntimeId && <button className="secondary-button" onClick={() => setDeploymentDialog(true)}><Rocket size={15} />{t('app.deploy')}</button>}
-            {workspaceView === 'terminal' && activeAiCommandTarget && <button className="secondary-button" onClick={() => setAiDialog(true)}><WandSparkles size={15} />{t('app.aiCommand')}</button>}
-            {workspaceView !== 'browser' && activeBookmark && activeTab?.status === 'connected' && activeSshRuntimeId && <button className="secondary-button" onClick={() => setTunnelDialog(true)}><Network size={15} />{t('app.portForwarding')}</button>}
+            {workspaceView === 'files' && activeBookmark && activeSshRuntimeId && <button className="secondary-button" title={t('app.deploy')} onClick={() => setDeploymentDialog(true)}><Rocket size={15} />{t('app.deploy')}</button>}
+            {workspaceView === 'terminal' && activeAiCommandTarget && <button className="secondary-button" title={t('app.aiCommand')} onClick={() => setAiDialog(true)}><WandSparkles size={15} />{t('app.aiCommand')}</button>}
+            {workspaceView !== 'browser' && activeBookmark && activeTab?.status === 'connected' && activeSshRuntimeId && <button className="secondary-button" title={t('app.portForwarding')} onClick={() => setTunnelDialog(true)}><Network size={15} />{t('app.portForwarding')}</button>}
             {workspaceView === 'terminal' && sessionTabs.length > 1 && <div className="layout-menu-anchor" onPointerDown={(event) => event.stopPropagation()}>
               <button className="icon-button" title={t('app.arrangePanes')} aria-label={t('app.arrangePanes')} aria-haspopup="menu" aria-expanded={layoutMenuOpen} onClick={() => setLayoutMenuOpen((open) => !open)}><LayoutGrid size={17} /></button>
               {layoutMenuOpen && <div className="layout-menu" role="menu" aria-label={t('app.arrangePanes')}>
@@ -1497,7 +1509,7 @@ export function App(): React.JSX.Element {
             if (!layout) return null
             const shown = session.id === activeMuxSessionId && workspaceView === 'terminal'
             const hasBackgroundImage = Boolean(terminalSettings.backgroundImagePath && terminalBackground)
-            return <div key={session.id} hidden={!shown} className={`terminal-workspace ${hasBackgroundImage ? 'has-background-image' : ''}`} style={terminalBackgroundStyle(terminalSettings, terminalBackground)}><MuxLayout node={layout} panes={panes} bookmarks={bookmarkMap} activePaneId={shown ? activeKey : ''} settings={terminalSettings} backgroundImage={terminalBackground} agentAttentionByPane={agentAttentionByPane} activeAgentAdapterByPane={activeAgentAdapterByPane} terminalPaneRefs={terminalPaneRefs} onFocus={(pane) => { setActiveKey(pane.key); const agent = allAgents.find((item) => item.paneId === pane.id); if (agent) markAgentRead(agent.agentId) }} onTerminalAgentAction={(pane) => { const agent = allAgents.find((item) => item.paneId === pane.id); if (agent) dismissAgentWaitingAttention(agent) }} onRuntimeError={(pane, runtimeId, message) => { setTabs((current) => current.map((item) => item.key === pane.key && item.runtimeId === runtimeId ? { ...item, status: 'error', error: message } : item)); showError(message) }} onReconnect={reconnectPane} onReauthenticate={reauthenticatePane} onSplit={(pane, direction) => void splitPane(pane, direction)} onClose={closeTab} onResize={resizeLayout} onToggleMaximize={(paneId) => setMaximizedPaneId((current) => current ? '' : paneId)} onOpenSettings={() => openSettings('terminal')} maximizedPaneId={shown ? maximizedPaneId : ''} /></div>
+            return <div key={session.id} hidden={!shown} className={`terminal-workspace ${hasBackgroundImage ? 'has-background-image' : ''}`} style={terminalBackgroundStyle(terminalSettings, terminalBackground)}><MuxLayout node={layout} panes={panes} bookmarks={bookmarkMap} activePaneId={shown ? activeKey : ''} settings={terminalSettings} backgroundImage={terminalBackground} agentAttentionByPane={agentAttentionByPane} activeAgentAdapterByPane={activeAgentAdapterByPane} terminalPaneRefs={terminalPaneRefs} onFocus={(pane) => { setActiveKey(pane.key); const agent = allAgents.find((item) => item.paneId === pane.id); if (agent) markAgentRead(agent.agentId) }} onTerminalAgentAction={(pane) => { const agent = allAgents.find((item) => item.paneId === pane.id); if (agent) dismissAgentWaitingAttention(agent) }} onRuntimeError={(pane, runtimeId, message) => { setTabs((current) => current.map((item) => item.key === pane.key && item.runtimeId === runtimeId ? { ...item, status: 'error', error: message } : item)); showError(message) }} onReconnect={reconnectPane} onReauthenticate={reauthenticatePane} onSplit={(pane, direction) => void splitPane(pane, direction)} onClose={closeTab} onResize={resizeLayout} onToggleMaximize={(paneId) => setMaximizedPaneId((current) => current === paneId ? '' : paneId)} onOpenSettings={() => openSettings('terminal')} maximizedPaneId={shown ? visibleMaximizedPaneId : ''} /></div>
           })}
           {!activeMuxSession ? <div className="welcome-state"><div className="welcome-icon"><SquareTerminal size={30} /></div><h2>{t('app.createYourFirstSession')}</h2><div className="welcome-actions"><button className="primary-button" onClick={() => setMuxSessionDialog({ mode: 'create' })}><CirclePlus size={16} />{t('app.newSession')}</button></div></div>
             : sessionTabs.length === 0 && sessionBrowserResources.length === 0 ? <div className="welcome-state"><div className="welcome-icon"><SquareTerminal size={30} /></div><h2>{activeMuxSession.name}</h2>{activeMuxSession.rootPath && <p>{activeMuxSession.rootPath}</p>}<div className="welcome-actions"><button className="primary-button" onClick={() => void openPaneLauncher()}><CirclePlus size={16} />{t('app.addFirstPane')}</button></div></div>
@@ -1849,6 +1861,22 @@ function summarizeManagedAgents(panes: WorkspaceTab[], events: ManagedAgentEvent
       latestAttention
     })
   }
+  // A managed launch has its identity before Codex emits its first Hook. Keep
+  // it visible as "starting" so a short Hook connection race cannot make the
+  // Agent tab appear empty. AgentProcessExit clears the pane identity above.
+  for (const pane of panes) {
+    if (!pane.agentId || !pane.runtimeId || !pane.launchProfileId || pane.status !== 'connected') continue
+    if (summaries.some((agent) => agent.agentId === pane.agentId)) continue
+    summaries.push({
+      agentId: pane.agentId,
+      paneId: pane.id,
+      runtimeId: pane.runtimeId,
+      status: 'starting',
+      eventCount: 0,
+      unread: false,
+      hasStructuredEvents: false
+    })
+  }
   return summaries.sort((a, b) => (b.unread ? 1 : 0) - (a.unread ? 1 : 0) || (b.timestamp ?? '').localeCompare(a.timestamp ?? ''))
 }
 
@@ -1925,6 +1953,14 @@ function insertPaneInLayout(layout: MuxSplitNode | undefined, anchorPaneId: stri
   }
   const [next, inserted] = visit(layout)
   return inserted ? next : { type: 'split', direction, ratio: 0.5, first: layout, second: leaf }
+}
+
+function layoutForNewPane(session: MuxSession, panes: WorkspaceTab[], paneId: string, anchorPaneId: string | undefined): MuxSplitNode {
+  const currentLayout = layoutFromPanes(session.layout, panes)
+  const paneIds = [...(currentLayout ? paneIdsInLayout(currentLayout) : []), paneId]
+  return paneIds.length > 2
+    ? layoutForPreset(paneIds, 'twoColumns')
+    : insertPaneInLayout(currentLayout, anchorPaneId, paneId, 'horizontal')
 }
 
 function removePaneFromLayout(layout: MuxSplitNode | undefined, paneId: string): MuxSplitNode | undefined {
@@ -2356,7 +2392,7 @@ function DeploymentDialog({ bookmark, sessionId, onClose, onConfirm, onError }: 
 }
 
 function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, uiTheme, appLanguage, aiSettings, remoteAgentIntegrationEnabled, onAiSettingsChange, onThemePreview, onLanguagePreview, onClose, onSave, onConfirm, onNotice, onError }: { initialSection: SettingsSection; settings: TerminalSettings; backgroundImage: string; appIcons: AppIconSettings; uiTheme: UiTheme; appLanguage: AppLanguage; aiSettings: AiSettings; remoteAgentIntegrationEnabled: boolean; onAiSettingsChange(settings: AiSettings): void; onThemePreview(theme: UiTheme): void; onLanguagePreview(language: AppLanguage): void; onClose(): void; onSave(settings: TerminalSettings, backgroundImage: string, appIcon: AppIconId, uiTheme: UiTheme, appLanguage: AppLanguage, ai: AiSettingsInput, remoteAgentIntegrationEnabled: boolean): void; onConfirm: ConfirmAction; onNotice(message: string): void; onError(message: string): void }): React.JSX.Element {
-  const { t } = useI18n()
+  const { language: currentLanguage, t } = useI18n()
   const [form, setForm] = useState<TerminalSettings>({ ...settings })
   const [previewImage, setPreviewImage] = useState(backgroundImage)
   const [appIcon, setAppIcon] = useState(appIcons.selected)
@@ -2470,7 +2506,7 @@ function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, u
       <div className="about-product"><img src={appIcons.options.find((icon) => icon.id === appIcon)?.dataUrl} alt="" /><div><h2>{PRODUCT_INFO.displayName}</h2><span>{t('app.versionValue', { value0: PRODUCT_INFO.version })}</span></div></div>
       <p>{t('app.aboutDescription')}</p>
       <div className="about-actions"><button type="button" className="primary-button" disabled={checkingUpdates} onClick={() => void checkForUpdates()}>{checkingUpdates ? t('app.checkingForUpdates') : t('app.checkForUpdates')}</button><button type="button" className="secondary-button" onClick={() => void window.api.system.openExternal(repositoryUrl).catch((error) => onError(errorMessage(error)))}><ExternalLink size={15} />{t('app.viewSourceCode')}</button></div>
-      <div className="about-meta"><span>{PRODUCT_INFO.description}</span><span>{t('app.openSourceLicense')}</span></div>
+      <div className="about-meta"><span>{t('app.openSourceLicense')}</span></div>
     </div> : section === 'ssh' ? <div className="remote-agent-settings">
       <div className="settings-option-row"><div><strong>{t('app.remoteAgentIntegration')}</strong><span>{t('app.remoteAgentIntegrationDescription')}</span></div><label className="switch-control"><input type="checkbox" checked={remoteAgentIntegration} onChange={(event) => void changeRemoteAgentIntegration(event.target.checked)} /><span aria-hidden="true" /></label></div>
       <div className="settings-information"><ShieldAlert size={17} /><div><strong>{remoteAgentIntegration ? t('app.remoteAgentIntegrationOn') : t('app.remoteAgentIntegrationOff')}</strong><span>{remoteAgentIntegration ? t('app.remoteAgentIntegrationOnDescription') : t('app.remoteAgentIntegrationOffDescription')}</span></div></div>

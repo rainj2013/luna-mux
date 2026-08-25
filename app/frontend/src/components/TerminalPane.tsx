@@ -17,10 +17,11 @@ const terminalLowWaterMark = 256 * 1024
 // it is long enough to collapse that duplicate, while still allowing a user to
 // intentionally commit the same CJK character twice in normal typing.
 const duplicateImeInputWindowMs = 40
+const terminalAccentColor = '#337fd6'
 const terminalSelectionTheme = {
-  selectionBackground: '#ffd43b',
-  selectionInactiveBackground: '#ffd43b',
-  selectionForeground: '#16181b'
+  selectionBackground: terminalAccentColor,
+  selectionInactiveBackground: terminalAccentColor,
+  selectionForeground: '#ffffff'
 }
 interface TerminalSearchMatch { row: number; col: number; length: number }
 interface PendingImePunctuation { text: string; createdAt: number; timer: number }
@@ -232,7 +233,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
       fontSize: settings.fontSize, lineHeight: 1.25, scrollback: 5000,
       linkHandler: { activate: openTerminalLink },
       ...(restorableSnapshot ? { cols: restorableSnapshot.cols, rows: restorableSnapshot.rows } : {}),
-      theme: { background: rendererBackground, foreground: settings.foregroundColor, cursor: '#78d64b', ...terminalSelectionTheme }
+      theme: { background: rendererBackground, foreground: settings.foregroundColor, cursor: terminalAccentColor, ...terminalSelectionTheme }
     })
     const fit = new FitAddon()
     const serialize = new SerializeAddon()

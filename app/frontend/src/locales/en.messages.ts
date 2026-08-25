@@ -1,7 +1,7 @@
 export default {
   "app.aFileWithThisNameAlreadyExists": "A file with this name already exists",
   "app.about": "About",
-  "app.aboutDescription": "A local and remote terminal workspace for coding agents.",
+  "app.aboutDescription": "A local and remote terminal workspace for coding agents",
   "app.alreadyLatestVersion": "You are using the latest version ({{value0}})",
   "app.aiCommand": "AI command",
   "app.advanced": "Advanced",
