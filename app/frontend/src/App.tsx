@@ -593,6 +593,7 @@ export function App(): React.JSX.Element {
     setActiveMuxSessionId(event.muxSessionId)
     setActiveKey(event.paneId)
     setWorkspaceView('terminal')
+    setMaximizedPaneId('')
     setReadAgentSequences((current) => new Set(current).add(event.sequence))
   }), [])
 
@@ -608,6 +609,10 @@ export function App(): React.JSX.Element {
   const activeMuxSession = muxSessions.find((session) => session.id === activeMuxSessionId)
   const sessionTabs = tabs.filter((tab) => tab.muxSessionId === activeMuxSessionId)
   const sessionBrowserResources = browserResources.filter((resource) => resource.muxSessionId === activeMuxSessionId)
+  const visibleMaximizedPaneId = maximizedPaneId === activeKey && sessionTabs.some((pane) => pane.id === maximizedPaneId) ? maximizedPaneId : ''
+  useEffect(() => {
+    if (maximizedPaneId && (maximizedPaneId !== activeKey || !tabs.some((pane) => pane.id === maximizedPaneId && pane.muxSessionId === activeMuxSessionId))) setMaximizedPaneId('')
+  }, [activeKey, activeMuxSessionId, maximizedPaneId, tabs])
   const activeTab = sessionTabs.find((tab) => tab.key === activeKey)
   const activeBookmark = activeTab?.kind === 'terminal' && activeTab.bookmarkId ? bookmarkMap.get(activeTab.bookmarkId) : undefined
   const activeSshRuntimeId = activeBookmark ? activeTab?.runtimeId ?? activeTab?.sessionId : undefined
@@ -1452,7 +1457,7 @@ export function App(): React.JSX.Element {
                   const paneDropClass = muxDrop?.type === 'pane' && muxDrop.id === pane.id ? `drop-${muxDrop.position}` : ''
                   return <div data-mux-pane-id={pane.id} data-pane-session-id={session.id} className={`mux-pane-item ${pane.key === activeKey ? 'active' : ''} ${agent?.unread ? 'unread' : ''} ${tone ? `attention-${tone}` : ''} ${pane.error ? 'has-error' : ''} ${draggedMuxItem?.type === 'pane' && draggedMuxItem.id === pane.id ? 'dragging' : ''} ${paneDropClass}`} key={pane.key} onContextMenu={(event) => openMuxSidebarContextMenu(event, { pane })}>
                     <span className="mux-drag-handle" title={t('app.dragToReorder')} onPointerDown={(event) => startMuxPointerDrag(event, 'pane', pane.id, session.id)}><GripVertical size={12} /></span>
-                    <button className="mux-pane-select" title={paneLabel} onClick={() => { setActiveMuxSessionId(pane.muxSessionId); setActiveKey(pane.key); setWorkspaceView('terminal'); if (agent) markAgentRead(agent.agentId) }} onDoubleClick={() => { if (pane.status !== 'connected') reconnectPane(pane) }}>
+                    <button className="mux-pane-select" title={paneLabel} onClick={() => { setActiveMuxSessionId(pane.muxSessionId); setActiveKey(pane.key); setWorkspaceView('terminal'); setMaximizedPaneId(''); if (agent) markAgentRead(agent.agentId) }} onDoubleClick={() => { if (pane.status !== 'connected') reconnectPane(pane) }}>
                       <span className={`status-dot ${pane.status}`} />
                       {agent ? <Sparkles size={14} /> : pane.bookmarkId ? <Server size={14} /> : <SquareTerminal size={14} />}
                       <span className="mux-pane-copy">
@@ -1504,7 +1509,7 @@ export function App(): React.JSX.Element {
             if (!layout) return null
             const shown = session.id === activeMuxSessionId && workspaceView === 'terminal'
             const hasBackgroundImage = Boolean(terminalSettings.backgroundImagePath && terminalBackground)
-            return <div key={session.id} hidden={!shown} className={`terminal-workspace ${hasBackgroundImage ? 'has-background-image' : ''}`} style={terminalBackgroundStyle(terminalSettings, terminalBackground)}><MuxLayout node={layout} panes={panes} bookmarks={bookmarkMap} activePaneId={shown ? activeKey : ''} settings={terminalSettings} backgroundImage={terminalBackground} agentAttentionByPane={agentAttentionByPane} activeAgentAdapterByPane={activeAgentAdapterByPane} terminalPaneRefs={terminalPaneRefs} onFocus={(pane) => { setActiveKey(pane.key); const agent = allAgents.find((item) => item.paneId === pane.id); if (agent) markAgentRead(agent.agentId) }} onTerminalAgentAction={(pane) => { const agent = allAgents.find((item) => item.paneId === pane.id); if (agent) dismissAgentWaitingAttention(agent) }} onRuntimeError={(pane, runtimeId, message) => { setTabs((current) => current.map((item) => item.key === pane.key && item.runtimeId === runtimeId ? { ...item, status: 'error', error: message } : item)); showError(message) }} onReconnect={reconnectPane} onReauthenticate={reauthenticatePane} onSplit={(pane, direction) => void splitPane(pane, direction)} onClose={closeTab} onResize={resizeLayout} onToggleMaximize={(paneId) => setMaximizedPaneId((current) => current ? '' : paneId)} onOpenSettings={() => openSettings('terminal')} maximizedPaneId={shown ? maximizedPaneId : ''} /></div>
+            return <div key={session.id} hidden={!shown} className={`terminal-workspace ${hasBackgroundImage ? 'has-background-image' : ''}`} style={terminalBackgroundStyle(terminalSettings, terminalBackground)}><MuxLayout node={layout} panes={panes} bookmarks={bookmarkMap} activePaneId={shown ? activeKey : ''} settings={terminalSettings} backgroundImage={terminalBackground} agentAttentionByPane={agentAttentionByPane} activeAgentAdapterByPane={activeAgentAdapterByPane} terminalPaneRefs={terminalPaneRefs} onFocus={(pane) => { setActiveKey(pane.key); const agent = allAgents.find((item) => item.paneId === pane.id); if (agent) markAgentRead(agent.agentId) }} onTerminalAgentAction={(pane) => { const agent = allAgents.find((item) => item.paneId === pane.id); if (agent) dismissAgentWaitingAttention(agent) }} onRuntimeError={(pane, runtimeId, message) => { setTabs((current) => current.map((item) => item.key === pane.key && item.runtimeId === runtimeId ? { ...item, status: 'error', error: message } : item)); showError(message) }} onReconnect={reconnectPane} onReauthenticate={reauthenticatePane} onSplit={(pane, direction) => void splitPane(pane, direction)} onClose={closeTab} onResize={resizeLayout} onToggleMaximize={(paneId) => setMaximizedPaneId((current) => current === paneId ? '' : paneId)} onOpenSettings={() => openSettings('terminal')} maximizedPaneId={shown ? visibleMaximizedPaneId : ''} /></div>
           })}
           {!activeMuxSession ? <div className="welcome-state"><div className="welcome-icon"><SquareTerminal size={30} /></div><h2>{t('app.createYourFirstSession')}</h2><div className="welcome-actions"><button className="primary-button" onClick={() => setMuxSessionDialog({ mode: 'create' })}><CirclePlus size={16} />{t('app.newSession')}</button></div></div>
             : sessionTabs.length === 0 && sessionBrowserResources.length === 0 ? <div className="welcome-state"><div className="welcome-icon"><SquareTerminal size={30} /></div><h2>{activeMuxSession.name}</h2>{activeMuxSession.rootPath && <p>{activeMuxSession.rootPath}</p>}<div className="welcome-actions"><button className="primary-button" onClick={() => void openPaneLauncher()}><CirclePlus size={16} />{t('app.addFirstPane')}</button></div></div>
