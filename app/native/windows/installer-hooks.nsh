@@ -10,7 +10,7 @@
   Pop $R0
   ${If} $R0 = 0
     MessageBox MB_ICONSTOP|MB_OK "Luna Mux is currently running. Please completely close it, then run the installer again." /SD IDOK
-    Abort
+    Quit
   ${EndIf}
 !macroend
 
@@ -36,7 +36,7 @@
       IntOp $R2 $R2 + 1
       ${If} $R2 >= 8
         MessageBox MB_ICONSTOP|MB_OK "Luna Mux could not stop its browser automation process. Close Luna Mux and retry the installer." /SD IDOK
-        Abort
+        Quit
       ${EndIf}
       Sleep 250
     ${Loop}
