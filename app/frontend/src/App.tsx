@@ -257,7 +257,7 @@ export function App(): React.JSX.Element {
       const pane: WorkspaceTab = { ...savedPane, key: savedPane.id, runtimeId, status: 'connecting' }
       createdPaneKey = pane.key
       setTabs((current) => [...current, pane])
-      const layout = insertPaneInLayout(layoutFromPanes(muxSession.layout, sessionTabs), activeKey || undefined, pane.id, 'horizontal')
+      const layout = layoutForNewPane(muxSession, sessionTabs, pane.id, activeKey || undefined)
       await persistSessionLayout(muxSession, layout)
       setActiveKey(pane.key)
       setWorkspaceView('terminal')
@@ -1002,7 +1002,7 @@ export function App(): React.JSX.Element {
         key = savedPane.id
         pane = { ...savedPane, key: savedPane.id, status: 'connecting' }
         setTabs((current) => [...current, pane!])
-        const layout = insertPaneInLayout(layoutFromPanes(muxSession.layout, sessionTabs), activeKey || undefined, savedPane.id, 'horizontal')
+        const layout = layoutForNewPane(muxSession, sessionTabs, savedPane.id, activeKey || undefined)
         await persistSessionLayout(muxSession, layout)
       } else setTabs((current) => current.map((tab) => tab.key === key ? { ...tab, sessionId: undefined, runtimeId: undefined, status: 'connecting', error: undefined } : tab))
       setActiveKey(key); setAuthRequest(null)
@@ -1925,6 +1925,14 @@ function insertPaneInLayout(layout: MuxSplitNode | undefined, anchorPaneId: stri
   }
   const [next, inserted] = visit(layout)
   return inserted ? next : { type: 'split', direction, ratio: 0.5, first: layout, second: leaf }
+}
+
+function layoutForNewPane(session: MuxSession, panes: WorkspaceTab[], paneId: string, anchorPaneId: string | undefined): MuxSplitNode {
+  const currentLayout = layoutFromPanes(session.layout, panes)
+  const paneIds = [...(currentLayout ? paneIdsInLayout(currentLayout) : []), paneId]
+  return paneIds.length > 2
+    ? layoutForPreset(paneIds, 'twoColumns')
+    : insertPaneInLayout(currentLayout, anchorPaneId, paneId, 'horizontal')
 }
 
 function removePaneFromLayout(layout: MuxSplitNode | undefined, paneId: string): MuxSplitNode | undefined {
