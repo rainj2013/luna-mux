@@ -684,11 +684,12 @@ body.mux-split-resizing { cursor: col-resize; user-select: none; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 2px; }
 .dialog-actions.spread { justify-content: space-between; }
 .dialog-actions > div { display: flex; gap: 8px; }
-.terminal-settings-form { min-width: 0; min-height: 0; padding: 0; grid-template-columns: 174px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; align-content: stretch; gap: 0; overflow: hidden; }
+.terminal-settings-form { min-width: 0; min-height: 0; padding: 0; grid-template-columns: 220px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; align-content: stretch; gap: 0; overflow: hidden; }
 .settings-tabs { min-height: 0; padding: 12px 8px; grid-row: 1 / 3; display: flex; flex-direction: column; gap: 17px; border-right: 1px solid var(--border); background: var(--surface-subtle); }
 .settings-nav-group { min-width: 0; display: grid; gap: 3px; }
 .settings-nav-group > span { padding: 0 10px 4px; color: var(--text-subtle); font-size: 10px; line-height: 18px; }
-.settings-tabs button { position: relative; width: 100%; height: 38px; padding: 0 10px; display: inline-flex; align-items: center; gap: 8px; color: var(--text-muted); background: transparent; border: 0; border-radius: var(--radius-control); cursor: pointer; font-size: 11px; }
+.settings-tabs button { position: relative; width: 100%; height: 38px; padding: 0 10px; display: inline-flex; align-items: center; gap: 8px; color: var(--text-muted); background: transparent; border: 0; border-radius: var(--radius-control); cursor: pointer; font-size: 11px; white-space: nowrap; }
+.settings-tabs button svg { flex: none; }
 .settings-tabs button:hover { color: var(--text-strong); }
 .settings-tabs button.active { color: var(--text-strong); background: var(--selection-bg); font-weight: 600; }
 .settings-tabs button.active::after { content: none; }
