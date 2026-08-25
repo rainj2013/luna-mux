@@ -673,6 +673,14 @@ body.mux-split-resizing { cursor: col-resize; user-select: none; }
 .app-icon-options input { position: absolute; opacity: 0; pointer-events: none; }
 .app-icon-options img { width: 54px; height: 54px; object-fit: contain; }
 .app-icon-options span { max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.about-settings { min-height: 100%; display: grid; align-content: center; justify-items: center; gap: 16px; text-align: center; }
+.about-product { display: flex; align-items: center; gap: 14px; text-align: left; }
+.about-product img { width: 68px; height: 68px; object-fit: contain; }
+.about-product h2 { margin: 0 0 5px; color: var(--text-strong); font-size: 22px; font-weight: 650; }
+.about-product span, .about-settings p, .about-meta { color: var(--text-muted); }
+.about-settings p { max-width: 420px; margin: 0; font-size: 12px; line-height: 1.65; }
+.about-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+.about-meta { display: grid; gap: 4px; padding-top: 8px; font-size: 10px; }
 .diagnostics-panel { min-width: 0; display: grid; align-content: start; gap: 12px; }
 .diagnostics-summary { min-width: 0; padding: 0 0 14px; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px; border-bottom: 1px solid var(--border); }
 .diagnostics-summary-icon, .diagnostics-check-icon { width: 22px; height: 22px; flex: none; display: grid; place-items: center; border-radius: 4px; }

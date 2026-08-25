@@ -11,6 +11,7 @@ use std::{
 use crate::desktop;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use chrono::Utc;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::{AppHandle, Emitter, Manager, State, Theme, WebviewWindow};
 use tauri_plugin_dialog::{DialogExt, FilePath};
@@ -270,6 +271,84 @@ pub fn system_open_external(app: AppHandle, value: String) -> Result<(), String>
     app.opener()
         .open_url(url.to_string(), None::<&str>)
         .map_err(|e| e.to_string())
+}
+
+const LATEST_RELEASE_API: &str = "https://api.github.com/repos/rainj2013/luna-mux/releases/latest";
+
+#[derive(Deserialize)]
+struct GitHubRelease {
+    tag_name: String,
+    html_url: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateCheckResult {
+    current_version: String,
+    latest_version: String,
+    release_url: String,
+    update_available: bool,
+}
+
+fn version_parts(value: &str) -> Result<Vec<u64>, String> {
+    let core = value.trim().trim_start_matches(['v', 'V']).split(['-', '+']).next().unwrap_or("");
+    if core.is_empty() {
+        return Err(format!("无法识别版本号：{value}"));
+    }
+    core.split('.')
+        .map(|part| part.parse::<u64>().map_err(|_| format!("无法识别版本号：{value}")))
+        .collect()
+}
+
+fn version_is_newer(candidate: &str, current: &str) -> Result<bool, String> {
+    let mut candidate = version_parts(candidate)?;
+    let mut current = version_parts(current)?;
+    let width = candidate.len().max(current.len());
+    candidate.resize(width, 0);
+    current.resize(width, 0);
+    Ok(candidate > current)
+}
+
+#[tauri::command]
+pub async fn system_check_for_updates() -> Result<UpdateCheckResult, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|error| format!("无法创建更新检查请求：{error}"))?;
+    let response = client
+        .get(LATEST_RELEASE_API)
+        .header(reqwest::header::USER_AGENT, "luna-mux-update-check")
+        .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+        .send()
+        .await
+        .map_err(|error| format!("检查更新失败：{error}"))?
+        .error_for_status()
+        .map_err(|error| format!("检查更新失败：{error}"))?;
+    let release = response
+        .json::<GitHubRelease>()
+        .await
+        .map_err(|error| format!("无法读取最新版本信息：{error}"))?;
+    let current_version = env!("CARGO_PKG_VERSION").to_string();
+    let update_available = version_is_newer(&release.tag_name, &current_version)?;
+    Ok(UpdateCheckResult {
+        current_version,
+        latest_version: release.tag_name.trim_start_matches(['v', 'V']).to_string(),
+        release_url: release.html_url,
+        update_available,
+    })
+}
+
+#[cfg(test)]
+mod update_check_tests {
+    use super::version_is_newer;
+
+    #[test]
+    fn compares_release_versions_numerically() {
+        assert!(version_is_newer("v0.2.0", "0.1.9").unwrap());
+        assert!(version_is_newer("0.1.10", "0.1.9").unwrap());
+        assert!(!version_is_newer("v0.1.1", "0.1.1").unwrap());
+        assert!(!version_is_newer("0.1", "0.1.0").unwrap());
+    }
 }
 
 #[tauri::command]

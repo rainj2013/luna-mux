@@ -57,6 +57,7 @@ export async function createTauriApi(): Promise<AppApi> {
     platform,
     system: {
       openExternal: (url) => call('system_open_external', { value: url }),
+      checkForUpdates: () => call('system_check_for_updates'),
       readClipboard: readClipboardContent,
       writeClipboard: (text) => writeText(text.slice(0, 4 * 1024 * 1024)),
       minimizeWindow: () => currentWindow.minimize(),

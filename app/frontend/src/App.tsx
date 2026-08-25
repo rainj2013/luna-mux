@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowRight, Bookmark as BookmarkIcon, Bot, Check, ChevronDown, ChevronRight, CircleHelp, CirclePlus, Columns2, Columns3, Copy, Database as DatabaseIcon, Download, Edit3, ExternalLink, Eye, EyeOff, FileInput, FileJson2, Folder, FolderOpen, FolderPlus, Globe2, Grid2x2, GripVertical, History as HistoryIcon, Image as ImageIcon, KeyRound, Languages, LayoutGrid, Maximize2, Minimize, Minus, Monitor, Moon, Network, Palette, PanelLeftClose, PanelLeftOpen, Play, Plus, Power, Rocket, RotateCcw, Rows2, Rows3, Search, Send, Server, Settings as SettingsIcon, ShieldAlert, Sparkles, Square, SquareTerminal, Star, Stethoscope, Sun, Trash2, Upload, WandSparkles, X } from 'lucide-react'
+import { ArrowRight, Bookmark as BookmarkIcon, Bot, Check, ChevronDown, ChevronRight, CircleHelp, CirclePlus, Columns2, Columns3, Copy, Database as DatabaseIcon, Download, Edit3, ExternalLink, Eye, EyeOff, FileInput, FileJson2, Folder, FolderOpen, FolderPlus, Globe2, Grid2x2, GripVertical, History as HistoryIcon, Image as ImageIcon, Info, KeyRound, Languages, LayoutGrid, Maximize2, Minimize, Minus, Monitor, Moon, Network, Palette, PanelLeftClose, PanelLeftOpen, Play, Plus, Power, Rocket, RotateCcw, Rows2, Rows3, Search, Send, Server, Settings as SettingsIcon, ShieldAlert, Sparkles, Square, SquareTerminal, Star, Stethoscope, Sun, Trash2, Upload, WandSparkles, X } from 'lucide-react'
 import { BUNDLED_TERMINAL_FONT, DEFAULT_AI_SETTINGS, DEFAULT_TERMINAL_SETTINGS, type AgentLaunchProfile, type AiCommandHistoryEntry, type AiCommandSuggestion, type AiProvider, type AiRawExchange, type AiRiskAssessment, type AiSettings, type AiSettingsInput, type AiShell, type AiThinkingMode, type AppEvent, type AppIconId, type AppIconSettings, type AppLanguage, type Bookmark, type BookmarkArchivePreview, type BookmarkArchiveSource, type BookmarkInput, type BrowserResource, type BrowserRuntime, type BrowserRuntimeStatus, type BrowserTunnel, type ChromeInstallation, type ConflictResolution, type ConnectInput, type DeploymentDiffEntry, type DeploymentProfile, type DoctorCheck, type DoctorCheckStatus, type DoctorManagedAgent, type DoctorReport, type DoctorRuntimeCheck, type HostKeyPrompt, type LunaRemoteImportPreview, type LunaRemoteImportResult, type LunaRemoteSource, type ManagedAgentEvent, type ManagedAgentStatus, type MuxPane, type MuxSession, type MuxSplitNode, type PortForwardProfile, type SessionStatus, type SshConfigPreview, type TerminalRuntime, type TerminalRuntimeEvent, type TerminalSettings, type TerminalTarget, type TransferTask, type TunnelSummary, type UiTheme } from './types'
 import { discardTerminalSnapshot, TerminalPane, type TerminalPaneHandle } from './components/TerminalPane'
 import { SftpPane } from './components/SftpPane'
@@ -19,7 +19,7 @@ interface SidebarContextMenu { x: number; y: number; group?: string; bookmark?: 
 type MuxSidebarContextMenu = { x: number; y: number } & ({ session: MuxSession; pane?: never } | { pane: WorkspaceTab; session?: never })
 interface GroupDialogState { mode: 'create' | 'rename'; group?: string }
 interface MuxSessionDialogState { mode: 'create' | 'rename'; session?: MuxSession }
-type SettingsSection = 'appearance' | 'terminal' | 'diagnostics' | 'ssh' | 'ai'
+type SettingsSection = 'appearance' | 'terminal' | 'diagnostics' | 'ssh' | 'ai' | 'about'
 type SidebarPointerDrag = { pointerId: number; type: 'bookmark' | 'group'; value: string; startX: number; startY: number; active: boolean }
 type SidebarPointerDrop = { type: 'bookmark'; id: string; group: string; position: 'before' | 'after' } | { type: 'group'; group: string; position: 'before' | 'after' | 'inside' }
 type MuxPointerDrag = { pointerId: number; type: 'session' | 'pane'; id: string; muxSessionId?: string; startX: number; startY: number; active: boolean }
@@ -36,6 +36,7 @@ const minSidebarWidth = 200
 const maxSidebarWidth = 480
 const aiTerminalContextLines = 100
 const aiTerminalContextChars = 16_000
+const repositoryUrl = 'https://github.com/rainj2013/luna-mux'
 const appIconMessageKeys: Record<AppIconId, MessageKey> = { luna: 'appIcon.luna', graphite: 'appIcon.graphite', signal: 'appIcon.signal', light: 'appIcon.light' }
 
 function primaryFontName(fontFamily: string): string {
@@ -1581,7 +1582,7 @@ export function App(): React.JSX.Element {
     {authRequest && <AuthDialog bookmark={authRequest.bookmark} jumpBookmark={authRequest.bookmark.jumpBookmarkId ? bookmarkMap.get(authRequest.bookmark.jumpBookmarkId) : undefined} onClose={() => setAuthRequest(null)} onConnect={(credentials) => void connect(authRequest.bookmark, credentials, authRequest.target)} />}
     {hostPrompts[0] && <HostKeyDialog prompt={hostPrompts[0]} onDecision={(accept) => { const prompt = hostPrompts[0]; if (!prompt) return; window.api.sessions.hostKeyDecision(prompt.sessionId, accept); setHostPrompts((current) => current.filter((item) => item !== prompt)) }} />}
     {conflict && <ConflictDialog conflict={conflict} onDecision={(resolution, apply) => { window.api.transfers.resolveConflict(conflict.taskId, resolution, apply); setConflict(null) }} />}
-    {settingsDialog && <SettingsDialog initialSection={settingsInitialSection} settings={terminalSettings} backgroundImage={terminalBackground} appIcons={appIcons} uiTheme={uiTheme} appLanguage={savedLanguage} aiSettings={aiSettings} remoteAgentIntegrationEnabled={remoteAgentIntegrationEnabled} onAiSettingsChange={setAiSettings} onThemePreview={setUiThemePreview} onLanguagePreview={setLanguage} onClose={() => { setUiThemePreview(null); setLanguage(savedLanguage); setSettingsDialog(false) }} onSave={(settings, image, icon, theme, appLanguage, ai, remoteAgentIntegration) => void saveSettings(settings, image, icon, theme, appLanguage, ai, remoteAgentIntegration)} onConfirm={confirmAction} onError={showError} />}
+    {settingsDialog && <SettingsDialog initialSection={settingsInitialSection} settings={terminalSettings} backgroundImage={terminalBackground} appIcons={appIcons} uiTheme={uiTheme} appLanguage={savedLanguage} aiSettings={aiSettings} remoteAgentIntegrationEnabled={remoteAgentIntegrationEnabled} onAiSettingsChange={setAiSettings} onThemePreview={setUiThemePreview} onLanguagePreview={setLanguage} onClose={() => { setUiThemePreview(null); setLanguage(savedLanguage); setSettingsDialog(false) }} onSave={(settings, image, icon, theme, appLanguage, ai, remoteAgentIntegration) => void saveSettings(settings, image, icon, theme, appLanguage, ai, remoteAgentIntegration)} onConfirm={confirmAction} onNotice={(message) => showToast(message, 'success')} onError={showError} />}
     {aiDialog && activeAiCommandTarget && activeTab && <AiCommandDialog target={activeAiCommandTarget} settings={aiSettings} getTerminalContext={() => terminalPaneRefs.current.get(activeTab.key)?.getRecentLines(aiTerminalContextLines, aiTerminalContextChars) ?? ''} onSettingsChange={setAiSettings} onSettings={() => { setAiDialog(false); openSettings('ai') }} onClose={() => setAiDialog(false)} onError={showError} />}
     {helpDialog && <HelpDialog onClose={() => setHelpDialog(false)} />}
     {deploymentDialog && activeBookmark && activeSshRuntimeId && <DeploymentDialog bookmark={activeBookmark} sessionId={activeSshRuntimeId} onClose={() => setDeploymentDialog(false)} onConfirm={confirmAction} onError={showError} />}
@@ -2354,7 +2355,7 @@ function DeploymentDialog({ bookmark, sessionId, onClose, onConfirm, onError }: 
   </div></Modal>
 }
 
-function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, uiTheme, appLanguage, aiSettings, remoteAgentIntegrationEnabled, onAiSettingsChange, onThemePreview, onLanguagePreview, onClose, onSave, onConfirm, onError }: { initialSection: SettingsSection; settings: TerminalSettings; backgroundImage: string; appIcons: AppIconSettings; uiTheme: UiTheme; appLanguage: AppLanguage; aiSettings: AiSettings; remoteAgentIntegrationEnabled: boolean; onAiSettingsChange(settings: AiSettings): void; onThemePreview(theme: UiTheme): void; onLanguagePreview(language: AppLanguage): void; onClose(): void; onSave(settings: TerminalSettings, backgroundImage: string, appIcon: AppIconId, uiTheme: UiTheme, appLanguage: AppLanguage, ai: AiSettingsInput, remoteAgentIntegrationEnabled: boolean): void; onConfirm: ConfirmAction; onError(message: string): void }): React.JSX.Element {
+function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, uiTheme, appLanguage, aiSettings, remoteAgentIntegrationEnabled, onAiSettingsChange, onThemePreview, onLanguagePreview, onClose, onSave, onConfirm, onNotice, onError }: { initialSection: SettingsSection; settings: TerminalSettings; backgroundImage: string; appIcons: AppIconSettings; uiTheme: UiTheme; appLanguage: AppLanguage; aiSettings: AiSettings; remoteAgentIntegrationEnabled: boolean; onAiSettingsChange(settings: AiSettings): void; onThemePreview(theme: UiTheme): void; onLanguagePreview(language: AppLanguage): void; onClose(): void; onSave(settings: TerminalSettings, backgroundImage: string, appIcon: AppIconId, uiTheme: UiTheme, appLanguage: AppLanguage, ai: AiSettingsInput, remoteAgentIntegrationEnabled: boolean): void; onConfirm: ConfirmAction; onNotice(message: string): void; onError(message: string): void }): React.JSX.Element {
   const { t } = useI18n()
   const [form, setForm] = useState<TerminalSettings>({ ...settings })
   const [previewImage, setPreviewImage] = useState(backgroundImage)
@@ -2366,6 +2367,7 @@ function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, u
   const [apiKey, setApiKey] = useState('')
   const [testingAi, setTestingAi] = useState(false)
   const [aiTested, setAiTested] = useState(false)
+  const [checkingUpdates, setCheckingUpdates] = useState(false)
   const [section, setSection] = useState<SettingsSection>(initialSection)
   const [systemFonts, setSystemFonts] = useState<string[] | null>(null)
   const [manualFontMode, setManualFontMode] = useState(false)
@@ -2418,6 +2420,25 @@ function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, u
     try { const saved = await window.api.ai.deleteApiKey(); setApiKey(''); setAiForm((current) => ({ ...current, apiKeyConfigured: saved.apiKeyConfigured })); onAiSettingsChange(saved) }
     catch (error) { onError(errorMessage(error)) }
   }
+  const checkForUpdates = async (): Promise<void> => {
+    setCheckingUpdates(true)
+    try {
+      const result = await window.api.system.checkForUpdates()
+      if (!result.updateAvailable) {
+        onNotice(t('app.alreadyLatestVersion', { value0: result.currentVersion }))
+        return
+      }
+      const openRelease = await onConfirm({
+        title: t('app.updateAvailable'),
+        message: t('app.newVersionAvailable', { value0: result.latestVersion }),
+        detail: t('app.currentVersionValue', { value0: result.currentVersion }),
+        kind: 'warning',
+        confirmLabel: t('app.openReleasePage')
+      })
+      if (openRelease) await window.api.system.openExternal(result.releaseUrl)
+    } catch (error) { onError(errorMessage(error)) }
+    finally { setCheckingUpdates(false) }
+  }
   const themeOptions: { value: UiTheme; label: string; icon: typeof Monitor }[] = [{ value: 'system', label: t('app.system'), icon: Monitor }, { value: 'light', label: t('app.light'), icon: Sun }, { value: 'dark', label: t('app.dark'), icon: Moon }]
   const providerOptions: { value: AiProvider; label: string }[] = [{ value: 'auto', label: t('app.autoDetect') }, { value: 'openAi', label: 'OpenAI' }, { value: 'anthropic', label: 'Anthropic' }, { value: 'qwen', label: 'Qwen' }, { value: 'deepSeek', label: 'DeepSeek' }, { value: 'kimi', label: 'Kimi' }, { value: 'glm', label: 'GLM' }, { value: 'miniMax', label: 'MiniMax' }, { value: 'grok', label: 'Grok' }, { value: 'gemini', label: 'Gemini' }]
   const providerClue = `${aiForm.provider} ${aiForm.baseUrl} ${aiForm.model}`.toLowerCase()
@@ -2441,10 +2462,16 @@ function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, u
       </div>
       <div className="settings-nav-group" role="presentation"><span>{t('app.advanced')}</span>
         <button type="button" role="tab" aria-selected={section === 'diagnostics'} className={section === 'diagnostics' ? 'active' : ''} onClick={() => setSection('diagnostics')}><Stethoscope size={15} />{t('app.diagnostics')}</button>
+        <button type="button" role="tab" aria-selected={section === 'about'} className={section === 'about' ? 'active' : ''} onClick={() => setSection('about')}><Info size={15} />{t('app.about')}</button>
       </div>
     </div>
     <div className={`settings-content ${section}`}>
-    {section === 'appearance' ? <><fieldset className="ui-theme-settings"><legend>{t('common.theme')}</legend><div className="theme-options" role="radiogroup" aria-label={t('common.theme')}>{themeOptions.map((option) => { const Icon = option.icon; return <button key={option.value} type="button" role="radio" aria-checked={theme === option.value} className={theme === option.value ? 'active' : ''} onClick={() => selectTheme(option.value)}><Icon size={17} /><span>{option.label}</span></button> })}</div></fieldset><fieldset className="ui-theme-settings"><legend>{t('common.language')}</legend><div className="theme-options" role="radiogroup" aria-label={t('common.language')}>{availableLanguages.map((option) => <button key={option.code} type="button" role="radio" aria-checked={language === option.code} className={language === option.code ? 'active' : ''} onClick={() => { setDialogLanguage(option.code); onLanguagePreview(option.code) }}><Languages size={17} /><span>{option.label}</span></button>)}</div></fieldset><fieldset className="app-icon-settings"><legend>{t('app.appIcon')}</legend><div className="app-icon-options">{appIcons.options.map((icon) => <label key={icon.id} className={appIcon === icon.id ? 'selected' : ''}><input type="radio" name="app-icon" checked={appIcon === icon.id} onChange={() => setAppIcon(icon.id)} /><img src={icon.dataUrl} alt="" /><span>{t(appIconMessageKeys[icon.id])}</span></label>)}</div></fieldset></> : section === 'diagnostics' ? <DiagnosticsPanel onError={onError} /> : section === 'ssh' ? <div className="remote-agent-settings">
+    {section === 'appearance' ? <><fieldset className="ui-theme-settings"><legend>{t('common.theme')}</legend><div className="theme-options" role="radiogroup" aria-label={t('common.theme')}>{themeOptions.map((option) => { const Icon = option.icon; return <button key={option.value} type="button" role="radio" aria-checked={theme === option.value} className={theme === option.value ? 'active' : ''} onClick={() => selectTheme(option.value)}><Icon size={17} /><span>{option.label}</span></button> })}</div></fieldset><fieldset className="ui-theme-settings"><legend>{t('common.language')}</legend><div className="theme-options" role="radiogroup" aria-label={t('common.language')}>{availableLanguages.map((option) => <button key={option.code} type="button" role="radio" aria-checked={language === option.code} className={language === option.code ? 'active' : ''} onClick={() => { setDialogLanguage(option.code); onLanguagePreview(option.code) }}><Languages size={17} /><span>{option.label}</span></button>)}</div></fieldset><fieldset className="app-icon-settings"><legend>{t('app.appIcon')}</legend><div className="app-icon-options">{appIcons.options.map((icon) => <label key={icon.id} className={appIcon === icon.id ? 'selected' : ''}><input type="radio" name="app-icon" checked={appIcon === icon.id} onChange={() => setAppIcon(icon.id)} /><img src={icon.dataUrl} alt="" /><span>{t(appIconMessageKeys[icon.id])}</span></label>)}</div></fieldset></> : section === 'diagnostics' ? <DiagnosticsPanel onError={onError} /> : section === 'about' ? <div className="about-settings">
+      <div className="about-product"><img src={appIcons.options.find((icon) => icon.id === appIcon)?.dataUrl} alt="" /><div><h2>{PRODUCT_INFO.displayName}</h2><span>{t('app.versionValue', { value0: PRODUCT_INFO.version })}</span></div></div>
+      <p>{t('app.aboutDescription')}</p>
+      <div className="about-actions"><button type="button" className="primary-button" disabled={checkingUpdates} onClick={() => void checkForUpdates()}>{checkingUpdates ? t('app.checkingForUpdates') : t('app.checkForUpdates')}</button><button type="button" className="secondary-button" onClick={() => void window.api.system.openExternal(repositoryUrl).catch((error) => onError(errorMessage(error)))}><ExternalLink size={15} />{t('app.viewSourceCode')}</button></div>
+      <div className="about-meta"><span>{PRODUCT_INFO.description}</span><span>{t('app.openSourceLicense')}</span></div>
+    </div> : section === 'ssh' ? <div className="remote-agent-settings">
       <div className="settings-option-row"><div><strong>{t('app.remoteAgentIntegration')}</strong><span>{t('app.remoteAgentIntegrationDescription')}</span></div><label className="switch-control"><input type="checkbox" checked={remoteAgentIntegration} onChange={(event) => void changeRemoteAgentIntegration(event.target.checked)} /><span aria-hidden="true" /></label></div>
       <div className="settings-information"><ShieldAlert size={17} /><div><strong>{remoteAgentIntegration ? t('app.remoteAgentIntegrationOn') : t('app.remoteAgentIntegrationOff')}</strong><span>{remoteAgentIntegration ? t('app.remoteAgentIntegrationOnDescription') : t('app.remoteAgentIntegrationOffDescription')}</span></div></div>
     </div> : section === 'ai' ? <div className="ai-settings">
@@ -2465,7 +2492,7 @@ function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, u
       <label>{t('app.imageFit')}<select value={form.backgroundImageFit} onChange={(event) => set('backgroundImageFit', event.target.value as TerminalSettings['backgroundImageFit'])}><option value="cover">{t('app.cover')}</option><option value="contain">{t('app.contain')}</option><option value="stretch">{t('app.stretch')}</option><option value="tile">{t('app.tile')}</option></select></label>
     </>}
     </div>
-    <div className="dialog-actions spread"><button type="button" className="secondary-button" onClick={reset}><RotateCcw size={15} />{t('app.restoreDefaults')}</button><div><button type="button" className="secondary-button" onClick={onClose}>{t('common.cancel')}</button><button className="primary-button" type="submit">{t('common.save')}</button></div></div>
+    <div className={`dialog-actions ${section === 'about' ? '' : 'spread'}`}>{section !== 'about' && <button type="button" className="secondary-button" onClick={reset}><RotateCcw size={15} />{t('app.restoreDefaults')}</button>}<div><button type="button" className="secondary-button" onClick={onClose}>{section === 'about' ? t('common.close') : t('common.cancel')}</button>{section !== 'about' && <button className="primary-button" type="submit">{t('common.save')}</button>}</div></div>
   </form></Modal>
 }
 
