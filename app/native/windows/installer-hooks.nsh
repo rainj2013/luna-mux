@@ -1,50 +1,20 @@
-!macro StopInstalledLunaMuxProcesses
-  ; Tauri's CheckIfAppIsRunning macro terminates only the main executable. Capture
-  ; matching main-process PIDs first so we can clean up descendants (PowerShell,
-  ; ConPTY and Codex) after the normal installer prompt/termination has completed.
-  StrCpy $R4 "$PLUGINSDIR\luna-mux-process-tree.txt"
-  ${If} ${RunningX64}
-    ; NSIS is 32-bit, so Sysnative is required to inspect a 64-bit process path.
-    StrCpy $R3 "$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
-  ${Else}
-    StrCpy $R3 "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe"
-  ${EndIf}
-  ; Keep the PowerShell argument free of nested double quotes.  nsExec passes
-  ; this whole command through Windows' command-line parser before PowerShell
-  ; sees it; [Environment]::NewLine has the same result as "`n" without
-  ; prematurely ending the quoted -Command argument.
-  nsExec::ExecToStack `"$R3" -NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -Command "& { param([string]$$target,[string]$$pidFile); $$target = [IO.Path]::GetFullPath($$target); $$roots = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { try { $$_.ExecutablePath -and [String]::Equals([string]$$_.ExecutablePath,$$target,[StringComparison]::OrdinalIgnoreCase) } catch { $$false } } | Select-Object -ExpandProperty ProcessId); if ($$roots.Count -gt 0) { Set-Content -LiteralPath $$pidFile -Value ($$roots -join [Environment]::NewLine) -Encoding ASCII } else { Remove-Item -LiteralPath $$pidFile -Force -ErrorAction SilentlyContinue } }" "$INSTDIR\${MAINBINARYNAME}.exe" "$R4"`
+!macro RejectRunningLunaMux
+  ; Refuse to start an install or uninstall while any Luna Mux process is
+  ; running. The generated Tauri installer hook below normally offers to kill
+  ; the process; doing that can also tear down the user's terminal sessions.
+  !if "${INSTALLMODE}" == "currentUser"
+    nsis_tauri_utils::FindProcessCurrentUser "${MAINBINARYNAME}.exe"
+  !else
+    nsis_tauri_utils::FindProcess "${MAINBINARYNAME}.exe"
+  !endif
   Pop $R0
-  Pop $R1
-
-  ; Give the user a chance to close the old app cleanly before any forced
-  ; termination.  The prompt is only shown when a matching process was found.
-  ${If} ${FileExists} "$R4"
-    MessageBox MB_ICONEXCLAMATION|MB_OKCANCEL "Luna Mux is still running. Please completely close the old version before installing the new version. Click OK to continue; if it is still running, the installer will terminate it and its child processes. Click Cancel to stop the installation." /SD IDOK
-    Pop $0
-    ${If} $0 == IDCANCEL
-      Abort
-    ${EndIf}
+  ${If} $R0 = 0
+    MessageBox MB_ICONSTOP|MB_OK "Luna Mux is currently running. Please completely close it, then run the installer again." /SD IDOK
+    Quit
   ${EndIf}
+!macroend
 
-  !insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
-
-  ; CheckIfAppIsRunning uses the same NSIS scratch registers, including $R3.
-  ; Restore the PowerShell path before running the descendant cleanup.
-  ${If} ${RunningX64}
-    StrCpy $R3 "$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
-  ${Else}
-    StrCpy $R3 "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe"
-  ${EndIf}
-
-  ; The main process may already be gone by now, while its children can remain
-  ; alive. Resolve descendants from the captured root PID(s) and terminate only
-  ; that process tree. Re-scan several times because a shell can briefly spawn a
-  ; child while it is being torn down.
-  nsExec::ExecToStack `"$R3" -NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -Command "& { param([string]$$pidFile); if (!(Test-Path -LiteralPath $$pidFile)) { exit 0 }; for ($$attempt = 0; $$attempt -lt 8; $$attempt++) { $$records = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue); $$queue = @(); $$roots = @(Get-Content -LiteralPath $$pidFile -ErrorAction SilentlyContinue | ForEach-Object { $$line = $$_.Trim(); if ($$line -match '^[1-9][0-9]*$$') { [uint32]$$line } }); $$queue += $$roots; $$descendants = @(); while ($$queue.Count -gt 0) { $$parent = [uint32]$$queue[0]; if ($$queue.Count -eq 1) { $$queue = @() } else { $$queue = $$queue[1..($$queue.Count - 1)] }; foreach ($$child in ($$records | Where-Object { [uint32]$$_.ParentProcessId -eq $$parent })) { $$childId = [uint32]$$child.ProcessId; if (!($$descendants -contains $$childId) -and !($$roots -contains $$childId)) { $$descendants += $$childId; $$queue += $$childId } } }; if ($$descendants.Count -eq 0) { break }; foreach ($$processId in $$descendants) { Stop-Process -Id $$processId -Force -ErrorAction SilentlyContinue }; Start-Sleep -Milliseconds 250 }; Remove-Item -LiteralPath $$pidFile -Force -ErrorAction SilentlyContinue }" "$R4"`
-  Pop $R0
-  Pop $R1
-
+!macro StopOrphanedAgentBrowser
   ${If} ${FileExists} "$INSTDIR\agent-browser.exe"
     ${If} ${RunningX64}
       ; NSIS is 32-bit, so Sysnative is required to inspect a 64-bit process path.
@@ -66,7 +36,7 @@
       IntOp $R2 $R2 + 1
       ${If} $R2 >= 8
         MessageBox MB_ICONSTOP|MB_OK "Luna Mux could not stop its browser automation process. Close Luna Mux and retry the installer." /SD IDOK
-        Abort
+        Quit
       ${EndIf}
       Sleep 250
     ${Loop}
@@ -74,9 +44,11 @@
 !macroend
 
 !macro NSIS_HOOK_PREINSTALL
-  !insertmacro StopInstalledLunaMuxProcesses
+  !insertmacro RejectRunningLunaMux
+  !insertmacro StopOrphanedAgentBrowser
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
-  !insertmacro StopInstalledLunaMuxProcesses
+  !insertmacro RejectRunningLunaMux
+  !insertmacro StopOrphanedAgentBrowser
 !macroend

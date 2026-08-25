@@ -2,7 +2,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
-#[cfg(test)]
+#[cfg(all(test, any(windows, target_os = "macos")))]
 use std::process::Command;
 
 use crate::{luna_mcp::MCP_AUTHORIZATION_ENV, terminal_runtime_contract::TerminalRuntimeContext};
@@ -85,7 +85,7 @@ pub fn install(
     install_with_paths(context, mcp_endpoint, &executable, resolved_command)
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 fn install_with_executable(
     context: &TerminalRuntimeContext,
     mcp_endpoint: Option<&str>,
@@ -119,6 +119,7 @@ fn install_with_paths(
         .join("luna-mux")
         .join(&context.runtime_id)
         .join("bin");
+    crate::runtime_env::write_runtime_owner(&context.runtime_id)?;
     fs::create_dir_all(&root).map_err(|error| error.to_string())?;
     let hook = format!("{} hook", quote_path(&executable));
     let hook_value = toml_string(&hook);
@@ -473,6 +474,7 @@ pub fn install_wsl_manual_bootstrap(
         .join("luna-mux")
         .join(&context.runtime_id)
         .join("bin");
+    crate::runtime_env::write_runtime_owner(&context.runtime_id)?;
     fs::create_dir_all(&root).map_err(|error| error.to_string())?;
     let env_source = environment_file
         .map(Path::new)
@@ -768,14 +770,45 @@ fn canonicalize_windows_path(path: &Path) -> PathBuf {
         .unwrap_or(path)
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(windows, target_os = "macos")))]
 fn resolve_codex() -> Option<PathBuf> {
     let target_id = crate::agent_command::default_local_target_ids()
         .into_iter()
         .next()?;
-    crate::agent_command::discover(&["codex"], &target_id)
+    let discovered = crate::agent_command::discover(&["codex"], &target_id)
         .paths
-        .remove("codex")
+        .remove("codex")?;
+    #[cfg(windows)]
+    if is_luna_mux_runtime_codex_shim(&discovered) {
+        return find_installed_codex_in_path(std::env::var_os("PATH").as_deref());
+    }
+    Some(discovered)
+}
+
+#[cfg(all(test, windows))]
+fn find_installed_codex_in_path(path: Option<&std::ffi::OsStr>) -> Option<PathBuf> {
+    for directory in std::env::split_paths(path?) {
+        for name in ["codex.cmd", "codex.exe", "codex.com", "codex.bat"] {
+            let candidate = directory.join(name);
+            if candidate.is_file() && !is_luna_mux_runtime_codex_shim(&candidate) {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+#[cfg(all(test, windows))]
+fn is_luna_mux_runtime_codex_shim(path: &Path) -> bool {
+    path.file_name()
+        .is_some_and(|name| name.eq_ignore_ascii_case("codex.cmd"))
+        && path
+            .parent()
+            .is_some_and(|bin| bin.join("codex.ps1").is_file())
+        && path
+            .parent()
+            .and_then(Path::parent)
+            .is_some_and(|root| root.join(".runtime-owner").is_file())
 }
 
 fn bundled_browser_skill_override() -> Option<String> {
@@ -1053,6 +1086,36 @@ mod tests {
 
     #[test]
     #[cfg(windows)]
+    fn installed_codex_resolution_skips_an_existing_luna_runtime_shim() {
+        let fixture = std::env::temp_dir().join(format!(
+            "luna-mux-codex-resolution-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let runtime_root = fixture.join("luna-runtime");
+        let runtime_bin = runtime_root.join("bin");
+        let installed_bin = fixture.join("installed");
+        std::fs::create_dir_all(&runtime_bin).expect("create runtime shim fixture");
+        std::fs::create_dir_all(&installed_bin).expect("create installed Codex fixture");
+        std::fs::write(runtime_root.join(".runtime-owner"), "owner")
+            .expect("write runtime owner marker");
+        std::fs::write(runtime_bin.join("codex.cmd"), "@echo off\r\n")
+            .expect("write runtime Codex shim");
+        std::fs::write(runtime_bin.join("codex.ps1"), "exit 0\r\n")
+            .expect("write runtime Codex PowerShell shim");
+        let installed = installed_bin.join("codex.cmd");
+        std::fs::write(&installed, "@echo off\r\n").expect("write installed Codex launcher");
+        let path = std::env::join_paths([&runtime_bin, &installed_bin]).expect("join test PATH");
+
+        assert!(is_luna_mux_runtime_codex_shim(
+            &runtime_bin.join("codex.cmd")
+        ));
+        assert_eq!(find_installed_codex_in_path(Some(&path)), Some(installed));
+
+        let _ = std::fs::remove_dir_all(fixture);
+    }
+
+    #[test]
+    #[cfg(windows)]
     fn windows_shim_keeps_package_manager_launcher_update_context() {
         let mut powershells = Vec::new();
         if let Some(powershell) = crate::local_pty_backend::windows_powershell5_executable() {
@@ -1189,9 +1252,14 @@ $agentExitCode = 1\r\n\
     #[test]
     #[cfg(windows)]
     fn installed_codex_accepts_the_generated_windows_shim() {
-        if resolve_codex().is_none() {
+        let Some(codex) = resolve_codex() else {
             return;
-        }
+        };
+        assert!(
+            !is_luna_mux_runtime_codex_shim(&codex),
+            "installed Codex resolution returned a Luna runtime shim: {}",
+            codex.display()
+        );
         let Some(powershell) =
             crate::local_pty_backend::windows_powershell5_executable()
                 .or_else(crate::local_pty_backend::windows_powershell7_executable)
@@ -1223,9 +1291,14 @@ $agentExitCode = 1\r\n\
             .to_string(),
         )
         .expect("write browser registry fixture");
-        let root = install_with_executable(&context, Some("http://127.0.0.1:43128/mcp"), &helper)
-            .expect("install Codex shim")
-            .expect("installed Codex is available");
+        let root = install_with_paths(
+            &context,
+            Some("http://127.0.0.1:43128/mcp"),
+            &helper,
+            Some(&codex),
+        )
+        .expect("install Codex shim")
+        .expect("installed Codex is available");
         let output = Command::new(&powershell)
         .args([
             "-NoLogo",
@@ -1243,13 +1316,33 @@ $agentExitCode = 1\r\n\
         .expect("run generated Codex shim");
         assert!(
             output.status.success(),
-            "Codex rejected generated shim configuration: {}{}",
+            "Codex rejected generated shim configuration through {} using {} (status {}):\nstdout:\n{}\nstderr:\n{}",
+            powershell,
+            codex.display(),
+            output.status,
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
         let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(stdout.contains("agent_browser"), "MCP list was: {stdout}");
-        assert!(stdout.contains("mcp browser"), "MCP list was: {stdout}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stdout.contains("agent_browser"),
+            "MCP list through {} using {} did not contain agent_browser (status {}):\nstdout:\n{}\nstderr:\n{}",
+            powershell,
+            codex.display(),
+            output.status,
+            stdout,
+            stderr
+        );
+        assert!(
+            stdout.contains("mcp browser"),
+            "MCP list through {} using {} did not contain the Browser command (status {}):\nstdout:\n{}\nstderr:\n{}",
+            powershell,
+            codex.display(),
+            output.status,
+            stdout,
+            stderr
+        );
         let generated_shim =
             std::fs::read_to_string(root.join("codex.ps1")).expect("read generated Codex shim");
         assert!(
@@ -1320,17 +1413,26 @@ $agentExitCode = 1\r\n\
         .expect("run generated Codex shim without browser");
         assert!(
             output_without_browser.status.success(),
-            "Codex rejected shim without browser: {}{}",
+            "Codex rejected shim without browser through {} using {} (status {}):\nstdout:\n{}\nstderr:\n{}",
+            powershell,
+            codex.display(),
+            output_without_browser.status,
             String::from_utf8_lossy(&output_without_browser.stdout),
             String::from_utf8_lossy(&output_without_browser.stderr)
         );
         let stdout_without_browser = String::from_utf8_lossy(&output_without_browser.stdout);
+        let stderr_without_browser = String::from_utf8_lossy(&output_without_browser.stderr);
         assert!(
             stdout_without_browser
                 .lines()
                 .find(|line| line.contains("agent_browser"))
                 .is_some_and(|line| line.contains("disabled")),
-            "agent-browser MCP was not disabled without a Browser Runtime: {stdout_without_browser}"
+            "agent-browser MCP was not disabled without a Browser Runtime through {} using {} (status {}):\nstdout:\n{}\nstderr:\n{}",
+            powershell,
+            codex.display(),
+            output_without_browser.status,
+            stdout_without_browser,
+            stderr_without_browser
         );
         cleanup(&runtime_id);
         let _ = std::fs::remove_file(registry);

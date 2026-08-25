@@ -44,18 +44,34 @@ const REMOTE_LIST_MODE_EXEC: u8 = 1;
 const REMOTE_LIST_MODE_SFTP: u8 = 2;
 const REMOTE_LIST_MARKER: &str = "__SSH_CLIENT_REMOTE_LIST_V1__";
 const REMOTE_AGENT_COMMAND_MARKER: &str = "__LUNA_MUX_AGENT_COMMAND__";
-const REMOTE_LIST_SCRIPT: &str = r#"import base64,json,os,sys
-path=os.fsdecode(base64.b64decode(sys.argv[1]))
+// Keep this script compatible with the old Python versions still common on
+// managed hosts. `os.fsdecode` and `os.scandir` are not available on Python
+// 2, and `os.scandir` was only added in Python 3.5.
+const REMOTE_LIST_SCRIPT: &str = r#"import base64,json,os,stat,sys
+raw_path=base64.b64decode(sys.argv[1])
+try:
+ path=raw_path.decode('utf-8')
+except (AttributeError,UnicodeDecodeError):
+ path=raw_path
 items=[]
-with os.scandir(path) as entries:
- for entry in entries:
-  try:
-   kind='symlink' if entry.is_symlink() else 'directory' if entry.is_dir(follow_symlinks=False) else 'file' if entry.is_file(follow_symlinks=False) else 'other'
-   items.append({'name':entry.name,'path':os.path.join(path,entry.name),'kind':kind})
-  except OSError:
-   items.append({'name':entry.name,'path':os.path.join(path,entry.name),'kind':'other'})
-json_bytes=json.dumps(items,separators=(',',':'),ensure_ascii=False).encode('utf-8','replace')
-payload=base64.b64encode(json_bytes).decode()
+for name in os.listdir(path):
+ full_path=os.path.join(path,name)
+ try:
+  info=os.lstat(full_path)
+  kind='symlink' if stat.S_ISLNK(info.st_mode) else 'directory' if stat.S_ISDIR(info.st_mode) else 'file' if stat.S_ISREG(info.st_mode) else 'other'
+ except OSError:
+  kind='other'
+ items.append({'name':name,'path':full_path,'kind':kind})
+json_text=json.dumps(items,separators=(',',':'),ensure_ascii=False)
+try:
+ json_bytes=json_text.encode('utf-8','replace')
+except AttributeError:
+ json_bytes=json_text
+payload=base64.b64encode(json_bytes)
+try:
+ payload=payload.decode('ascii')
+except AttributeError:
+ pass
 sys.stdout.write('__SSH_CLIENT_REMOTE_LIST_V1__'+payload+'\n')"#;
 /// One small, dependency-light helper is uploaded per remote runtime.  It
 /// deliberately uses tools commonly present on minimal POSIX hosts instead of
@@ -1385,13 +1401,7 @@ impl SessionManager {
         path: &str,
     ) -> Result<Vec<DirectoryEntry>, RemoteExecError> {
         let encoded_path = STANDARD.encode(path.as_bytes());
-        let command = format!(
-            "if command -v python3 >/dev/null 2>&1; then python3 -c {} {}; elif command -v python >/dev/null 2>&1; then python -c {} {}; else exit 127; fi",
-            shell_quote(REMOTE_LIST_SCRIPT),
-            shell_quote(&encoded_path),
-            shell_quote(REMOTE_LIST_SCRIPT),
-            shell_quote(&encoded_path)
-        );
+        let command = remote_list_command(&encoded_path);
         let output = self.exec_remote(active, &command).await?;
         let parsed = parse_remote_entries(&output);
         #[cfg(debug_assertions)]
@@ -1758,6 +1768,14 @@ fn parse_remote_command_path(output: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
+fn remote_list_command(encoded_path: &str) -> String {
+    let script = shell_quote(REMOTE_LIST_SCRIPT);
+    let path = shell_quote(encoded_path);
+    format!(
+        "if command -v python3 >/dev/null 2>&1; then python3 -c {script} {path}; elif command -v python2 >/dev/null 2>&1; then python2 -c {script} {path}; elif command -v python >/dev/null 2>&1; then python -c {script} {path}; else exit 127; fi || exit 127"
+    )
+}
+
 fn parse_remote_entries(output: &str) -> Result<Vec<DirectoryEntry>, RemoteExecError> {
     let (_, framed) = output
         .rsplit_once(REMOTE_LIST_MARKER)
@@ -1805,13 +1823,30 @@ impl Utf8Decoder {
 #[cfg(test)]
 mod tests {
     use super::{
-        EntryKind, REMOTE_LIST_MARKER, Utf8Decoder, parse_remote_entries,
-        remote_interactive_shell_fallback, shell_quote,
+        EntryKind, REMOTE_LIST_MARKER, REMOTE_LIST_SCRIPT, Utf8Decoder, parse_remote_entries,
+        remote_interactive_shell_fallback, remote_list_command, shell_quote,
     };
 
     #[test]
     fn quotes_remote_command_arguments() {
         assert_eq!(shell_quote("a'b"), "'a'\"'\"'b'");
+    }
+
+    #[test]
+    fn remote_directory_script_uses_legacy_python_apis() {
+        assert!(!REMOTE_LIST_SCRIPT.contains("os.fsdecode"));
+        assert!(!REMOTE_LIST_SCRIPT.contains("os.scandir"));
+        assert!(REMOTE_LIST_SCRIPT.contains("os.listdir"));
+    }
+
+    #[test]
+    fn remote_directory_command_tries_python2_before_python_alias() {
+        let command = remote_list_command("Lw==");
+        let python2 = command.find("command -v python2").expect("python2 probe");
+        let python = command
+            .find("command -v python >/dev/null")
+            .expect("python probe");
+        assert!(python2 < python);
     }
 
     #[test]
