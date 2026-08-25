@@ -109,6 +109,12 @@ function currentAgentIdsForRuntimes(events: ManagedAgentEvent[], runtimesByPane:
   return new Set([...latestByAgent.entries()].flatMap(([agentId, event]) => ['SessionEnd', 'RuntimeExit', 'AgentProcessExit'].includes(event.hookEventName) ? [] : [agentId]))
 }
 
+function mergeManagedAgentEvents(current: ManagedAgentEvent[], incoming: ManagedAgentEvent[]): ManagedAgentEvent[] {
+  const bySequence = new Map(current.map((event) => [event.sequence, event]))
+  for (const event of incoming) bySequence.set(event.sequence, event)
+  return [...bySequence.values()].sort((left, right) => left.sequence - right.sequence).slice(-2048)
+}
+
 function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.message
   return String(error)
@@ -403,7 +409,7 @@ export function App(): React.JSX.Element {
       setUiTheme(theme)
       setAiSettings(ai)
       setRemoteAgentIntegrationEnabled(remoteAgentIntegration)
-      setManagedAgentEvents(agentEvents.filter((event) => currentAgentIds.has(event.context.agentId)))
+      setManagedAgentEvents((current) => mergeManagedAgentEvents(current, agentEvents.filter((event) => currentAgentIds.has(event.context.agentId))))
       if (appearance.backgroundImagePath) void window.api.settings.loadTerminalBackground(appearance.backgroundImagePath).then(setTerminalBackground).catch(() => setTerminalBackground(''))
       stateRestored.current = true
     }).catch((error) => showError(errorMessage(error)))
@@ -577,9 +583,10 @@ export function App(): React.JSX.Element {
 
   useEffect(() => window.api.onManagedAgentEvent((event) => {
     const ended = ['SessionEnd', 'RuntimeExit', 'AgentProcessExit'].includes(event.hookEventName)
-    setManagedAgentEvents((current) => ended
-      ? current.filter((item) => item.context.agentId !== event.context.agentId)
-      : [...current.filter((item) => item.sequence !== event.sequence), event].sort((a, b) => a.sequence - b.sequence))
+    setTabs((current) => current.map((tab) => tab.id !== event.context.paneId || tab.runtimeId !== event.context.runtimeId
+      ? tab
+      : { ...tab, agentId: ended ? undefined : event.context.agentId }))
+    setManagedAgentEvents((current) => mergeManagedAgentEvents(current, [event]))
   }), [])
 
   useEffect(() => window.api.onManagedAgentNotificationActivate((event) => {
@@ -645,7 +652,7 @@ export function App(): React.JSX.Element {
         if (!runtime) return pane
         return { ...pane, runtimeId: runtime.runtimeId, agentId: runtime.managedAgent?.agentId, status: terminalRuntimeSessionStatus(runtime), error: runtime.error }
       }))
-      setManagedAgentEvents(events.filter((event) => currentAgentIds.has(event.context.agentId)))
+      setManagedAgentEvents((current) => mergeManagedAgentEvents(current, events.filter((event) => currentAgentIds.has(event.context.agentId))))
       if (workspaceView === 'agents') {
         setBrowserRuntimes(activeBrowserRuntimes)
         setBrowserResources((current) => current.map((resource) => {
@@ -1847,6 +1854,22 @@ function summarizeManagedAgents(panes: WorkspaceTab[], events: ManagedAgentEvent
       hasStructuredEvents: matching.some((event) => event.evidence === 'structuredHook'),
       latest,
       latestAttention
+    })
+  }
+  // A managed launch has its identity before Codex emits its first Hook. Keep
+  // it visible as "starting" so a short Hook connection race cannot make the
+  // Agent tab appear empty. AgentProcessExit clears the pane identity above.
+  for (const pane of panes) {
+    if (!pane.agentId || !pane.runtimeId || !pane.launchProfileId || pane.status !== 'connected') continue
+    if (summaries.some((agent) => agent.agentId === pane.agentId)) continue
+    summaries.push({
+      agentId: pane.agentId,
+      paneId: pane.id,
+      runtimeId: pane.runtimeId,
+      status: 'starting',
+      eventCount: 0,
+      unread: false,
+      hasStructuredEvents: false
     })
   }
   return summaries.sort((a, b) => (b.unread ? 1 : 0) - (a.unread ? 1 : 0) || (b.timestamp ?? '').localeCompare(a.timestamp ?? ''))
