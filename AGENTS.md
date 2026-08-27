@@ -1,5 +1,11 @@
 # Luna Mux Agent Rules
 
+## AI-assisted development workflow
+
+- Use the fast path for documentation, styling, or a localized change that does not alter shared state, contracts, persistence, security, process lifecycle, or platform behavior: inspect the relevant code, make the smallest change, run the narrowest relevant check, and review the diff. The full workflow document is not required.
+- For cross-module changes, or changes to Tauri commands, Rust services, shared state, contracts, persistence, MCP/Hook, security, process lifecycle, terminal/PTY, browser runtime, WSL, or SSH, read and follow `docs/AI_DEVELOPMENT_GUIDELINES.md` before editing.
+- If a fast-path task expands into one of those areas, stop and switch to the full workflow.
+
 ## Cross-platform terminal compatibility
 
 - When changing terminal, PTY, agent launch/injection, hook/MCP, browser runtime, WSL, or SSH remote features, keep behavior compatible across macOS, Windows PowerShell 5.1, PowerShell 7, WSL local terminals, and SSH remote terminals.

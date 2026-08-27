@@ -134,6 +134,8 @@ This check verifies that keys, duplicates, and interpolation placeholders match 
 
 ## Checks
 
+For the risk-based workflow, architecture acceptance criteria, test matrix, and review requirements for AI-assisted changes, see the [AI development guidelines](AI_DEVELOPMENT_GUIDELINES.en.md).
+
 ```bash
 npm run check
 npm test
