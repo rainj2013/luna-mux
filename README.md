@@ -10,6 +10,8 @@
   <p>
     <a href="docs/DEVELOPMENT.md">开发文档</a>
     ·
+    <a href="docs/AI_DEVELOPMENT_GUIDELINES.md">AI 协作开发规范</a>
+    ·
     <a href="docs/LUNA_MUX_DESIGN.md">设计方案</a>
   </p>
 </div>

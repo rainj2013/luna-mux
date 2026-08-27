@@ -134,6 +134,8 @@ npm run i18n:check
 
 ## 检查
 
+AI 协作开发、变更分级、架构验收条件、测试矩阵和独立 Review 要求见 [AI 协作开发规范](AI_DEVELOPMENT_GUIDELINES.md)。涉及跨模块或运行时行为的修改，提交前应按规范执行相应级别的验证。
+
 ```bash
 npm run check
 npm test
