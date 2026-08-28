@@ -345,7 +345,7 @@ body.sidebar-item-dragging, body.sidebar-item-dragging * { cursor: grabbing !imp
 .mux-split.maximized-branch > .mux-split-divider, .maximize-hidden { display: none !important; }
 .mux-split.maximized-branch > .mux-split.maximized-branch, .mux-split.maximized-branch > .mux-leaf.pane-maximized { width: 100%; height: 100%; }
 .mux-split-divider { position: relative; z-index: 4; background: transparent; touch-action: none; }
-.mux-split-divider::after { content: ""; position: absolute; border-radius: 2px; background: color-mix(in srgb, var(--terminal-border-strong) 58%, transparent); transition: background-color 120ms ease, width 120ms ease, height 120ms ease; }
+ .mux-split-divider::after { content: ""; position: absolute; border-radius: 2px; background: color-mix(in srgb, var(--terminal-border-strong) 58%, transparent); transition: background-color 120ms ease, width 120ms ease, height 120ms ease; }
 .mux-split.horizontal > .mux-split-divider { cursor: col-resize; }
 .mux-split.vertical > .mux-split-divider { cursor: row-resize; }
 .mux-split.horizontal > .mux-split-divider::after { top: 6px; bottom: 6px; left: 50%; width: 1px; transform: translateX(-50%); }
@@ -354,17 +354,17 @@ body.sidebar-item-dragging, body.sidebar-item-dragging * { cursor: grabbing !imp
 .mux-split.vertical > .mux-split-divider:hover::after { height: 3px; background: var(--accent); }
 body.mux-split-resizing { cursor: col-resize; user-select: none; }
 .mux-leaf { position: relative; width: 100%; height: 100%; min-width: 0; min-height: 0; display: grid; grid-template-rows: 29px minmax(0, 1fr); overflow: hidden; border-radius: 7px; background: var(--terminal-surface); }
-.mux-leaf::before { content: ""; position: absolute; z-index: 5; inset: 0; pointer-events: none; border: 1px solid color-mix(in srgb, var(--terminal-border) 72%, transparent); border-radius: inherit; }
+ .mux-leaf::before { content: ""; position: absolute; z-index: 5; inset: 0; pointer-events: none; border: 1px solid color-mix(in srgb, var(--terminal-border) 72%, transparent); border-radius: inherit; }
 .mux-leaf.active { box-shadow: none; }
 .mux-leaf.active .mux-leaf-header { color: var(--accent-text); background: var(--selection-bg); }
 .mux-leaf.active .mux-leaf-header > svg { color: var(--accent-text); }
 .mux-leaf.active .mux-leaf-header strong { color: var(--text-strong); }
 .mux-leaf.attention-info::after,
 .mux-leaf.attention-warning::after,
-.mux-leaf.attention-error::after { content: ""; position: absolute; z-index: 6; inset: 0; pointer-events: none; border: 1px solid currentColor; border-radius: inherit; box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 18%, transparent); }
-.mux-leaf.attention-info::after { color: var(--accent); }
-.mux-leaf.attention-warning::after { color: var(--warning); }
-.mux-leaf.attention-error::after { color: var(--danger); }
+ .mux-leaf.attention-error::after { content: ""; position: absolute; z-index: 6; inset: 0; pointer-events: none; border: 1px solid currentColor; border-radius: inherit; box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 18%, transparent); }
+ .mux-leaf.attention-info::after { color: var(--accent); }
+ .mux-leaf.attention-warning::after { color: var(--warning); }
+ .mux-leaf.attention-error::after { color: var(--danger); }
 .mux-leaf-header { min-width: 0; height: 29px; padding: 0 4px 0 8px; display: flex; align-items: center; gap: 6px; color: var(--terminal-text-muted); background: transparent; transition: color 120ms ease, background-color 120ms ease; }
 .mux-leaf-header strong { min-width: 0; flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--terminal-text); font-size: 10px; }
 .terminal-workspace.has-background-image .mux-leaf-header { background: color-mix(in srgb, var(--terminal-surface) 62%, transparent); backdrop-filter: blur(6px); }

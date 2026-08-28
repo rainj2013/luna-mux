@@ -8,6 +8,7 @@ import { ChevronDown, ChevronUp, ClipboardPaste, Copy, KeyRound, Palette, Play, 
 import type { TerminalRuntimeEvent, TerminalSettings } from '../types'
 import { colorWithOpacity } from '../terminal-style'
 import { createTerminalOutputWriter, type TerminalOutputWriter } from '../terminal-output-writer'
+import { handleCodexMultilinePasteEvent, routeTerminalPaste } from '../terminal-input'
 import { useI18n } from '../i18n'
 
 const terminalHighWaterMark = 1024 * 1024
@@ -288,13 +289,17 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
       }
     }
 
+    const pasteTerminalText = (text: string): void => {
+      routeTerminalPaste(text, activeAgentAdapterIdRef.current === 'codex', writeTerminalInput, (payload) => term.paste(payload))
+    }
+
     const pasteClipboard = async (): Promise<void> => {
       try {
         const content = await window.api.system.readClipboard()
         if (disposed) return
         writer.markInteractive()
         if (content.type === 'text') {
-          term.paste(content.text)
+          pasteTerminalText(content.text)
         } else if (content.type === 'image' && targetIdRef.current.startsWith('local:')) {
           writeTerminalInput('\x16')
         }
@@ -305,6 +310,20 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
       }
     }
     pasteClipboardRef.current = pasteClipboard
+    const captureCodexMultilinePaste = (event: ClipboardEvent): void => {
+      const text = event.clipboardData?.getData('text/plain')
+      handleCodexMultilinePasteEvent(
+        text,
+        activeAgentAdapterIdRef.current === 'codex',
+        () => event.preventDefault(),
+        () => event.stopImmediatePropagation(),
+        (payload) => {
+          writer.markInteractive()
+          writeTerminalInput(payload)
+        }
+      )
+    }
+    term.element?.addEventListener('paste', captureCodexMultilinePaste, true)
 
     term.attachCustomKeyEventHandler((event) => {
       if (event.key === 'Enter' && event.shiftKey) {
@@ -529,6 +548,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
       textarea?.removeEventListener('compositionend', recoverDroppedImePunctuationFromComposition, true)
       textarea?.removeEventListener('compositionend', finishImeComposition)
       textarea?.removeEventListener('blur', cancelImeComposition)
+      term.element?.removeEventListener('paste', captureCodexMultilinePaste, true)
       cancelImeComposition()
       stop(); observer.disconnect(); input.dispose(); resize.dispose(); writer.dispose(); webglAddon.current?.dispose(); term.dispose()
       void catchUp

@@ -21,10 +21,11 @@
     "runtime:check": "node scripts/sync-terminal-runtime-contract.mjs --check",
     "runtime:test": "cargo test --manifest-path contracts/rust-tests/Cargo.toml",
     "native-core:test": "cargo test --manifest-path tests/native-core/Cargo.toml",
+    "terminal-input:test": "node --experimental-strip-types --test tests/terminal-input.test.mts",
     "agent-browser:sync": "node scripts/sync-agent-browser-sidecar.mjs",
     "i18n:check": "node scripts/check-i18n.mjs",
     "typecheck": "tsc --noEmit",
-    "check": "npm run product:check && npm run runtime:check && npm run icons:check && npm run i18n:check && npm run typecheck && cargo check --manifest-path app/native/Cargo.toml",
+    "check": "npm run product:check && npm run runtime:check && npm run icons:check && npm run i18n:check && npm run terminal-input:test && npm run typecheck && cargo check --manifest-path app/native/Cargo.toml",
     "test": "cargo test --manifest-path app/native/Cargo.toml"
   },
   "dependencies": {

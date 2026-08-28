@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowRight, Bookmark as BookmarkIcon, Bot, Check, ChevronDown, ChevronRight, CircleHelp, CirclePlus, Columns2, Columns3, Copy, Database as DatabaseIcon, Download, Edit3, ExternalLink, Eye, EyeOff, FileInput, FileJson2, Folder, FolderOpen, FolderPlus, Globe2, Grid2x2, GripVertical, History as HistoryIcon, Image as ImageIcon, Info, KeyRound, Languages, LayoutGrid, Maximize2, Minimize, Minus, Monitor, Moon, Network, Palette, PanelLeftClose, PanelLeftOpen, Play, Plus, Power, Rocket, RotateCcw, Rows2, Rows3, Search, Send, Server, Settings as SettingsIcon, ShieldAlert, Sparkles, Square, SquareTerminal, Star, Stethoscope, Sun, Trash2, Upload, WandSparkles, X } from 'lucide-react'
 import { BUNDLED_TERMINAL_FONT, DEFAULT_AI_SETTINGS, DEFAULT_TERMINAL_SETTINGS, type AgentLaunchProfile, type AiCommandHistoryEntry, type AiCommandSuggestion, type AiProvider, type AiRawExchange, type AiRiskAssessment, type AiSettings, type AiSettingsInput, type AiShell, type AiThinkingMode, type AppEvent, type AppIconId, type AppIconSettings, type AppLanguage, type Bookmark, type BookmarkArchivePreview, type BookmarkArchiveSource, type BookmarkInput, type BrowserResource, type BrowserRuntime, type BrowserRuntimeStatus, type BrowserTunnel, type ChromeInstallation, type ConflictResolution, type ConnectInput, type DeploymentDiffEntry, type DeploymentProfile, type DoctorCheck, type DoctorCheckStatus, type DoctorManagedAgent, type DoctorReport, type DoctorRuntimeCheck, type HostKeyPrompt, type LunaRemoteImportPreview, type LunaRemoteImportResult, type LunaRemoteSource, type ManagedAgentEvent, type ManagedAgentStatus, type MuxPane, type MuxSession, type MuxSplitNode, type PortForwardProfile, type SessionStatus, type SshConfigPreview, type TerminalRuntime, type TerminalRuntimeEvent, type TerminalSettings, type TerminalTarget, type TransferTask, type TunnelSummary, type UiTheme } from './types'
 import { discardTerminalSnapshot, TerminalPane, type TerminalPaneHandle } from './components/TerminalPane'
+import { agentAdapterId } from './terminal-input'
 import { SftpPane } from './components/SftpPane'
 import { HelpDialog } from './components/HelpDialog'
 import { colorWithOpacity, terminalBackgroundStyle } from './terminal-style'
@@ -630,8 +631,10 @@ export function App(): React.JSX.Element {
     return tone ? [[agent.paneId, tone] as const] : []
   })), [allAgents])
   const activeAgentAdapterByPane = useMemo(() => new Map(allAgents.flatMap((agent) => {
-    return agent.latest ? [[agent.paneId, agent.latest.adapterId] as const] : []
-  })), [allAgents])
+    const pane = tabs.find((item) => item.id === agent.paneId)
+    const adapterId = agentAdapterId(agent.latest?.adapterId, pane?.launchProfileId ?? '')
+    return adapterId ? [[agent.paneId, adapterId] as const] : []
+  })), [allAgents, tabs])
   const selectedBookmark = bookmarkMap.get(selectedBookmarkId) ?? activeBookmark
   const filteredBookmarks = bookmarks.filter((item) => `${item.name} ${item.host} ${item.username} ${item.groupName} ${item.note}`.toLowerCase().includes(query.toLowerCase()))
   const bookmarkGroups = useMemo(() => {
@@ -1865,7 +1868,7 @@ function summarizeManagedAgents(panes: WorkspaceTab[], events: ManagedAgentEvent
   // it visible as "starting" so a short Hook connection race cannot make the
   // Agent tab appear empty. AgentProcessExit clears the pane identity above.
   for (const pane of panes) {
-    if (!pane.agentId || !pane.runtimeId || !pane.launchProfileId || pane.status !== 'connected') continue
+    if (!pane.agentId || !pane.runtimeId || !pane.launchProfileId || !['connecting', 'connected'].includes(pane.status)) continue
     if (summaries.some((agent) => agent.agentId === pane.agentId)) continue
     summaries.push({
       agentId: pane.agentId,
