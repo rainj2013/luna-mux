@@ -1,6 +1,6 @@
 [package]
 name = "luna-mux"
-version = "0.3.2"
+version = "0.3.3"
 description = "Tauri desktop shell for Luna Mux"
 license = "MIT"
 edition = "2024"
