@@ -401,9 +401,18 @@ impl InProcessLocalPtyTerminalBackend {
 
 fn configure_terminal_environment(command: &mut CommandBuilder, target_id: &str) {
     if target_id == MACOS_SHELL_TARGET {
-        // Finder-launched applications do not inherit TERM from a parent terminal.
+        // Finder-launched applications do not inherit terminal capabilities or
+        // necessarily receive a UTF-8 locale from a parent terminal. zsh treats
+        // multibyte input as raw control bytes without one, rendering CJK input
+        // as sequences such as `<0095>` instead of text.
         command.env("TERM", XTERM_256COLOR);
         command.env("COLORTERM", TRUECOLOR);
+        if macos_terminal_locale_needs_fallback(command) {
+            // `UTF-8` is macOS's locale-independent UTF-8 ctype. Set only the
+            // character type so a user's language, collation, and messages stay
+            // unchanged. An explicit LC_ALL remains authoritative.
+            command.env("LC_CTYPE", "UTF-8");
+        }
     } else if is_powershell_target(target_id) {
         let needs_fallback = command.get_env("TERM").is_none_or(|value| {
             let value = value.to_string_lossy();
@@ -414,6 +423,28 @@ fn configure_terminal_environment(command: &mut CommandBuilder, target_id: &str)
             command.env("COLORTERM", TRUECOLOR);
         }
     }
+}
+
+fn macos_terminal_locale_needs_fallback(command: &CommandBuilder) -> bool {
+    let environment = |name: &str| {
+        command
+            .get_env(name)
+            .map(|value| value.to_string_lossy().into_owned())
+            .or_else(|| std::env::var(name).ok())
+    };
+    let lc_all = environment("LC_ALL");
+    if lc_all
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        return false;
+    }
+    let effective = environment("LC_CTYPE")
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| environment("LANG").filter(|value| !value.trim().is_empty()));
+    effective.as_deref().is_none_or(|value| {
+        value.trim().eq_ignore_ascii_case("c") || value.trim().eq_ignore_ascii_case("posix")
+    })
 }
 
 #[cfg(windows)]
@@ -1015,11 +1046,37 @@ mod terminal_environment_tests {
     fn macos_shell_uses_the_emulated_terminal_capabilities() {
         let mut command = CommandBuilder::new("zsh");
         command.env("TERM", "dumb");
+        command.env("LC_ALL", "");
+        command.env("LC_CTYPE", "");
+        command.env("LANG", "C");
 
         configure_terminal_environment(&mut command, MACOS_SHELL_TARGET);
 
         assert_eq!(command.get_env("TERM"), Some(OsStr::new(XTERM_256COLOR)));
         assert_eq!(command.get_env("COLORTERM"), Some(OsStr::new(TRUECOLOR)));
+        assert_eq!(command.get_env("LC_CTYPE"), Some(OsStr::new("UTF-8")));
+    }
+
+    #[test]
+    fn macos_shell_preserves_an_explicit_locale() {
+        let mut command = CommandBuilder::new("zsh");
+        command.env("LANG", "zh_CN.UTF-8");
+        command.env("LC_CTYPE", "zh_CN.UTF-8");
+
+        configure_terminal_environment(&mut command, MACOS_SHELL_TARGET);
+
+        assert_eq!(command.get_env("LC_CTYPE"), Some(OsStr::new("zh_CN.UTF-8")));
+    }
+
+    #[test]
+    fn macos_shell_respects_lc_all() {
+        let mut command = CommandBuilder::new("zsh");
+        command.env("LC_ALL", "C");
+        let original_lc_ctype = command.get_env("LC_CTYPE").map(ToOwned::to_owned);
+
+        configure_terminal_environment(&mut command, MACOS_SHELL_TARGET);
+
+        assert_eq!(command.get_env("LC_CTYPE"), original_lc_ctype.as_deref());
     }
 
     #[test]
@@ -1087,6 +1144,7 @@ mod terminal_environment_tests {
         std::fs::create_dir(&zdotdir).expect("create empty ZDOTDIR");
         let mut launch_environment = std::collections::BTreeMap::new();
         launch_environment.insert("TERM".into(), "dumb".into());
+        launch_environment.insert("LC_CTYPE".into(), String::new());
         launch_environment.insert("ZDOTDIR".into(), zdotdir.to_string_lossy().into_owned());
         let request = TerminalRuntimeCreateRequest {
             runtime_id: None,
@@ -1109,9 +1167,9 @@ mod terminal_environment_tests {
             .read_output(&runtime.runtime_id, 0, 64 * 1024)
             .expect("read initial zsh prompt");
         backend
-            .write(&runtime.runtime_id, "abc\u{7f}")
+            .write(&runtime.runtime_id, "中文abc\u{7f}")
             .await
-            .expect("write text and Backspace");
+            .expect("write UTF-8 text and Backspace");
 
         let mut output = String::new();
         let mut cursor = prompt.next_cursor;
@@ -1133,8 +1191,8 @@ mod terminal_environment_tests {
             .expect("close zsh PTY");
         let _ = std::fs::remove_dir(&zdotdir);
         assert!(
-            output.contains("\u{8} \u{8}"),
-            "zsh did not emit a visual erase sequence: {output:?}"
+            output.contains("中文") && output.contains("\u{8} \u{8}"),
+            "zsh did not preserve UTF-8 input and emit a visual erase sequence: {output:?}"
         );
     }
 }
