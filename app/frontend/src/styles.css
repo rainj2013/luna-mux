@@ -212,6 +212,8 @@ body.sidebar-item-dragging, body.sidebar-item-dragging * { cursor: grabbing !imp
 .mux-pane-item:hover { background: var(--surface-hover); }
 .mux-pane-item.active { color: var(--text-strong); background: var(--selection-bg); }
 .mux-pane-item.active .mux-pane-title { font-weight: 650; }
+.mux-pane-item.minimized { color: var(--text-subtle); opacity: .78; }
+.mux-pane-item.minimized .mux-pane-title { font-style: italic; }
 .mux-pane-select { min-width: 0; min-height: 31px; height: 100%; padding: 0 3px 0 6px; display: grid; grid-template-columns: 8px 15px minmax(0, 1fr); align-items: center; gap: 6px; color: inherit; text-align: left; border: 0; background: transparent; cursor: pointer; }
 .mux-pane-item.has-error .mux-pane-select { padding-top: 4px; padding-bottom: 4px; }
 .mux-pane-copy { min-width: 0; display: grid; gap: 1px; }
