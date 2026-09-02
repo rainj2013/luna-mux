@@ -258,6 +258,8 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     let pendingOutput = 0
     let paused = false
     let disposed = false
+    let userScrolled = false
+    let scrollAnchor = 0
     let lastTerminalInput = { data: '', timestamp: 0, runtimeId: '' }
     const pendingImePunctuation = new Set<PendingImePunctuation>()
 
@@ -474,6 +476,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
         void window.api.terminalRuntimes.flow(payload.runtimeId, true)
       }
       writer.write(payload.data, () => {
+        if (userScrolled) term.scrollToLine(scrollAnchor)
         if (runtimeIdRef.current === payload.runtimeId) renderedOutputCursor.current = Math.max(renderedOutputCursor.current, payload.endCursor)
         pendingOutput = Math.max(0, pendingOutput - length)
         if (paused && pendingOutput <= terminalLowWaterMark && runtimeIdRef.current) {
@@ -497,6 +500,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
             if (result.runtimeId !== runtimeIdRef.current || !result.data || result.nextCursor <= before) break
             outputCursor.current = result.nextCursor
             writer.write(result.data, () => {
+              if (userScrolled) term.scrollToLine(scrollAnchor)
               if (runtimeIdRef.current === result.runtimeId) renderedOutputCursor.current = Math.max(renderedOutputCursor.current, result.nextCursor)
             })
           }
@@ -517,6 +521,11 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
         fit.fit()
         if (runtimeIdRef.current) void window.api.terminalRuntimes.resize(runtimeIdRef.current, term.cols, term.rows)
       })
+    })
+    const scroll = term.onScroll((position) => {
+      const baseY = term.buffer.active.baseY
+      userScrolled = position < baseY
+      scrollAnchor = position
     })
     observer.observe(container.current)
     if (visible) term.focus()
@@ -550,7 +559,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
       textarea?.removeEventListener('blur', cancelImeComposition)
       term.element?.removeEventListener('paste', captureCodexMultilinePaste, true)
       cancelImeComposition()
-      stop(); observer.disconnect(); input.dispose(); resize.dispose(); writer.dispose(); webglAddon.current?.dispose(); term.dispose()
+      stop(); observer.disconnect(); input.dispose(); resize.dispose(); scroll.dispose(); writer.dispose(); webglAddon.current?.dispose(); term.dispose()
       void catchUp
       webglAddon.current = null; outputWriter.current = null; terminal.current = null; fitAddon.current = null
     }
