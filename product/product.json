@@ -1,6 +1,6 @@
 {
   "productKey": "luna-mux",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "displayName": "Luna Mux",
   "shortName": "Luna Mux",
   "description": "A local and remote terminal workspace for coding agents",
