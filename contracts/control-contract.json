@@ -220,6 +220,60 @@
       "approval": "none"
     },
     {
+      "name": "terminal.runtime.screen.snapshot",
+      "version": 1,
+      "access": "read",
+      "resourceKind": "terminalRuntime",
+      "mutating": false,
+      "supportsIdempotency": false,
+      "approval": "none"
+    },
+    {
+      "name": "terminal.runtime.output.wait",
+      "version": 1,
+      "access": "read",
+      "resourceKind": "terminalRuntime",
+      "mutating": false,
+      "supportsIdempotency": false,
+      "approval": "none"
+    },
+    {
+      "name": "terminal.runtime.interact",
+      "version": 1,
+      "access": "write",
+      "resourceKind": "terminalRuntime",
+      "mutating": true,
+      "supportsIdempotency": true,
+      "approval": "none"
+    },
+    {
+      "name": "terminal.runtime.execution.read",
+      "version": 1,
+      "access": "read",
+      "resourceKind": "terminalRuntime",
+      "mutating": false,
+      "supportsIdempotency": false,
+      "approval": "none"
+    },
+    {
+      "name": "terminal.runtime.execution.wait",
+      "version": 1,
+      "access": "read",
+      "resourceKind": "terminalRuntime",
+      "mutating": false,
+      "supportsIdempotency": false,
+      "approval": "none"
+    },
+    {
+      "name": "terminal.runtime.execution.cancel",
+      "version": 1,
+      "access": "write",
+      "resourceKind": "terminalRuntime",
+      "mutating": true,
+      "supportsIdempotency": false,
+      "approval": "none"
+    },
+    {
       "name": "terminal.runtime.write",
       "version": 1,
       "access": "write",

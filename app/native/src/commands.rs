@@ -1537,9 +1537,9 @@ pub async fn terminal_runtime_write(
     client_input_id: Option<u64>,
 ) -> Result<(), String> {
     let diagnostics = state.terminal_input_diagnostics.clone();
-    let backend = state.terminal_backend.clone();
+    let interactions = state.control.interactions.clone();
     let observation = diagnostics.observe("runtime_command", &runtime_id, &data, client_input_id);
-    let result = backend.write(&runtime_id, &data).await;
+    let result = interactions.write(&runtime_id, &data, true).await.map_err(|error| error.message);
     if let Some(observation) = observation {
         diagnostics.record_observation(observation, if result.is_ok() { "ok" } else { "error" });
     }
@@ -1572,7 +1572,7 @@ pub async fn terminal_runtime_interrupt(
     state: State<'_, AppState>,
     runtime_id: String,
 ) -> Result<(), String> {
-    state.terminal_backend.interrupt(&runtime_id).await
+    state.control.interactions.interrupt(&runtime_id).await.map_err(|error| error.message)
 }
 
 #[tauri::command]
@@ -1593,7 +1593,7 @@ pub async fn sessions_write(
     id: String,
     data: String,
 ) -> Result<(), String> {
-    state.ssh_terminal_backend.write(&id, &data).await
+    state.control.interactions.write(&id, &data, true).await.map_err(|error| error.message)
 }
 #[tauri::command]
 pub async fn sessions_resize(

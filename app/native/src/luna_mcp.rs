@@ -615,7 +615,7 @@ fn tool_for(descriptor: ControlOperationDescriptor) -> Tool {
                 "description": "Approval ID returned by a prior approval-required result after the desktop UI approves it."
             }
         },
-        "required": if resource_required { vec!["resourceId", "arguments"] } else { vec!["arguments"] },
+        "required": if descriptor.name == "terminal.runtime.interact" { vec!["resourceId", "arguments", "idempotencyKey"] } else if resource_required { vec!["resourceId", "arguments"] } else { vec!["arguments"] },
         "additionalProperties": false
     });
     Tool::new(
@@ -634,6 +634,21 @@ fn tool_for(descriptor: ControlOperationDescriptor) -> Tool {
 
 fn operation_routing_guidance(operation: &str) -> &'static str {
     match operation {
+        "terminal.runtime.screen.snapshot" => {
+            " Reads the current text screen of a Luna Mux terminal Pane, including cursor and alternate-screen/application-cursor/bracketed-paste modes. Independent of frontend visibility. Returns screen plus optional configured CLI observation (mysql, redis, pager, custom); this is not process identity or command success. Rows/columns are zero-based for cursor coordinates. sizeLimited/truncated means incomplete. No browser screenshot or webpage control."
+        }
+        "terminal.runtime.interact" => {
+            " Interacts with a Luna Mux Pane's terminal CLI. Requires a stable idempotencyKey; reuse the identical request to recover executionId without resending input. Observe new output from a cursor captured before input. Timeout/outputLimit/outputGap retain the interaction; continue with execution.wait or read. matched/prompt/idle are observations, never proof of command success or Shell readiness. Other automated input conflicts until the interaction ends; human input takes over. Use autoPaste for mode-aware paste; automatic multiline paste is rejected unless bracketed paste is enabled. Arrow/Home/End keys follow application cursor mode. wait.prompt observes configured CLI states on a changed rendered screen, not an old prompt. No shell syntax is appended. Use normal shell tools for repository development commands."
+        }
+        "terminal.runtime.execution.wait" | "terminal.runtime.execution.read" => {
+            " Continues observing an existing Luna Mux terminal interaction owned by this caller, without sending input. read replays output from startCursor or fromCursor without advancing the waiter; wait advances its saved cursor. Output is raw PTY text and can include echo/ANSI and unrelated terminal output. No command exit code is inferred. Records last for this application run, with a limit of 1024; output remains in the bounded Runtime ring."
+        }
+        "terminal.runtime.execution.cancel" => {
+            " Ends observation of a Luna Mux terminal interaction and releases its input reservation. Does not send Ctrl-C or stop the command; use terminal.runtime.interrupt explicitly if needed. Check terminal output before submitting another command."
+        }
+        "terminal.runtime.output.wait" => {
+            " Waits for bounded new raw PTY output in a Luna Mux Pane from an explicit cursor. Literal text matching may match echo; suffix matching is also only an observation. idle means silence, not completion. timeout/outputLimit/outputGap return a cursor to continue reading. Does not send input or reserve the terminal."
+        }
         "settings.appearance.get" | "settings.theme.set" | "settings.terminal.set" => {
             " Use only for the Luna Mux desktop application's own theme or terminal rendering preferences. Do not use for webpage CSS/theme, repository configuration, or operating-system appearance."
         }
@@ -679,8 +694,94 @@ fn operation_routing_guidance(operation: &str) -> &'static str {
     }
 }
 
+fn terminal_cli_schema() -> Value {
+    json!({ "type": "object", "properties": {
+        "profile": { "type": "string", "enum": ["mysql", "redis", "pager", "custom"], "default": "custom" },
+        "rules": { "type": "array", "minItems": 1, "maxItems": 16,
+            "description": "Replaces all preset rules in order. Patterns match the entire rendered cursor row; trailing empty cells are trimmed. A custom profile requires rules. No process detection or success inference.",
+            "items": { "type": "object", "properties": {
+                "state": { "type": "string", "enum": ["prompt", "continuation", "pager"] },
+                "pattern": { "type": "string", "minLength": 1, "maxLength": 512, "description": "Rust regex, <=512 UTF-8 bytes; empty-line matches and excessive complexity are rejected." }
+            }, "required": ["state", "pattern"], "additionalProperties": false }
+        }
+    }, "additionalProperties": false })
+}
+
+fn terminal_wait_condition_schema() -> Value {
+    json!({
+        "type": "object", "properties": {
+            "text": { "type": "string", "minLength": 1, "maxLength": 4096, "description": "Literal raw PTY text, at most 4096 UTF-8 bytes. Matching does not establish command success." },
+            "matchMode": { "type": "string", "enum": ["contains", "suffix"], "default": "contains" },
+            "idleMs": { "type": "integer", "minimum": 100, "maximum": 30000, "description": "Return idle after this much silence, even if no output arrived. Conditions are ORed; silence is not completion." },
+            "prompt": { "type": "object", "properties": {
+                "cli": terminal_cli_schema(),
+                "states": { "type": "array", "minItems": 1, "maxItems": 3, "items": { "type": "string", "enum": ["prompt", "continuation", "pager"] }, "default": ["prompt"] }
+            }, "required": ["cli"], "additionalProperties": false }
+        }, "additionalProperties": false
+    })
+}
+
 fn control_arguments_schema(operation: &str) -> Value {
     match operation {
+        "terminal.runtime.screen.snapshot" => json!({
+            "type": "object", "properties": {
+                "maxBytes": { "type": "integer", "minimum": 4, "maximum": 262144, "default": 65536 },
+                "cli": terminal_cli_schema()
+            }, "additionalProperties": false
+        }),
+        "terminal.runtime.interact" => json!({
+            "type": "object",
+            "properties": {
+                "input": {
+                    "oneOf": [
+                        { "type": "object", "properties": {
+                            "type": { "const": "text" }, "text": { "type": "string", "maxLength": 65536, "description": "Single line without control characters; max 65536 encoded bytes including submit." },
+                            "submit": { "type": "boolean", "default": false, "description": "Append Enter (CR)." }
+                        }, "required": ["type", "text"], "additionalProperties": false },
+                        { "type": "object", "properties": {
+                            "type": { "const": "key" }, "key": { "type": "string", "enum": ["Enter", "Tab", "Escape", "Backspace", "CtrlD", "CtrlL", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown", "Insert", "Delete"] }
+                        }, "required": ["type", "key"], "additionalProperties": false },
+                        { "type": "object", "properties": {
+                            "type": { "const": "autoPaste" }, "text": { "type": "string", "minLength": 1, "maxLength": 65536, "description": "Uses the observed bracketed paste mode. Multiline text requires that mode; no trailing Enter is added." }
+                        }, "required": ["type", "text"], "additionalProperties": false },
+                        { "type": "object", "properties": {
+                            "type": { "const": "paste" }, "text": { "type": "string", "minLength": 1, "maxLength": 65536 },
+                            "bracketedPaste": { "type": "boolean", "default": false, "description": "Enable only when the target has enabled bracketed paste. Newlines become CR; without bracketed mode, multiline paste may execute each line. No trailing Enter is added." }
+                        }, "required": ["type", "text"], "additionalProperties": false }
+                    ]
+                },
+                "wait": terminal_wait_condition_schema(),
+                "timeoutMs": { "type": "integer", "minimum": 0, "maximum": 30000, "default": 1000 },
+                "maxBytes": { "type": "integer", "minimum": 4, "maximum": 1048576, "default": 65536 }
+            },
+            "required": ["input"], "additionalProperties": false
+        }),
+        "terminal.runtime.output.wait" => json!({
+            "type": "object", "properties": {
+                "fromCursor": { "type": "integer", "minimum": 0 },
+                "wait": terminal_wait_condition_schema(),
+                "timeoutMs": { "type": "integer", "minimum": 0, "maximum": 30000, "default": 1000 },
+                "maxBytes": { "type": "integer", "minimum": 4, "maximum": 1048576, "default": 65536 }
+            }, "required": ["fromCursor"], "additionalProperties": false
+        }),
+        "terminal.runtime.execution.wait" => json!({
+            "type": "object", "properties": {
+                "executionId": { "type": "string", "minLength": 1 },
+                "timeoutMs": { "type": "integer", "minimum": 0, "maximum": 30000, "default": 1000 },
+                "maxBytes": { "type": "integer", "minimum": 4, "maximum": 1048576, "default": 65536 }
+            }, "required": ["executionId"], "additionalProperties": false
+        }),
+        "terminal.runtime.execution.read" => json!({
+            "type": "object", "properties": {
+                "executionId": { "type": "string", "minLength": 1 },
+                "fromCursor": { "type": "integer", "minimum": 0 },
+                "maxBytes": { "type": "integer", "minimum": 4, "maximum": 1048576, "default": 65536 }
+            }, "required": ["executionId"], "additionalProperties": false
+        }),
+        "terminal.runtime.execution.cancel" => json!({
+            "type": "object", "properties": { "executionId": { "type": "string", "minLength": 1 } },
+            "required": ["executionId"], "additionalProperties": false
+        }),
         "diagnostics.repair" => json!({
             "type": "object",
             "properties": { "action": { "type": "string", "enum": ["remoteHelper"] } },
@@ -1179,6 +1280,37 @@ mod tests {
             control_arguments_schema("terminal.runtime.output.read")["properties"]["fromCursor"]["minimum"],
             0
         );
+    }
+
+    #[test]
+    fn interaction_schema_requires_retry_key_and_bounded_waits() {
+        let tool = tool_for(ControlOperationDescriptor {
+            name: "terminal.runtime.interact".into(), version: 1, access: ControlAccess::Write,
+            resource_kind: ControlResourceKind::TerminalRuntime, mutating: true,
+            supports_idempotency: true, approval: ControlApprovalRequirement::None,
+        });
+        let schema = Value::Object((*tool.input_schema).clone());
+        assert_eq!(schema["required"], json!(["resourceId", "arguments", "idempotencyKey"]));
+        assert_eq!(schema["properties"]["arguments"]["properties"]["timeoutMs"]["maximum"], 30000);
+        for name in ["terminal.runtime.output.wait", "terminal.runtime.execution.read", "terminal.runtime.execution.wait", "terminal.runtime.execution.cancel"] {
+            let args = control_arguments_schema(name);
+            assert_eq!(args["additionalProperties"], false);
+            assert!(!args["required"].as_array().unwrap().is_empty());
+            assert!(operation_routing_guidance(name).contains("Luna Mux"));
+        }
+    }
+
+    #[test]
+    fn screen_and_mode_input_schemas_expose_phase_two_contract() {
+        let screen = control_arguments_schema("terminal.runtime.screen.snapshot");
+        assert_eq!(screen["properties"]["maxBytes"]["maximum"], 262144);
+        assert_eq!(screen["properties"]["cli"]["properties"]["rules"]["maxItems"], 16);
+        assert_eq!(screen["additionalProperties"], false);
+        let interaction = control_arguments_schema("terminal.runtime.interact");
+        let variants = interaction["properties"]["input"]["oneOf"].as_array().unwrap();
+        assert!(variants.iter().any(|v| v["properties"]["type"]["const"] == "autoPaste"));
+        assert_eq!(interaction["properties"]["wait"]["properties"]["prompt"]["required"], json!(["cli"]));
+        assert!(operation_routing_guidance("terminal.runtime.screen.snapshot").contains("No browser"));
     }
 
     #[tokio::test]

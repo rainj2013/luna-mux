@@ -41,6 +41,10 @@ pub trait TerminalBackend: Send + Sync {
     fn set_output_paused(&self, runtime_id: &str, paused: bool) -> TerminalBackendResult<()>;
     async fn interrupt(&self, runtime_id: &str) -> TerminalBackendResult<()>;
     async fn close(&self, runtime_id: &str) -> TerminalBackendResult<()>;
+    fn screen_snapshot(&self, _runtime_id: &str, _max_bytes: usize) -> TerminalBackendResult<crate::terminal_runtime_contract::TerminalScreenSnapshot> {
+        Err("Terminal screen snapshots are unsupported by this backend".into())
+    }
+
     fn read_output(
         &self,
         runtime_id: &str,

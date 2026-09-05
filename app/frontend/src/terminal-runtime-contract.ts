@@ -95,6 +95,33 @@ export interface TerminalRuntimeOutputReadResult {
   data: string
 }
 
+export const TERMINAL_SCREEN_MAX_ROWS = 256 as const
+export const TERMINAL_SCREEN_MAX_COLS = 512 as const
+export const TERMINAL_SCREEN_MAX_BYTES = 262144 as const
+
+export interface TerminalScreenModes {
+  alternateScreen: boolean
+  applicationCursor: boolean
+  applicationKeypad: boolean
+  bracketedPaste: boolean
+}
+
+export interface TerminalScreenSnapshot {
+  runtimeId: string
+  outputCursor: number
+  rows: number
+  cols: number
+  cursorRow: number
+  cursorCol: number
+  cursorVisible: boolean
+  cursorLine: string
+  cursorLineCursor: number
+  modes: TerminalScreenModes
+  lines: string[]
+  truncated: boolean
+  sizeLimited: boolean
+}
+
 export interface TerminalRuntimeExitEvent {
   runtimeId: string
   reason: TerminalRuntimeExitReason

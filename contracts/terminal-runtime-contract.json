@@ -1,9 +1,29 @@
 {
   "version": 7,
-  "transports": ["localPty", "ssh"],
-  "targetKinds": ["powershell", "wsl", "macosShell", "ssh"],
-  "statuses": ["starting", "connecting", "running", "exited", "error"],
-  "exitReasons": ["exited", "signaled", "closed", "connectionLost", "failed"],
+  "transports": [
+    "localPty",
+    "ssh"
+  ],
+  "targetKinds": [
+    "powershell",
+    "wsl",
+    "macosShell",
+    "ssh"
+  ],
+  "statuses": [
+    "starting",
+    "connecting",
+    "running",
+    "exited",
+    "error"
+  ],
+  "exitReasons": [
+    "exited",
+    "signaled",
+    "closed",
+    "connectionLost",
+    "failed"
+  ],
   "capabilities": [
     "terminal",
     "resize",
@@ -14,5 +34,11 @@
     "portForwarding"
   ],
   "cursorUnit": "utf8Bytes",
-  "maxCursor": 9007199254740991
+  "maxCursor": 9007199254740991,
+  "screen": {
+    "maxRows": 256,
+    "maxCols": 512,
+    "maxSnapshotBytes": 262144,
+    "cursorBase": 0
+  }
 }

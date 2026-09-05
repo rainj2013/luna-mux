@@ -26,6 +26,9 @@ use crate::models::{
     TransferStatus, TransferTask, TunnelSummary, UiTheme,
 };
 use crate::terminal_backend::TerminalBackend;
+use crate::terminal_cli::{ScreenSnapshotArguments, PromptMatcher};
+use crate::terminal_interaction::{TerminalInteractionManager, InteractArguments, OutputWaitArguments,
+    ExecutionReadArguments, ExecutionWaitArguments, ExecutionCancelArguments};
 use crate::terminal_runtime_contract::TerminalRuntimeEvent;
 use crate::transfers::TransferManager;
 use crate::tunnels::TunnelManager;
@@ -138,6 +141,7 @@ pub struct InProcessControlService {
     agent_hooks: Arc<AgentHookService>,
     luna_mcp: RwLock<Option<Arc<LunaMcpService>>>,
     mux_mutations: tokio::sync::Mutex<()>,
+    pub(crate) interactions: Arc<TerminalInteractionManager>,
     idempotent_results: Mutex<HashMap<(String, String, String), IdempotencyEntry>>,
 }
 
@@ -482,6 +486,7 @@ impl InProcessControlService {
         agent_hooks: Arc<AgentHookService>,
     ) -> Arc<Self> {
         Arc::new(Self {
+            interactions: TerminalInteractionManager::new(backend.clone()),
             database,
             backend,
             side_effects,
@@ -765,6 +770,56 @@ impl InProcessControlService {
                 resource_kind: ControlResourceKind::TerminalRuntime,
                 mutating: false,
                 supports_idempotency: true,
+                approval: ControlApprovalRequirement::None,
+            },
+            ControlOperationDescriptor {
+                name: "terminal.runtime.screen.snapshot".into(), version: 1,
+                access: ControlAccess::Read, resource_kind: ControlResourceKind::TerminalRuntime,
+                mutating: false, supports_idempotency: false, approval: ControlApprovalRequirement::None,
+            },
+            ControlOperationDescriptor {
+                name: "terminal.runtime.output.wait".into(),
+                version: 1,
+                access: ControlAccess::Read,
+                resource_kind: ControlResourceKind::TerminalRuntime,
+                mutating: false,
+                supports_idempotency: false,
+                approval: ControlApprovalRequirement::None,
+            },
+            ControlOperationDescriptor {
+                name: "terminal.runtime.interact".into(),
+                version: 1,
+                access: ControlAccess::Write,
+                resource_kind: ControlResourceKind::TerminalRuntime,
+                mutating: true,
+                supports_idempotency: true,
+                approval: ControlApprovalRequirement::None,
+            },
+            ControlOperationDescriptor {
+                name: "terminal.runtime.execution.read".into(),
+                version: 1,
+                access: ControlAccess::Read,
+                resource_kind: ControlResourceKind::TerminalRuntime,
+                mutating: false,
+                supports_idempotency: false,
+                approval: ControlApprovalRequirement::None,
+            },
+            ControlOperationDescriptor {
+                name: "terminal.runtime.execution.wait".into(),
+                version: 1,
+                access: ControlAccess::Read,
+                resource_kind: ControlResourceKind::TerminalRuntime,
+                mutating: false,
+                supports_idempotency: false,
+                approval: ControlApprovalRequirement::None,
+            },
+            ControlOperationDescriptor {
+                name: "terminal.runtime.execution.cancel".into(),
+                version: 1,
+                access: ControlAccess::Write,
+                resource_kind: ControlResourceKind::TerminalRuntime,
+                mutating: true,
+                supports_idempotency: false,
                 approval: ControlApprovalRequirement::None,
             },
             ControlOperationDescriptor {
@@ -1162,10 +1217,12 @@ impl LunaControlService for InProcessControlService {
                     details: None,
                 });
             }
+            // Interactions own durable-in-process reservations and keep only hashes,
+            // including across cancelled calls and uncertain backend writes.
             let idempotency_key = request
                 .idempotency_key
                 .as_deref()
-                .filter(|key| !key.is_empty());
+                .filter(|key| !key.is_empty() && request.operation != "terminal.runtime.interact");
             let idempotency_cache_key = idempotency_key.map(|key| {
                 (
                     caller.caller_id.clone(),
@@ -1501,10 +1558,9 @@ impl LunaControlService for InProcessControlService {
                                 details: None,
                             })?;
                         let payload = format!("{}\r", arguments.task);
-                        self.backend
-                            .write(&runtime_id, &payload)
-                            .await
-                            .map_err(backend_error)?;
+                        self.interactions
+                            .write(&runtime_id, &payload, matches!(caller.kind, ControlCallerKind::Ui | ControlCallerKind::Internal))
+                            .await?;
                         json!({ "acceptedBytes": arguments.task.len(), "runtimeId": runtime_id })
                     }
                     "agents.interrupt" => {
@@ -1522,10 +1578,9 @@ impl LunaControlService for InProcessControlService {
                                 retryable: false,
                                 details: None,
                             })?;
-                        self.backend
+                        self.interactions
                             .interrupt(&runtime_id)
-                            .await
-                            .map_err(backend_error)?;
+                            .await?;
                         json!({ "interrupted": true, "runtimeId": runtime_id })
                     }
                     "mux.sessions.list" => {
@@ -1847,13 +1902,46 @@ impl LunaControlService for InProcessControlService {
                         )
                         .map_err(|error| internal_error(error.to_string()))?
                     }
+                    "terminal.runtime.screen.snapshot" => {
+                        let args: ScreenSnapshotArguments = parse_arguments(&request)?;
+                        if !(4..=crate::terminal_runtime_contract::TERMINAL_SCREEN_MAX_BYTES).contains(&args.max_bytes) {
+                            return Err(invalid_arguments("maxBytes must be 4..262144"));
+                        }
+                        let matcher = args.cli.as_ref().map(PromptMatcher::new).transpose().map_err(invalid_arguments)?;
+                        let screen = self.backend.screen_snapshot(required_resource_id(&request)?, args.max_bytes).map_err(backend_error)?;
+                        let cli = matcher.map(|matcher| matcher.observe(&screen));
+                        json!({ "screen": screen, "cli": cli })
+                    }
+                    "terminal.runtime.output.wait" => {
+                        let args: OutputWaitArguments = parse_arguments(&request)?;
+                        serde_json::to_value(self.interactions.output_wait(required_resource_id(&request)?, args).await?)
+                            .map_err(|error| internal_error(error.to_string()))?
+                    }
+                    "terminal.runtime.interact" => {
+                        let runtime = required_resource_id(&request)?;
+                        let args: InteractArguments = parse_arguments(&request)?;
+                        let key = request.idempotency_key.as_deref().unwrap_or_default();
+                        let execution_id = self.interactions.start(&caller.caller_id, runtime, key, &args).await?;
+                        self.interactions.wait(&caller.caller_id, runtime, ExecutionWaitArguments {
+                            execution_id, timeout_ms: args.timeout_ms, max_bytes: args.max_bytes,
+                        }).await?
+                    }
+                    "terminal.runtime.execution.read" => {
+                        self.interactions.read(&caller.caller_id, required_resource_id(&request)?, parse_arguments::<ExecutionReadArguments>(&request)?)?
+                    }
+                    "terminal.runtime.execution.wait" => {
+                        self.interactions.wait(&caller.caller_id, required_resource_id(&request)?, parse_arguments::<ExecutionWaitArguments>(&request)?).await?
+                    }
+                    "terminal.runtime.execution.cancel" => {
+                        let args: ExecutionCancelArguments = parse_arguments(&request)?;
+                        self.interactions.cancel(&caller.caller_id, required_resource_id(&request)?, &args.execution_id)?
+                    }
                     "terminal.runtime.write" => {
                         let runtime_id = required_resource_id(&request)?;
                         let data = required_string(&request, "data", true)?;
-                        self.backend
-                            .write(runtime_id, data)
-                            .await
-                            .map_err(backend_error)?;
+                        self.interactions
+                            .write(runtime_id, data, matches!(caller.kind, ControlCallerKind::Ui | ControlCallerKind::Internal))
+                            .await?;
                         json!({ "acceptedBytes": data.len() })
                     }
                     "terminal.runtime.resize" => {
@@ -1880,10 +1968,9 @@ impl LunaControlService for InProcessControlService {
                     }
                     "terminal.runtime.interrupt" => {
                         let runtime_id = required_resource_id(&request)?;
-                        self.backend
+                        self.interactions
                             .interrupt(runtime_id)
-                            .await
-                            .map_err(backend_error)?;
+                            .await?;
                         json!({ "interrupted": true })
                     }
                     "terminal.runtime.close" => {
@@ -2708,6 +2795,13 @@ fn required_dimension(request: &ControlRequest, name: &str) -> ControlResult<u32
 }
 
 fn audit_arguments(request: &ControlRequest) -> serde_json::Value {
+    if matches!(request.operation.as_str(), "terminal.runtime.interact" | "terminal.runtime.output.wait" | "terminal.runtime.screen.snapshot") {
+        return json!({
+            "inputBytes": request.arguments.pointer("/input/text").and_then(|v| v.as_str()).map(str::len),
+            "timeoutMs": request.arguments.get("timeoutMs"),
+            "maxBytes": request.arguments.get("maxBytes")
+        });
+    }
     if matches!(
         request.operation.as_str(),
         "terminal.runtime.write" | "agents.send_task" | "browser.type" | "browser.evaluate"
@@ -3213,13 +3307,18 @@ mod tests {
         async fn close(&self, _runtime_id: &str) -> TerminalBackendResult<()> {
             Ok(())
         }
+        fn screen_snapshot(&self, runtime_id: &str, max_bytes: usize) -> TerminalBackendResult<crate::terminal_runtime_contract::TerminalScreenSnapshot> {
+            let mut output = crate::terminal_output::OutputBuffer::new(1024);
+            output.push(runtime_id, "mysql> ".into());
+            Ok(output.screen_snapshot(runtime_id, max_bytes))
+        }
         fn read_output(
             &self,
-            _runtime_id: &str,
-            _from_cursor: u64,
-            _max_bytes: usize,
+            runtime_id: &str,
+            from_cursor: u64,
+            max_bytes: usize,
         ) -> TerminalBackendResult<TerminalRuntimeOutputReadResult> {
-            Err("not implemented".into())
+            crate::terminal_output::OutputBuffer::new(1024).read(runtime_id, from_cursor, max_bytes)
         }
     }
 
@@ -4309,6 +4408,78 @@ mod tests {
             contract["initialOperations"],
             serde_json::to_value(InProcessControlService::descriptors()).unwrap()
         );
+    }
+
+    #[tokio::test]
+    async fn terminal_interaction_control_enforces_permissions_and_redacts_audit() {
+        use crate::control_contract::ControlResourceRef;
+        let backend = Arc::new(EmptyBackend::ssh_runtime("r"));
+        let (service, path) = service_with(backend.clone(), Arc::new(EmptySideEffects));
+        let writer = caller(ControlResourceKind::TerminalRuntime, Some("r"), ControlAccess::Write);
+        let request = ControlRequest {
+            contract_version: CONTROL_CONTRACT_VERSION, request_id: "interaction".into(),
+            operation: "terminal.runtime.interact".into(),
+            resource: Some(ControlResourceRef { kind: ControlResourceKind::TerminalRuntime, id: "r".into() }),
+            arguments: json!({ "input": { "type": "text", "text": "private-input", "submit": true },
+                "wait": { "text": "private-prompt" }, "timeoutMs": 0 }),
+            idempotency_key: Some("private-key".into()), approval_id: None,
+        };
+        let reader = caller(ControlResourceKind::TerminalRuntime, Some("r"), ControlAccess::Read);
+        assert_eq!(service.invoke(&reader, request.clone()).await.unwrap_err().code, ControlErrorCode::Unauthorized);
+        let outsider = caller(ControlResourceKind::TerminalRuntime, Some("other"), ControlAccess::Write);
+        assert_eq!(service.invoke(&outsider, request.clone()).await.unwrap_err().code, ControlErrorCode::Unauthorized);
+        assert!(backend.writes.lock().unwrap().is_empty());
+        let first = service.invoke(&writer, request.clone()).await.unwrap();
+        tokio::task::yield_now().await;
+        let second = service.invoke(&writer, request.clone()).await.unwrap();
+        assert_eq!(first.result["executionId"], second.result["executionId"]);
+        assert_eq!(backend.writes.lock().unwrap().len(), 1);
+        // Interaction reservations must not retain the generic cache's raw request.
+        assert!(service.idempotent_results.lock().unwrap().is_empty());
+        let mut missing_key = request;
+        missing_key.idempotency_key = None;
+        assert_eq!(service.invoke(&writer, missing_key).await.unwrap_err().code, ControlErrorCode::InvalidArguments);
+        let mut read = ControlRequest {
+            contract_version: CONTROL_CONTRACT_VERSION, request_id: "read".into(),
+            operation: "terminal.runtime.execution.read".into(),
+            resource: Some(ControlResourceRef { kind: ControlResourceKind::TerminalRuntime, id: "r".into() }),
+            arguments: json!({ "executionId": first.result["executionId"] }), idempotency_key: None, approval_id: None,
+        };
+        assert_eq!(service.invoke(&outsider, read.clone()).await.unwrap_err().code, ControlErrorCode::Unauthorized);
+        let mut another_owner = writer.clone(); another_owner.caller_id = "different-agent".into();
+        assert_eq!(service.invoke(&another_owner, read.clone()).await.unwrap_err().code, ControlErrorCode::NotFound);
+        read.operation = "terminal.runtime.execution.cancel".into();
+        service.invoke(&writer, read).await.unwrap();
+        assert!(backend.interrupts.lock().unwrap().is_empty());
+        let audit = serde_json::to_string(&service.read_events(&writer, 0, 100).unwrap()).unwrap();
+        assert!(!audit.contains("private-input")); assert!(!audit.contains("private-prompt")); assert!(!audit.contains("private-key"));
+        let stored = serde_json::to_string(&service.database.list_control_audit(100).unwrap()).unwrap();
+        assert!(!stored.contains("private-input")); assert!(!stored.contains("private-prompt")); assert!(!stored.contains("private-key"));
+        drop(service); let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn terminal_screen_control_is_scoped_and_redacts_cli_rules() {
+        use crate::control_contract::ControlResourceRef;
+        let (service, path) = service_with(Arc::new(EmptyBackend::ssh_runtime("r")), Arc::new(EmptySideEffects));
+        let reader = caller(ControlResourceKind::TerminalRuntime, Some("r"), ControlAccess::Read);
+        let request = ControlRequest {
+            contract_version: CONTROL_CONTRACT_VERSION, request_id: "screen".into(), operation: "terminal.runtime.screen.snapshot".into(),
+            resource: Some(ControlResourceRef { kind: ControlResourceKind::TerminalRuntime, id: "r".into() }),
+            arguments: json!({ "cli": { "profile":"mysql" } }), idempotency_key: None, approval_id: None,
+        };
+        let outsider = caller(ControlResourceKind::TerminalRuntime, Some("other"), ControlAccess::Read);
+        assert_eq!(service.invoke(&outsider, request.clone()).await.unwrap_err().code, ControlErrorCode::Unauthorized);
+        let result = service.invoke(&reader, request.clone()).await.unwrap().result;
+        assert_eq!(result["screen"]["cursorCol"], 7);
+        assert_eq!(result["cli"]["state"], "prompt");
+        let mut custom = request.clone(); custom.arguments = json!({ "cli":{"rules":[{"state":"prompt","pattern":"private-cli-marker"}]} });
+        service.invoke(&reader, custom).await.unwrap();
+        let stored = serde_json::to_string(&service.database.list_control_audit(100).unwrap()).unwrap();
+        assert!(!stored.contains("private-cli-marker"));
+        let mut invalid = request; invalid.arguments = json!({"maxBytes":262145});
+        assert_eq!(service.invoke(&reader, invalid).await.unwrap_err().code, ControlErrorCode::InvalidArguments);
+        drop(service); let _ = std::fs::remove_file(path);
     }
 
     #[test]
