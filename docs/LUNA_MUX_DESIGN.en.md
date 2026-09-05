@@ -1,7 +1,7 @@
 # Luna Mux Design
 
 Status: approved design baseline
-Last updated: 2026-08-20
+Last updated: 2026-09-05
 
 ## 1. Product Definition
 
@@ -214,31 +214,13 @@ Same-Session membership is itself the trust decision for output reads, PTY write
 
 Terminal output uses a bounded in-memory ring and a monotonic cursor; when old output is overwritten, a truncation marker and the new earliest cursor are returned. Output disappears after the app exits. Control operations keep a 30-day audit by default, recording caller, target, time, operation, input summary, approval, and result.
 
-#### 4.5.2 Bounded terminal interactions
+#### 4.5.2 Cross-pane terminal interactions
 
-`terminal.runtime.interact` captures the output cursor before input and returns an `executionId`. It accepts single-line text with optional Enter, named keys, or explicit paste. It never appends shell syntax or infers CLI type, command success, or exit codes. Literal raw-output matching supports `contains` and `suffix`; suffix matching requires reaching the current output end. Text and optional `idleMs` conditions are ORed. Silence is an observation, not completion.
+Agents can send text, keys, or paste to another Pane, wait for output or prompts, and resume reading after a timeout. Request deduplication and input coordination prevent duplicate sends and concurrent input conflicts; manual input lets the user take over.
 
-The additive Runtime-scoped operations are `interact`, `execution.read`, `execution.wait`, `execution.cancel`, and `output.wait`, all under `terminal.runtime`. Interact requires `idempotencyKey`; identical retries recover the same execution without resending input. Read replays from the starting or specified cursor; wait advances the saved cursor. Cancel releases observation/input reservation without sending Ctrl-C. Output wait requires an explicit cursor and does not reserve input.
+Screen snapshots expose current text, cursor position, and terminal modes, including clearing, overwrites, and main/alternate-screen switches. Keys and automatic paste adapt to current modes. MySQL, Redis, pager, and custom rules recognize prompts, continuation, and paging; waits exclude stale prompts.
 
-The control service owns one `TerminalInteractionManager`, holding only execution metadata, request/key hashes, wait progress, and input locks. Runtime backends remain the output source. Execution access checks both creator and Runtime, in addition to existing authorization. A detached write survives cancellation of its MCP call; a backend failure is `writeUncertain` because bytes may have been partially sent. The same key cannot send again. Records last for this application run, capped at 1024; new executions are rejected at capacity instead of evicting retry protection.
-
-Waits are limited to 30 seconds and 1 MiB per response. `timeout`, `outputLimit`, and `outputGap` preserve the execution for continuation; overwritten output is explicitly marked truncated. Responses include input state, observation reason, and output cursors. Read can recover output consumed by a waiter whose response was lost. Only one waiter per execution is allowed; concurrent waits return retryable conflict with its execution ID. Bounded async polling reuses existing backends; blocking local PTY writes run in the blocking pool so backpressure does not block wait timers. Cancelling observation cannot retract an in-flight write.
-
-Automated input immediately conflicts when the Runtime has an active interaction or busy writer. Desktop input and explicit interrupts share the input gate and end the old observation with `inputChanged`. Interrupt remains a backend operation and does not prove command termination. The reservation coordinates Luna input; it does not prove the foreground program is ready. Raw PTY output may include echo, ANSI sequences, and background output, without reliable stdout/stderr or command-output attribution.
-
-See [the implementation plan](plans/terminal-interactions.md) for acceptance criteria, evidence, and the follow-up roadmap.
-
-#### 4.5.3 Screen observation and semantic interaction
-
-Cross-pane control follows an observe → input → wait for new state → decide loop. Agents operate the SSH terminal, database CLI, or pager that the user is using. Luna provides shared terminal interaction capabilities, with optional prompt rules for CLI differences.
-
-Each Runtime maintains raw output and the current screen: output cursors track incremental activity, while screen snapshots represent overwrites, clearing, and main/alternate-screen switches. The backend updates the screen independently of Pane visibility. Snapshots, parsing, and waits have resource limits and explicitly report incomplete state.
-
-Input is expressed as text, keys, or paste, with encoding selected from the Runtime's current modes. Automatic multiline paste requires bracketed paste. Input coordination and idempotent retries prevent interleaving and duplicate sends; user takeover ends the previous interaction's observation.
-
-CLI rules recognize prompts, continuation, and paging. Waits accept only prompt rows actually updated after the interaction began, avoiding stale matches. Prompt matches, silence, and interrupts report observations; command success and exit codes still require independent evidence.
-
-See [the phase-two plan](plans/terminal-screen-interactions.md) for interfaces, limits, and validation. Complex terminal extensions and in-flight output during SSH resize can still cause screen differences; wait for redraw before reassessing.
+Output and screen parsing have resource limits. Prompt matches or silence do not prove command success, and reliable exit codes are not yet available. macOS has been tested; Windows, WSL, and real SSH/database CLIs still need on-device verification.
 
 ### 4.6 Browser Resources
 

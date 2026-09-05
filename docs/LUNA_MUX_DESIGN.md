@@ -1,7 +1,7 @@
 # Luna Mux 设计方案
 
 状态：已批准的设计基线  
-最后更新：2026-08-20
+最后更新：2026-09-05
 
 ## 1. 产品定义
 
@@ -214,39 +214,13 @@ mux.layout.set                写入经过完整校验的 Session 分割树
 
 终端输出使用有界内存环和单调游标；旧输出被覆盖时返回截断标记和新的最早游标。应用退出后输出消失。控制操作默认保留 30 天审计，记录调用方、目标、时间、操作、输入摘要、审批和结果。
 
-#### 4.5.2 有界终端交互执行
+#### 4.5.2 跨窗格终端交互
 
-`terminal.runtime.interact` 在写入前捕获输出游标，并返回 `executionId`。输入支持单行文字加 Enter、命名按键及显式粘贴；不追加 Shell 标记，不推断 CLI 类型或退出码。`wait.text` 是原始 PTY 输出的字面量匹配，`matchMode` 可选 `contains` / `suffix`；后缀匹配要求已读至当前输出末尾。`idleMs` 与文本条件按 OR 组合，静默或匹配均不代表命令执行成功。
+Agent 可向其他窗格发送文字、按键或粘贴，等待输出或提示，并在超时后继续读取结果。交互支持请求去重和输入协调，避免重复发送及并发输入冲突；用户手动输入可接管终端。
 
-新操作均以 TerminalRuntime 为授权资源：
+屏幕快照提供当前文字、光标位置和终端模式，支持清屏、覆盖写和主/备用屏幕切换。按键与自动粘贴适配当前模式；MySQL、Redis、分页器及自定义提示规则可识别正常提示、续行和分页，等待时排除旧提示。
 
-```text
-terminal.runtime.interact          输入一次并有界等待；必须提供 idempotencyKey
-terminal.runtime.execution.read    从起始或指定游标重读执行期间的输出
-terminal.runtime.execution.wait    从保存的等待游标继续观察，不重发输入
-terminal.runtime.execution.cancel  结束观察并释放占用，不发送 Ctrl-C
-terminal.runtime.output.wait       从指定游标有界等待，不创建执行或占用终端
-```
-
-交互记录由控制服务内唯一的 `TerminalInteractionManager` 管理，输出仍从 Runtime 内存环读取。记录校验 Runtime 和创建者身份；去重键按创建者隔离，保存键与规范化参数的 SHA-256，不保留命令正文。同键不同资源或参数返回冲突。写入任务独立于 MCP 请求存活，失败可能已部分写入，因此返回 `writeUncertain`，同键重试不会再次发送。记录只在当前应用运行期间有效，最多 1024 条；达到限额拒绝新执行，不淘汰记录后允许旧请求重发。
-
-等待最多 30 秒，单次输出最多 1 MiB。`timeout`、`outputLimit`、`outputGap` 保留执行，可继续等待；覆盖导致的缺口明确标记 `truncated`，不能据此宣称完整结果。响应包含 `inputState`、`observation.reason` 和 `observation.output` 的游标；`execution.read` 可恢复工具响应丢失前已被等待消费的输出。同一执行只允许一个 waiter，并发等待返回含执行 ID 的 retryable conflict。后端使用有界异步轮询，本地 PTY 阻塞写入放入 blocking pool，避免背压阻塞等待定时器；取消观察不能撤回已开始的写入。
-
-同 Runtime 的 Agent 输入在有未结束交互或写入繁忙时立即冲突，不排队。桌面输入和显式中断通过相同输入锁，令旧交互返回 `inputChanged`；中断仍由后端处理，返回不证明前台命令已经停止。终端运行其他任务的状态仍可能未知：占用仅协调 Luna 发起的输入，用户应检查输出后再执行下一步。PTY 输出可包含回显、ANSI 和后台任务输出，并非可靠的 stdout/stderr 分离或命令专属输出。
-
-完整实施计划、验收与后续路线图见 [terminal-interactions.md](plans/terminal-interactions.md)。
-
-#### 4.5.3 屏幕观察与语义交互
-
-跨窗格控制遵循“观察 → 输入 → 等待新状态 → 再决策”的闭环。Agent 操作用户正在使用的 SSH、数据库 CLI 或分页器；Luna 提供统一的终端交互能力，CLI 差异通过可选提示规则表达。
-
-Runtime 同时保留原始输出和当前屏幕：输出游标用于追踪增量，屏幕快照用于理解覆盖、清屏和主/备用屏幕切换。屏幕模型在后端持续更新，不依赖 Pane 是否可见；快照、解析和等待都有资源上限，不完整状态明确标记。
-
-输入表达为文字、按键或粘贴，由 Runtime 当前模式决定编码。自动多行粘贴要求 bracketed paste；输入协调与幂等重试防止交错输入和重复发送，用户接管会结束旧交互的观察。
-
-CLI 规则识别正常提示、续行和分页。等待只接受交互开始后实际更新的提示行，避免旧提示误触发；提示命中、静默和中断分别报告观察结果，命令成功与退出码仍需独立证据。
-
-接口、边界和验证见 [二期计划](plans/terminal-screen-interactions.md)。复杂终端扩展及 SSH resize 的在途输出仍可能造成屏幕差异，需等待重绘后重新观察。
+输出与屏幕解析均有资源上限。提示匹配或输出静默不代表命令成功，当前不提供可靠退出码。macOS 已实测，Windows、WSL 和真实 SSH/数据库 CLI 仍需实机验证。
 
 ### 4.6 浏览器资源
 
