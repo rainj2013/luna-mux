@@ -8,6 +8,8 @@
     <a href="LICENSE"><img src="https://img.shields.io/github/license/rainj2013/luna-mux?style=flat-square" alt="MIT License"></a>
   </p>
   <p>
+    <a href="https://github.com/rainj2013/luna-mux/releases">Download</a>
+    ·
     <a href="docs/DEVELOPMENT.en.md">Development guide</a>
     ·
     <a href="docs/AI_DEVELOPMENT_GUIDELINES.en.md">AI development guidelines</a>

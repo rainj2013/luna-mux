@@ -177,6 +177,37 @@ pub struct TerminalRuntimeOutputReadResult {
     pub data: String,
 }
 
+pub const TERMINAL_SCREEN_MAX_ROWS: u16 = 256;
+pub const TERMINAL_SCREEN_MAX_COLS: u16 = 512;
+pub const TERMINAL_SCREEN_MAX_BYTES: usize = 262144;
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalScreenModes {
+    pub alternate_screen: bool,
+    pub application_cursor: bool,
+    pub application_keypad: bool,
+    pub bracketed_paste: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalScreenSnapshot {
+    pub runtime_id: String,
+    pub output_cursor: u64,
+    pub rows: u16,
+    pub cols: u16,
+    pub cursor_row: u16,
+    pub cursor_col: u16,
+    pub cursor_visible: bool,
+    pub cursor_line: String,
+    pub cursor_line_cursor: u64,
+    pub modes: TerminalScreenModes,
+    pub lines: Vec<String>,
+    pub truncated: bool,
+    pub size_limited: bool,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct TerminalRuntimeExitEvent {
@@ -214,6 +245,21 @@ mod tests {
             remote_files: true,
             port_forwarding: true,
         }
+    }
+
+    #[test]
+    fn screen_snapshot_uses_camel_case_and_round_trips() {
+        let screen = TerminalScreenSnapshot {
+            runtime_id: "r".into(), output_cursor: 10, rows: 24, cols: 80,
+            cursor_row: 0, cursor_col: 7, cursor_visible: true,
+            cursor_line: "mysql>".into(), cursor_line_cursor: 9,
+            modes: TerminalScreenModes::default(), lines: vec!["mysql>".into()],
+            truncated: false, size_limited: false,
+        };
+        let value = serde_json::to_value(&screen).unwrap();
+        assert_eq!(value["cursorLineCursor"], 9);
+        assert_eq!(value["modes"]["applicationCursor"], false);
+        assert_eq!(serde_json::from_value::<TerminalScreenSnapshot>(value).unwrap(), screen);
     }
 
     #[test]

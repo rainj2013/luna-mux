@@ -18,16 +18,31 @@ pub struct OutputBuffer {
     size: usize,
     next_cursor: u64,
     chunks: VecDeque<OutputChunk>,
+    screen: crate::terminal_screen::TerminalScreen,
 }
 
 impl OutputBuffer {
+    #[cfg(test)]
     pub fn new(capacity: usize) -> Self {
+        Self::with_size(capacity, 24, 80)
+    }
+
+    pub fn with_size(capacity: usize, rows: u32, cols: u32) -> Self {
         Self {
             capacity,
             size: 0,
             next_cursor: 0,
             chunks: VecDeque::new(),
+            screen: crate::terminal_screen::TerminalScreen::new(rows, cols),
         }
+    }
+
+    pub fn resize_screen(&mut self, rows: u32, cols: u32) {
+        self.screen.resize(rows, cols);
+    }
+
+    pub fn screen_snapshot(&self, runtime_id: &str, max_bytes: usize) -> crate::terminal_runtime_contract::TerminalScreenSnapshot {
+        self.screen.snapshot(runtime_id, self.next_cursor, max_bytes)
     }
 
     pub fn next_cursor(&self) -> u64 {
@@ -35,6 +50,7 @@ impl OutputBuffer {
     }
 
     pub fn push(&mut self, runtime_id: &str, data: String) -> TerminalRuntimeOutputEvent {
+        self.screen.process(data.as_bytes());
         let event = TerminalRuntimeOutputEvent::new(runtime_id, self.next_cursor, data);
         self.next_cursor = event.end_cursor;
         let mut chunk = OutputChunk {
@@ -133,5 +149,19 @@ mod tests {
         // the three-byte character is returned together with the next byte.
         assert_eq!(small.data, "中d");
         assert!(small.next_cursor > 3);
+    }
+
+    #[test]
+    fn screen_survives_ring_eviction_without_changing_raw_output() {
+        let mut output = OutputBuffer::with_size(8, 4, 40);
+        output.push("r", "retained screen\r\n".into());
+        output.push("r", "\x1b[32mnew\x1b[0m".into());
+        let raw = output.read("r", 0, 64).unwrap();
+        assert!(raw.truncated);
+        let screen = output.screen_snapshot("r", 1000);
+        assert_eq!(screen.lines[0], "retained screen");
+        assert_eq!(screen.lines[1], "new");
+        assert_eq!(screen.output_cursor, raw.next_cursor);
+        assert!(!screen.truncated);
     }
 }

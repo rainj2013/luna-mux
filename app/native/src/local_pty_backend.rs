@@ -771,7 +771,7 @@ impl TerminalBackend for InProcessLocalPtyTerminalBackend {
         };
         let record = Arc::new(RuntimeRecord {
             runtime: Mutex::new(runtime.clone()),
-            output: Mutex::new(OutputBuffer::new(OUTPUT_CAPACITY_BYTES)),
+            output: Mutex::new(OutputBuffer::with_size(OUTPUT_CAPACITY_BYTES, request.rows, request.cols)),
             writer: Mutex::new(Some(writer)),
             master: Mutex::new(Some(pair.master)),
             killer: Mutex::new(killer),
@@ -826,26 +826,21 @@ impl TerminalBackend for InProcessLocalPtyTerminalBackend {
             .read()
             .ok()
             .and_then(|slot| slot.clone());
-        let runtimes = self
+        let record = self
             .runtimes
             .read()
-            .map_err(|_| "本地 Runtime 状态锁已损坏")?;
-        let record = runtimes
+            .map_err(|_| "本地 Runtime 状态锁已损坏")?
             .get(runtime_id)
+            .cloned()
             .ok_or_else(|| "终端 Runtime 不存在".to_string())?;
-        let mut writer_guard = record
-            .writer
-            .lock()
-            .map_err(|_| "本地 PTY writer 锁已损坏")?;
-        let writer = writer_guard
-            .as_mut()
-            .ok_or_else(|| "本地 PTY 已退出".to_string())?;
-        let result = writer
-            .write_all(data.as_bytes())
-            .and_then(|_| writer.flush())
-            .map_err(|error| error.to_string());
-        drop(writer_guard);
-        drop(runtimes);
+        let input = data.as_bytes().to_vec();
+        // PTY backpressure can block write_all. Keep blocking I/O and the writer
+        // mutex off async workers, and never hold the Runtime registry while writing.
+        let result = tokio::task::spawn_blocking(move || {
+            let mut writer_guard = record.writer.lock().map_err(|_| "本地 PTY writer 锁已损坏".to_string())?;
+            let writer = writer_guard.as_mut().ok_or_else(|| "本地 PTY 已退出".to_string())?;
+            writer.write_all(&input).and_then(|_| writer.flush()).map_err(|error| error.to_string())
+        }).await.map_err(|error| error.to_string())?;
         if result.is_ok()
             && let Some(diagnostics) = diagnostics
             && let Some(observation) =
@@ -864,6 +859,7 @@ impl TerminalBackend for InProcessLocalPtyTerminalBackend {
         let record = runtimes
             .get(runtime_id)
             .ok_or_else(|| "终端 Runtime 不存在".to_string())?;
+        let mut output = record.output.lock().map_err(|_| "本地 output 锁已损坏")?;
         record
             .master
             .lock()
@@ -876,7 +872,9 @@ impl TerminalBackend for InProcessLocalPtyTerminalBackend {
                 pixel_width: 0,
                 pixel_height: 0,
             })
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        output.resize_screen(rows, cols);
+        Ok(())
     }
 
     fn set_output_paused(&self, runtime_id: &str, paused: bool) -> TerminalBackendResult<()> {
@@ -944,6 +942,12 @@ impl TerminalBackend for InProcessLocalPtyTerminalBackend {
             }
         }
         kill_result.map_err(|error| error.to_string())
+    }
+
+    fn screen_snapshot(&self, runtime_id: &str, max_bytes: usize) -> TerminalBackendResult<crate::terminal_runtime_contract::TerminalScreenSnapshot> {
+        let record = self.runtimes.read().map_err(|_| "本地 Runtime 状态锁已损坏")?
+            .get(runtime_id).cloned().ok_or_else(|| "终端 Runtime 不存在".to_string())?;
+        Ok(record.output.lock().map_err(|_| "本地 output 锁已损坏")?.screen_snapshot(runtime_id, max_bytes))
     }
 
     fn read_output(
