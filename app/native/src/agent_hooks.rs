@@ -673,11 +673,11 @@ impl AgentHookService {
         agent_turn_id: Option<String>,
         evidence: ManagedAgentEvidence,
     ) -> ManagedAgentEvent {
-        let (status, waiting_reason) = status_for_hook(&hook_event_name);
-        let mut events = self.events.lock().expect("agent event buffer lock");
         let adapter_id = agent_adapters::adapter_id_for_profile(&context.launch_profile_id)
             .unwrap_or(agent_adapters::CODEX_ADAPTER_ID)
             .to_string();
+        let (status, waiting_reason) = status_for_hook(&hook_event_name, &adapter_id);
+        let mut events = self.events.lock().expect("agent event buffer lock");
         let event = ManagedAgentEvent {
             sequence: events.next_sequence,
             timestamp: chrono::Utc::now().to_rfc3339(),
@@ -1063,12 +1063,24 @@ async fn receive_hook(
 
 fn status_for_hook(
     hook_event_name: &str,
+    adapter_id: &str,
 ) -> (ManagedAgentStatus, Option<ManagedAgentWaitingReason>) {
     match hook_event_name {
         "PermissionRequest" => (
             ManagedAgentStatus::Waiting,
             Some(ManagedAgentWaitingReason::Permission),
         ),
+        // Claude Code's official hooks documentation defines `Stop` as "when
+        // Claude finishes responding" (the main agent's turn) and
+        // `SubagentStop` as "when a subagent finishes" — which fires once per
+        // delegated Task subagent, many times mid-task. Treating subagent
+        // completion as task completion spams false "completed" desktop
+        // notifications, so for Claude Code a subagent finishing means the
+        // main session is still working. Codex keeps its historical mapping
+        // because its completion notifications are already accurate.
+        "SubagentStop" if adapter_id == agent_adapters::CLAUDE_CODE_ADAPTER_ID => {
+            (ManagedAgentStatus::Working, None)
+        }
         "Stop" | "SessionEnd" | "SubagentStop" | "RuntimeExit" | "AgentProcessExit" => {
             (ManagedAgentStatus::Completed, None)
         }
@@ -1366,22 +1378,52 @@ mod tests {
     #[test]
     fn hook_events_map_to_deterministic_agent_states() {
         assert_eq!(
-            status_for_hook("PermissionRequest"),
+            status_for_hook("PermissionRequest", agent_adapters::CODEX_ADAPTER_ID),
             (
                 ManagedAgentStatus::Waiting,
                 Some(ManagedAgentWaitingReason::Permission)
             )
         );
         assert_eq!(
-            status_for_hook("Stop"),
+            status_for_hook("Stop", agent_adapters::CODEX_ADAPTER_ID),
             (ManagedAgentStatus::Completed, None)
         );
         assert_eq!(
-            status_for_hook("PostToolUse"),
+            status_for_hook("PostToolUse", agent_adapters::CODEX_ADAPTER_ID),
             (ManagedAgentStatus::Working, None)
         );
         assert_eq!(
-            status_for_hook("RuntimeExit"),
+            status_for_hook("RuntimeExit", agent_adapters::CODEX_ADAPTER_ID),
+            (ManagedAgentStatus::Completed, None)
+        );
+    }
+
+    #[test]
+    fn claude_task_completion_is_signaled_only_by_the_main_agent_stop() {
+        // Claude Code: `Stop` fires when the main agent finishes responding;
+        // `SubagentStop` fires per delegated subagent mid-task and must not
+        // read as "task completed".
+        assert_eq!(
+            status_for_hook("Stop", agent_adapters::CLAUDE_CODE_ADAPTER_ID),
+            (ManagedAgentStatus::Completed, None)
+        );
+        assert_eq!(
+            status_for_hook("SubagentStop", agent_adapters::CLAUDE_CODE_ADAPTER_ID),
+            (ManagedAgentStatus::Working, None)
+        );
+        assert_eq!(
+            status_for_hook("SubagentStart", agent_adapters::CLAUDE_CODE_ADAPTER_ID),
+            (ManagedAgentStatus::Working, None)
+        );
+
+        // Codex notifications are already accurate; its mapping must not
+        // change, and unknown adapters keep the conservative default.
+        assert_eq!(
+            status_for_hook("SubagentStop", agent_adapters::CODEX_ADAPTER_ID),
+            (ManagedAgentStatus::Completed, None)
+        );
+        assert_eq!(
+            status_for_hook("SubagentStop", "custom-adapter"),
             (ManagedAgentStatus::Completed, None)
         );
     }
@@ -1884,6 +1926,30 @@ mod tests {
         let latest = service.events().pop().unwrap();
         assert_eq!(latest.adapter_id, "claude-code");
         assert_eq!(latest.agent_session_id.as_deref(), Some("claude-session-1"));
+
+        // A delegated subagent finishing mid-task is progress, not completion.
+        let subagent = send(json!({
+            "hook_event_name": "SubagentStop",
+            "session_id": "claude-session-1"
+        }))
+        .await
+        .unwrap();
+        assert_eq!(subagent.status(), StatusCode::OK);
+        let latest = service.events().pop().unwrap();
+        assert_eq!(latest.hook_event_name, "SubagentStop");
+        assert_eq!(latest.status, ManagedAgentStatus::Working);
+
+        // The main agent's `Stop` is the documented task-completion signal.
+        let stopped = send(json!({
+            "hook_event_name": "Stop",
+            "session_id": "claude-session-1"
+        }))
+        .await
+        .unwrap();
+        assert_eq!(stopped.status(), StatusCode::OK);
+        let latest = service.events().pop().unwrap();
+        assert_eq!(latest.hook_event_name, "Stop");
+        assert_eq!(latest.status, ManagedAgentStatus::Completed);
 
         let exited = send(json!({ "hook_event_name": "AgentProcessExit" }))
             .await
