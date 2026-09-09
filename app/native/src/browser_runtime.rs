@@ -18,7 +18,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message};
 use uuid::Uuid;
 
-const AGENT_BROWSER_TOOLS: &str = "core,network,debug,tabs";
+const AGENT_BROWSER_TOOLS: &str = "core,network,debug,tabs,webmcp";
 const AGENT_BROWSER_CONFIG_STALE_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -414,6 +414,9 @@ impl BrowserRuntimeManager {
         command
             .arg(format!("--remote-debugging-port={port}"))
             .arg("--remote-debugging-address=127.0.0.1")
+            // Enable the page API and testing interfaces used by preview clients;
+            // exposing the MCP tool profile alone does not enable Chrome features.
+            .arg("--enable-features=WebMCP,WebMCPTesting")
             .arg(format!("--user-data-dir={}", profile_path.display()))
             .arg("--new-window")
             // chrome://newtab is not an agent-browser controllable target.
