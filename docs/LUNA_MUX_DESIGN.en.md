@@ -112,7 +112,7 @@ Browsers run in independent desktop Chrome windows outside the terminal layout, 
 
 The app owns browser lifecycle; `agent_browser` owns page automation. Automation binds to the Session's existing page and reuses it for ordinary navigation. Page operations cannot independently launch or replace the browser process.
 
-Browser Runtime enables the Chrome WebMCP page API and testing interfaces used by preview clients (`WebMCP,WebMCPTesting`). The MCP tool profile shared by local and remote Agents includes `webmcp` for discovering and invoking page tools, retrieving detached results, and cancelling calls. Pages must register their own tools; availability depends on the Chrome and page API versions. After upgrading, restart the browser resource through the app and reconnect the Agent's MCP service. Existing processes do not automatically receive new launch arguments.
+Browser Runtime enables the Chrome WebMCP page API and testing interfaces used by preview clients (`WebMCP,WebMCPTesting`). The MCP tool profile shared by local and remote Agents includes `webmcp` for discovering and invoking page tools, retrieving detached results, and cancelling calls. Pages must register their own tools; availability depends on the Chrome and page API versions.
 
 CDP binds only to local loopback, with ports and connection details kept as temporary runtime state. Remote Agents access the Session browser through authenticated Runtime communication bridges; raw CDP is not forwarded remotely. Remote development services use separate SSH tunnels, which browser resources do not own.
 
