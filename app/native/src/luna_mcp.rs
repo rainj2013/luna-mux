@@ -14,9 +14,9 @@ use axum::{
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
     model::{
-        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ErrorCode,
-        ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool,
-        ToolAnnotations,
+        CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
+        ErrorCode, ListToolsResult, PaginatedRequestParams, ProtocolVersion, ServerCapabilities,
+        ServerInfo, Tool, ToolAnnotations,
     },
     service::RequestContext,
     transport::streamable_http_server::{
@@ -480,6 +480,22 @@ impl LunaMcpHandler {
     }
 }
 
+fn list_tools_result_for_protocol(
+    tools: Vec<Tool>,
+    protocol_version: Option<ProtocolVersion>,
+) -> ListToolsResult {
+    let result = ListToolsResult::with_all_items(tools);
+    if protocol_version.is_some_and(|version| version >= ProtocolVersion::V_2026_07_28) {
+        // The catalog is filtered by the authenticated caller's grants and can
+        // change with the active Mux Session, so never share or retain it.
+        result
+            .with_ttl_ms(0)
+            .with_cache_scope(CacheScope::Private)
+    } else {
+        result
+    }
+}
+
 impl ServerHandler for LunaMcpHandler {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
@@ -493,13 +509,14 @@ impl ServerHandler for LunaMcpHandler {
         context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
         let (_, catalog) = self.authorized_catalog(&context)?;
-        Ok(ListToolsResult::with_all_items(
+        Ok(list_tools_result_for_protocol(
             catalog
                 .operations
                 .into_iter()
                 .filter(|operation| !operation.name.starts_with("browser."))
                 .map(tool_for)
                 .collect(),
+            context.protocol_version(),
         ))
     }
 
@@ -1613,5 +1630,24 @@ mod tests {
         let encoded = serde_json::to_string(&tool).unwrap();
         assert!(!encoded.contains(MCP_AUTHORIZATION_ENV));
         assert!(!encoded.contains("lmx_"));
+    }
+
+    #[test]
+    fn tool_list_cache_hints_follow_the_negotiated_protocol_version() {
+        let current = list_tools_result_for_protocol(
+            Vec::new(),
+            Some(ProtocolVersion::V_2026_07_28),
+        );
+        let current_json = serde_json::to_value(current).unwrap();
+        assert_eq!(current_json["ttlMs"], 0);
+        assert_eq!(current_json["cacheScope"], "private");
+
+        let legacy = list_tools_result_for_protocol(
+            Vec::new(),
+            Some(ProtocolVersion::V_2025_11_25),
+        );
+        let legacy_json = serde_json::to_value(legacy).unwrap();
+        assert!(legacy_json.get("ttlMs").is_none());
+        assert!(legacy_json.get("cacheScope").is_none());
     }
 }
