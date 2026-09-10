@@ -9,5 +9,6 @@ contracts/rust-tests/target/
 tests/native-core/target/
 app/native/gen/schemas/
 .vite/
+tmp/
 *.log
 .DS_Store
