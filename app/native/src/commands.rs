@@ -254,9 +254,14 @@ pub async fn database_runtime_describe_table(state: State<'_, AppState>, runtime
 }
 
 #[tauri::command]
-pub async fn database_runtime_import_sql(state: State<'_, AppState>, runtime_id: String, script: String) -> Result<(), String> {
+pub async fn database_runtime_export_sql(state: State<'_, AppState>, runtime_id: String, path: String, table: Option<String>) -> Result<crate::database_runtime::DatabaseSqlExport, String> {
     let manager = state.database_runtimes.clone();
-    database_worker(move || { manager.import_sql(&runtime_id, &script) }).await
+    database_worker(move || { manager.export_sql(&runtime_id, Path::new(&path), table.as_deref()) }).await
+}
+#[tauri::command]
+pub async fn database_runtime_import_sql_file(state: State<'_, AppState>, runtime_id: String, path: String) -> Result<(), String> {
+    let manager = state.database_runtimes.clone();
+    database_worker(move || { manager.import_sql_file(&runtime_id, Path::new(&path)) }).await
 }
 #[tauri::command]
 pub async fn database_runtime_import_rows(state: State<'_, AppState>, runtime_id: String, table: String, columns: Vec<String>, rows: Vec<Vec<serde_json::Value>>) -> Result<u64, String> {
