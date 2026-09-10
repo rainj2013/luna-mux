@@ -27,7 +27,7 @@ export type MuxSplitNode =
   | { type: 'pane'; paneId: string }
   | { type: 'split'; direction: 'horizontal' | 'vertical'; ratio: number; first: MuxSplitNode; second: MuxSplitNode }
 
-export type MuxPaneKind = 'terminal'
+export type MuxPaneKind = 'terminal' | 'browser' | 'database'
 
 export interface ChromeInstallation {
   executablePath: string
@@ -362,6 +362,22 @@ export interface PortForwardProfile {
   targetHost: string
   targetPort: number
 }
+export type DatabaseDriver = 'sqlite' | 'mysql' | 'postgresql'
+export interface DatabaseProfile {
+  id: string; name: string; driver: DatabaseDriver; host: string; port: number; username: string; databaseName: string
+  groupName: string; favorite: boolean; sortOrder: number; sslEnabled: boolean; note: string
+  createdAt: string; updatedAt: string; hasSavedCredential: boolean
+}
+export interface DatabaseProfileInput { id?: string; name: string; driver: DatabaseDriver; host?: string; port?: number; username?: string; databaseName?: string; groupName?: string; favorite?: boolean; sslEnabled?: boolean; note?: string }
+export type DatabaseRuntimeStatus = 'connecting' | 'ready' | 'disconnected' | 'error'
+export interface DatabaseRuntimeSummary { id: string; driver: string; status: DatabaseRuntimeStatus; error?: string | null }
+export interface DatabaseConnectionConfig { driver: DatabaseDriver; profileId?: string; host?: string; port?: number; database?: string; username?: string; password?: string; readOnly?: boolean; sslEnabled?: boolean; sqlitePath?: string }
+export interface DatabaseQueryResult { columns: string[]; rows: Array<Array<unknown>>; affectedRows: number; truncated: boolean; hasMore?: boolean }
+export type DatabasePaneUiAction = { action: 'snapshot' } | { action: 'fill'; ref: string; value: string } | { action: 'click'; ref: string }
+export interface DatabasePaneUiRequest { requestId: string; paneId: string; mountId: string; action: DatabasePaneUiAction }
+export interface DatabaseColumnInfo { name: string; dataType: string; notNull: boolean; primaryKey: boolean; defaultValue?: string | null; comment?: string | null }
+export interface DatabaseForeignKeyInfo { column: string; referencesTable: string; referencesColumn: string; onUpdate: string; onDelete: string }
+export interface DatabaseIndexInfo { name: string; unique: boolean }
 
 export interface TunnelSummary {
   id: string
@@ -729,6 +745,36 @@ export interface AppApi {
     mouse(runtimeId: string, event: BrowserMouseEvent): Promise<void>
     key(runtimeId: string, event: BrowserKeyEvent): Promise<void>
   }
+  databaseProfiles: {
+    list(): Promise<DatabaseProfile[]>
+    save(input: DatabaseProfileInput): Promise<DatabaseProfile>
+    remove(id: string): Promise<void>
+    reorder(ids: string[]): Promise<DatabaseProfile[]>
+    moveToGroup(id: string, group: string): Promise<DatabaseProfile[]>
+    saveCredential(id: string, password: string): Promise<void>
+    forgetCredential(id: string): Promise<void>
+  }
+  databaseRuntimes: {
+    list(): Promise<DatabaseRuntimeSummary[]>
+    connect(config: DatabaseConnectionConfig): Promise<DatabaseRuntimeSummary>
+    disconnect(runtimeId: string): Promise<void>
+    execute(runtimeId: string, sql: string, maxRows?: number, pageOffset?: number): Promise<DatabaseQueryResult>
+    listTables(runtimeId: string): Promise<string[]>
+    exportCsv(runtimeId: string, sql: string): Promise<string>
+    exportJson(runtimeId: string, sql: string): Promise<string>
+    describeTable(runtimeId: string, table: string): Promise<DatabaseColumnInfo[]>
+    importSql(runtimeId: string, script: string): Promise<void>
+    importRows(runtimeId: string, table: string, columns: string[], rows: Array<Array<unknown>>): Promise<number>
+    addColumn(runtimeId: string, table: string, column: string, dataType: string): Promise<number>
+    dropColumn(runtimeId: string, table: string, column: string): Promise<number>
+    listIndexes(runtimeId: string, table: string): Promise<DatabaseIndexInfo[]>
+    listForeignKeys(runtimeId: string, table: string): Promise<DatabaseForeignKeyInfo[]>
+    createIndex(runtimeId: string, table: string, index: string, column: string, unique: boolean): Promise<number>
+    dropIndex(runtimeId: string, index: string): Promise<number>
+  }
+  databaseConnectionTest(config: DatabaseConnectionConfig): Promise<void>
+  databasePaneUi: { mount(paneId: string, mountId: string, mounted: boolean): Promise<void>; respond(requestId: string, paneId: string, mountId: string, result: unknown): Promise<void>; request(paneId: string, action: DatabasePaneUiAction): Promise<unknown>; onRequest(listener: (request: DatabasePaneUiRequest) => void): () => void }
+  databaseProtocolConnect(config: DatabaseConnectionConfig, password?: string): Promise<void>
   terminalRuntimes: {
     targets(): Promise<TerminalTarget[]>
     list(): Promise<TerminalRuntime[]>
@@ -751,6 +797,7 @@ export interface AppApi {
     clear(): Promise<number>
   }
   files: {
+    chooseDatabaseFile(): Promise<string | null>
     home(): Promise<string>
     parentLocal(path: string): Promise<string>
     remoteHome(sessionId: string): Promise<string>

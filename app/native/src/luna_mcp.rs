@@ -591,6 +591,7 @@ fn tool_for(descriptor: ControlOperationDescriptor) -> Tool {
             | "settings.terminal.set"
             | "diagnostics.run"
             | "connections.list"
+            | "databases.list"
             | "agents.list"
             | "mux.sessions.list"
             | "mux.panes.list"
@@ -660,6 +661,18 @@ fn operation_routing_guidance(operation: &str) -> &'static str {
         }
         "connections.list" => {
             " Lists credential-free summaries of connections saved in Luna Mux. This is not browser network traffic, an HTTP connection list, or a general host/network scan."
+        }
+        "databases.list" => {
+            " Lists credential-free database Profiles saved in Luna Mux. Passwords and private connection material are never returned."
+        }
+        "database.pane.snapshot" => {
+            " Reads the mounted database Pane UI controls and current rendered result. It never reads credentials or invokes database drivers directly; this is a bounded UI observation."
+        }
+        "database.pane.fill" => {
+            " Fills an allowlisted control in a mounted database Pane. Use the explicit ref returned by database.pane.snapshot; no selectors, scripts, password controls, or confirmation controls are accepted."
+        }
+        "database.pane.click" => {
+            " Clicks an allowlisted control in a mounted database Pane. The desktop UI remains authoritative for credentials, file pickers, and write confirmations; accepted means the click was dispatched, not that SQL succeeded."
         }
         "agents.list" | "agents.get_status" | "agents.send_task" | "agents.interrupt" => {
             " Controls managed Agent processes detected in Luna Mux terminal Panes. Do not use as a substitute for this coding agent's own subagent/delegation tools or for website chatbots."
@@ -790,6 +803,8 @@ fn control_arguments_schema(operation: &str) -> Value {
         }),
         "settings.appearance.get"
         | "connections.list"
+        | "databases.list"
+        | "database.pane.snapshot"
         | "agents.list"
         | "agents.get_status"
         | "agents.interrupt"
@@ -800,6 +815,8 @@ fn control_arguments_schema(operation: &str) -> Value {
         | "terminal.runtime.close"
         | "transfers.list"
         | "tunnels.list" => empty_object_schema(),
+        "database.pane.fill" => json!({"type":"object","properties":{"ref":{"type":"string","minLength":1,"maxLength":1024},"value":{"type":"string","maxLength":65536}},"required":["ref","value"],"additionalProperties":false}),
+        "database.pane.click" => json!({"type":"object","properties":{"ref":{"type":"string","minLength":1,"maxLength":1024}},"required":["ref"],"additionalProperties":false}),
         "diagnostics.run" => json!({
             "type": "object",
             "properties": {

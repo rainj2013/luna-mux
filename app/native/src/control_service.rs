@@ -19,6 +19,7 @@ use crate::control_contract::{
     ControlResponse, ControlResult,
 };
 use crate::database::Database;
+use crate::database_pane_ui::{DatabasePaneUiBridge, PaneUiAction};
 use crate::luna_mcp::LunaMcpService;
 use crate::models::{
     ControlAuditRecord, MuxPaneInput, MuxPaneKind, MuxSessionInput, MuxSplitDirection,
@@ -163,6 +164,7 @@ type IdempotencyCacheKey = (String, String, String);
 
 #[async_trait]
 pub trait ControlSideEffects: Send + Sync {
+    async fn database_pane_ui_request(&self, _pane_id: &str, _action: PaneUiAction) -> Result<serde_json::Value, String> { Err("数据库窗格 UI 控制不可用".into()) }
     async fn settings_set_ui_theme(&self, theme: UiTheme) -> Result<UiTheme, String>;
     async fn settings_set_terminal(
         &self,
@@ -248,6 +250,7 @@ pub struct InProcessControlSideEffects {
     tunnels: Arc<TunnelManager>,
     browser_runtimes: Arc<BrowserRuntimeManager>,
     sessions: Arc<crate::sessions::SessionManager>,
+    database_pane_ui: Arc<DatabasePaneUiBridge>,
 }
 
 impl InProcessControlSideEffects {
@@ -266,12 +269,18 @@ impl InProcessControlSideEffects {
             tunnels,
             browser_runtimes,
             sessions,
+            database_pane_ui: Arc::new(DatabasePaneUiBridge::default()),
         })
     }
+
+    pub fn database_pane_ui(&self) -> Arc<DatabasePaneUiBridge> { self.database_pane_ui.clone() }
 }
 
 #[async_trait]
 impl ControlSideEffects for InProcessControlSideEffects {
+    async fn database_pane_ui_request(&self, pane_id: &str, action: PaneUiAction) -> Result<serde_json::Value, String> {
+        self.database_pane_ui.request(pane_id, action, |request| self.window.emit("database-pane-ui:request", request).map_err(|e| e.to_string())).await
+    }
     async fn settings_set_ui_theme(&self, theme: UiTheme) -> Result<UiTheme, String> {
         crate::commands::save_ui_theme(&self.window, &self.database, theme)
     }
@@ -479,6 +488,11 @@ impl ControlSideEffects for InProcessControlSideEffects {
 }
 
 impl InProcessControlService {
+    fn require_database_pane(&self, pane_id: &str) -> ControlResult<()> {
+        let pane = self.database.list_mux_panes(None).map_err(internal_error)?.into_iter().find(|pane| pane.id == pane_id).ok_or_else(|| ControlError { code: ControlErrorCode::NotFound, message: "Mux Pane 不存在".into(), retryable: false, details: None })?;
+        if pane.kind != MuxPaneKind::Database { return Err(ControlError { code: ControlErrorCode::InvalidArguments, message: "目标 Pane 不是数据库窗格".into(), retryable: false, details: None }); }
+        Ok(())
+    }
     pub fn new(
         database: Arc<Database>,
         backend: Arc<dyn TerminalBackend>,
@@ -655,6 +669,18 @@ impl InProcessControlService {
                 supports_idempotency: true,
                 approval: ControlApprovalRequirement::None,
             },
+            ControlOperationDescriptor {
+                name: "databases.list".into(),
+                version: 1,
+                access: ControlAccess::Read,
+                resource_kind: ControlResourceKind::DatabaseProfile,
+                mutating: false,
+                supports_idempotency: true,
+                approval: ControlApprovalRequirement::None,
+            },
+            ControlOperationDescriptor { name: "database.pane.snapshot".into(), version: 1, access: ControlAccess::Read, resource_kind: ControlResourceKind::Pane, mutating: false, supports_idempotency: true, approval: ControlApprovalRequirement::None },
+            ControlOperationDescriptor { name: "database.pane.fill".into(), version: 1, access: ControlAccess::Write, resource_kind: ControlResourceKind::Pane, mutating: true, supports_idempotency: true, approval: ControlApprovalRequirement::None },
+            ControlOperationDescriptor { name: "database.pane.click".into(), version: 1, access: ControlAccess::Write, resource_kind: ControlResourceKind::Pane, mutating: true, supports_idempotency: true, approval: ControlApprovalRequirement::None },
             ControlOperationDescriptor {
                 name: "agents.list".into(),
                 version: 1,
@@ -1500,6 +1526,28 @@ impl LunaControlService for InProcessControlService {
                             })
                             .collect::<Vec<_>>();
                         json!(connections)
+                    }
+                    "databases.list" => {
+                        require_empty_arguments(&request)?;
+                        serde_json::to_value(self.database.list_database_profiles().map_err(internal_error)?).map_err(|e| internal_error(e.to_string()))?
+                    }
+                    "database.pane.snapshot" => {
+                        require_empty_arguments(&request)?;
+                        let pane_id = required_resource_id(&request)?;
+                        self.require_database_pane(&pane_id)?;
+                        self.side_effects.database_pane_ui_request(&pane_id, PaneUiAction::Snapshot).await.map_err(internal_error)?
+                    }
+                    "database.pane.fill" => {
+                        let pane_id = required_resource_id(&request)?;
+                        self.require_database_pane(&pane_id)?;
+                        let arguments: DatabasePaneFillArguments = parse_arguments(&request)?;
+                        self.side_effects.database_pane_ui_request(&pane_id, PaneUiAction::Fill { r#ref: arguments.r#ref, value: arguments.value }).await.map_err(internal_error)?
+                    }
+                    "database.pane.click" => {
+                        let pane_id = required_resource_id(&request)?;
+                        self.require_database_pane(&pane_id)?;
+                        let arguments: DatabasePaneClickArguments = parse_arguments(&request)?;
+                        self.side_effects.database_pane_ui_request(&pane_id, PaneUiAction::Click { r#ref: arguments.r#ref }).await.map_err(internal_error)?
                     }
                     "agents.list" => {
                         require_empty_arguments(&request)?;
@@ -2563,6 +2611,13 @@ struct ThemeSetArguments {
     theme: UiTheme,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DatabasePaneFillArguments { #[serde(rename = "ref")] r#ref: String, value: String }
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DatabasePaneClickArguments { #[serde(rename = "ref")] r#ref: String }
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct MuxSessionUpdateArguments {
@@ -2795,6 +2850,15 @@ fn required_dimension(request: &ControlRequest, name: &str) -> ControlResult<u32
 }
 
 fn audit_arguments(request: &ControlRequest) -> serde_json::Value {
+    if request.operation == "database.pane.snapshot" {
+        return json!({});
+    }
+    if request.operation == "database.pane.fill" {
+        return json!({
+            "ref": request.arguments.get("ref"),
+            "valueBytes": request.arguments.get("value").and_then(|value| value.as_str()).map(str::len)
+        });
+    }
     if matches!(request.operation.as_str(), "terminal.runtime.interact" | "terminal.runtime.output.wait" | "terminal.runtime.screen.snapshot") {
         return json!({
             "inputBytes": request.arguments.pointer("/input/text").and_then(|v| v.as_str()).map(str::len),

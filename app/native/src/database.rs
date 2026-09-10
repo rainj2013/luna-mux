@@ -336,6 +336,15 @@ impl Database {
             CREATE TABLE IF NOT EXISTS credential_refs (bookmarkId TEXT PRIMARY KEY, account TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS known_hosts (host TEXT NOT NULL, port INTEGER NOT NULL, fingerprint TEXT NOT NULL, PRIMARY KEY(host, port));
             CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS database_profiles (
+              id TEXT PRIMARY KEY, name TEXT NOT NULL, driver TEXT NOT NULL, host TEXT NOT NULL DEFAULT '',
+              port INTEGER NOT NULL DEFAULT 0, username TEXT NOT NULL DEFAULT '', databaseName TEXT NOT NULL DEFAULT '',
+              groupName TEXT NOT NULL DEFAULT '', favorite INTEGER NOT NULL DEFAULT 0, sortOrder INTEGER NOT NULL DEFAULT 0,
+              sshBookmarkId TEXT NOT NULL DEFAULT '', sslEnabled INTEGER NOT NULL DEFAULT 0, note TEXT NOT NULL DEFAULT '',
+              createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS database_credential_refs (profileId TEXT PRIMARY KEY, account TEXT NOT NULL,
+              FOREIGN KEY(profileId) REFERENCES database_profiles(id) ON DELETE CASCADE);
             CREATE TABLE IF NOT EXISTS mux_sessions (
               id TEXT PRIMARY KEY, name TEXT NOT NULL, rootPath TEXT NOT NULL DEFAULT '',
               layoutJson TEXT NOT NULL DEFAULT '', sortOrder INTEGER NOT NULL DEFAULT 0,
@@ -553,6 +562,52 @@ impl Database {
                 note: row.get(14)?, has_saved_credential: row.get::<_, i64>(15)? != 0, sort_order: row.get(16)?, created_at: row.get(17)?, updated_at: row.get(18)?,
             }))?.collect()
         })
+    }
+
+    pub fn list_database_profiles(&self) -> Result<Vec<DatabaseProfile>, String> {
+        self.with_conn(|db| { let mut s=db.prepare("SELECT p.id,p.name,p.driver,p.host,p.port,p.username,p.databaseName,p.groupName,p.favorite,p.sortOrder,p.sshBookmarkId,p.sslEnabled,p.note,p.createdAt,p.updatedAt,CASE WHEN c.profileId IS NULL THEN 0 ELSE 1 END FROM database_profiles p LEFT JOIN database_credential_refs c ON c.profileId=p.id ORDER BY p.sortOrder ASC,p.createdAt ASC")?; s.query_map([], |r| Ok(DatabaseProfile{id:r.get(0)?,name:r.get(1)?,driver:DatabaseDriver::parse(&r.get::<_,String>(2)?),host:r.get(3)?,port:r.get(4)?,username:r.get(5)?,database_name:r.get(6)?,group_name:r.get(7)?,favorite:r.get::<_,i64>(8)?!=0,sort_order:r.get(9)?,ssh_bookmark_id:r.get(10)?,ssl_enabled:r.get::<_,i64>(11)?!=0,note:r.get(12)?,created_at:r.get(13)?,updated_at:r.get(14)?,has_saved_credential:r.get::<_,i64>(15)?!=0})).and_then(|it| it.collect()) })
+    }
+
+    pub fn save_database_profile(&self, input: DatabaseProfileInput) -> Result<DatabaseProfile, String> {
+        let name=input.name.trim(); if name.is_empty(){return Err("数据库连接名称不能为空".into());}
+        let now=Utc::now().to_rfc3339(); let id=input.id.filter(|v|!v.trim().is_empty()).unwrap_or_else(||Uuid::new_v4().to_string());
+        let existing=self.list_database_profiles()?.into_iter().find(|p|p.id==id);
+        let sort_order=existing.as_ref().map(|p|p.sort_order).unwrap_or(self.with_conn(|db|db.query_row("SELECT COALESCE(MAX(sortOrder),-1)+1 FROM database_profiles",[],|r|r.get(0)))?);
+        let profile=DatabaseProfile{id:id.clone(),name:name.into(),driver:input.driver,host:input.host.trim().into(),port:input.port,username:input.username.trim().into(),database_name:input.database_name.trim().into(),group_name:input.group_name.trim().into(),favorite:input.favorite,sort_order,ssh_bookmark_id:input.ssh_bookmark_id.trim().into(),ssl_enabled:input.ssl_enabled,note:input.note.trim().into(),created_at:existing.as_ref().map(|p|p.created_at.clone()).unwrap_or_else(||now.clone()),updated_at:now,has_saved_credential:existing.map(|p|p.has_saved_credential).unwrap_or(false)};
+        self.with_conn(|db|db.execute("INSERT INTO database_profiles(id,name,driver,host,port,username,databaseName,groupName,favorite,sortOrder,sshBookmarkId,sslEnabled,note,createdAt,updatedAt) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,driver=excluded.driver,host=excluded.host,port=excluded.port,username=excluded.username,databaseName=excluded.databaseName,groupName=excluded.groupName,favorite=excluded.favorite,sshBookmarkId=excluded.sshBookmarkId,sslEnabled=excluded.sslEnabled,note=excluded.note,updatedAt=excluded.updatedAt",params![profile.id,profile.name,profile.driver.as_str(),profile.host,profile.port,profile.username,profile.database_name,profile.group_name,profile.favorite as i64,profile.sort_order,profile.ssh_bookmark_id,profile.ssl_enabled as i64,profile.note,profile.created_at,profile.updated_at]).map(|_| ()))?; Ok(profile)
+    }
+
+    pub fn remove_database_profile(&self, id:&str)->Result<(),String>{ self.with_conn(|db|db.execute("DELETE FROM database_profiles WHERE id=?",[id]).map(|_|())) }
+
+    pub fn save_database_credential(&self, id: &str, password: &str) -> Result<(), String> {
+        if password.is_empty() { return Err("数据库密码不能为空".into()); }
+        let account = format!("database:{id}"); Entry::new(&self.credential_service, &account).map_err(|e| e.to_string())?.set_password(password).map_err(|e| e.to_string())?;
+        self.with_conn(|db| db.execute("INSERT INTO database_credential_refs(profileId,account) VALUES(?,?) ON CONFLICT(profileId) DO UPDATE SET account=excluded.account", rusqlite::params![id, account]).map(|_| ()))
+    }
+
+    pub fn get_database_credential(&self, id: &str) -> Option<String> {
+        let account = format!("database:{id}");
+        Entry::new(&self.credential_service, &account).ok()?.get_password().ok()
+    }
+
+    pub fn forget_database_credential(&self, id: &str) -> Result<(), String> {
+        let account = format!("database:{id}");
+        match Entry::new(&self.credential_service, &account).map_err(|e| e.to_string())?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => {},
+            Err(error) => return Err(error.to_string()),
+        }
+        self.with_conn(|db| db.execute("DELETE FROM database_credential_refs WHERE profileId=?", [id]).map(|_| ()))
+    }
+
+    pub fn reorder_database_profiles(&self, ids: &[String]) -> Result<Vec<DatabaseProfile>, String> {
+        let existing = self.list_database_profiles()?; let known = existing.iter().map(|p| p.id.as_str()).collect::<std::collections::HashSet<_>>();
+        if ids.len() != known.len() || ids.iter().any(|id| !known.contains(id.as_str())) { return Err("数据库连接排序列表不完整".into()); }
+        self.with_conn(|db| { let tx = db.transaction()?; for (order, id) in ids.iter().enumerate() { tx.execute("UPDATE database_profiles SET sortOrder=?,updatedAt=? WHERE id=?", rusqlite::params![order as i64, Utc::now().to_rfc3339(), id])?; } tx.commit() })?; self.list_database_profiles()
+    }
+
+    pub fn move_database_profile_to_group(&self, id: &str, group: &str) -> Result<Vec<DatabaseProfile>, String> {
+        let group = group.trim(); if !self.list_database_profiles()?.iter().any(|p| p.id == id) { return Err("数据库连接不存在".into()); }
+        self.with_conn(|db| db.execute("UPDATE database_profiles SET groupName=?,updatedAt=? WHERE id=?", rusqlite::params![group, Utc::now().to_rfc3339(), id]).map(|_| ()))?; self.list_database_profiles()
     }
 
     pub fn list_mux_sessions(&self) -> Result<Vec<MuxSession>, String> {
