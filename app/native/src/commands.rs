@@ -2375,28 +2375,6 @@ pub fn files_set_favorites(
         .db
         .set_setting(&format!("fileFavorites:{bookmark_id}"), &value)
 }
-#[tauri::command]
-pub async fn files_choose_local_directory(app: AppHandle) -> Option<String> {
-    let (sender, receiver) = tokio::sync::oneshot::channel();
-    app.dialog()
-        .file()
-        .set_title("选择本地部署目录")
-        .pick_folder(move |path| {
-            let _ = sender.send(path);
-        });
-    selected_path(receiver.await.ok().flatten())
-}
-#[tauri::command]
-pub async fn files_choose_private_key(app: AppHandle) -> Option<String> {
-    let (sender, receiver) = tokio::sync::oneshot::channel();
-    app.dialog()
-        .file()
-        .set_title("选择 SSH 私钥")
-        .pick_file(move |path| {
-            let _ = sender.send(path);
-        });
-    selected_path(receiver.await.ok().flatten())
-}
 
 #[tauri::command]
 pub fn state_get_sidebar_collapsed(state: State<AppState>) -> bool {

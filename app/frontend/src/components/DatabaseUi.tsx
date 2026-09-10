@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { ReactNode } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
@@ -11,6 +11,14 @@ export interface DatabaseMenuItem {
   disabled?: boolean
   danger?: boolean
   action(): void
+}
+
+// Rows picked in the result grid, plus the cell under the pointer, handed to the
+// pane so it can build its own context menu.
+export interface DatabaseResultSelection {
+  rows: unknown[][]
+  columns: string[]
+  cell: string
 }
 
 export function DatabaseMenu({ x, y, items, onClose, anchor }: { x: number; y: number; items: DatabaseMenuItem[]; onClose(): void; anchor: HTMLElement }): React.JSX.Element {
@@ -47,11 +55,96 @@ export function DatabaseMenu({ x, y, items, onClose, anchor }: { x: number; y: n
   </div>, anchor.closest('.app-shell') ?? document.body)
 }
 
-export const DatabaseResultGrid = memo(function DatabaseResultGrid({ result, onCopy, emptyMessage, rowOffset = 0 }: { result: DatabaseQueryResult | null; onCopy(value: string): void; emptyMessage?: string; rowOffset?: number }): React.JSX.Element {
+export const DatabaseResultGrid = memo(function DatabaseResultGrid({ result, onCopy, onRowMenu, emptyMessage, rowOffset = 0 }: { result: DatabaseQueryResult | null; onCopy(value: string): void; onRowMenu?(event: React.MouseEvent<HTMLElement>, selection: DatabaseResultSelection): void; emptyMessage?: string; rowOffset?: number }): React.JSX.Element {
   const { t } = useI18n()
   const scroll = useRef<HTMLDivElement>(null)
   const rows = result?.rows ?? []
+  const [selectedRows, setSelectedRows] = useState<ReadonlySet<number>>(() => new Set())
+  const anchorRow = useRef(-1)
+  // Ends an in-flight drag selection; kept in a ref so unmounting also removes its listeners.
+  const stopDrag = useRef<() => void>(() => {})
+  // A drag that covered several rows must not let the trailing click collapse the selection.
+  const suppressClick = useRef(false)
+  // A new result replaces the rows, so the old indexes must not stay selected.
+  useEffect(() => { setSelectedRows(new Set()); anchorRow.current = -1 }, [result])
+  useEffect(() => () => stopDrag.current(), [])
   const virtualizer = useVirtualizer({ count: result?.columns.length ? rows.length : 0, getScrollElement: () => scroll.current, estimateSize: () => 29, overscan: 10 })
+  const rowRange = (from: number, to: number): Set<number> => {
+    const range = new Set<number>()
+    for (let row = Math.min(from, to); row <= Math.max(from, to); row += 1) range.add(row)
+    return range
+  }
+  const selectRow = (index: number, event: React.MouseEvent): void => {
+    setSelectedRows((current) => {
+      const next = new Set(current)
+      if (event.shiftKey && anchorRow.current >= 0) {
+        for (const row of rowRange(anchorRow.current, index)) next.add(row)
+        return next
+      }
+      if (event.metaKey || event.ctrlKey) {
+        if (next.has(index)) next.delete(index); else next.add(index)
+        anchorRow.current = index
+        return next
+      }
+      anchorRow.current = index
+      return new Set([index])
+    })
+  }
+  // Press and drag spans a contiguous range; the press row stays the anchor and the listeners
+  // live on the window so the gesture keeps working outside the grid.
+  const startRowDrag = (event: React.PointerEvent<HTMLElement>, index: number): void => {
+    if (event.button !== 0 || event.shiftKey || event.metaKey || event.ctrlKey) return
+    suppressClick.current = false
+    anchorRow.current = index
+    setSelectedRows(new Set([index]))
+    // Applied synchronously so the browser never starts a text selection mid-gesture.
+    const node = scroll.current
+    node?.classList.add('selecting')
+    let moved = false
+    const move = (pointer: PointerEvent): void => {
+      if (node) {
+        // Dragging past an edge scrolls, so one gesture can reach rows off screen.
+        const rect = node.getBoundingClientRect()
+        if (pointer.clientY < rect.top + 24) node.scrollTop -= 24
+        else if (pointer.clientY > rect.bottom - 24) node.scrollTop += 24
+        const selection = window.getSelection()
+        if (selection && !selection.isCollapsed) selection.removeAllRanges()
+      }
+      const value = document.elementFromPoint(pointer.clientX, pointer.clientY)?.closest<HTMLElement>('tr[data-index]')?.dataset.index
+      if (value === undefined) return
+      const over = Number(value)
+      if (over === index && !moved) return
+      moved = true
+      setSelectedRows(rowRange(anchorRow.current, over))
+    }
+    const end = (): void => {
+      stopDrag.current = () => {}
+      suppressClick.current = moved
+      node?.classList.remove('selecting')
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', end)
+      window.removeEventListener('pointercancel', end)
+    }
+    stopDrag.current = end
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', end)
+    window.addEventListener('pointercancel', end)
+  }
+  const openRowMenu = (event: React.MouseEvent<HTMLElement>, index: number, row: unknown[]): void => {
+    if (!onRowMenu) return
+    event.preventDefault()
+    // Right-clicking outside the selection makes that row the selection; inside it
+    // keeps the rows the user picked.
+    const indices = selectedRows.has(index) ? [...selectedRows].sort((a, b) => a - b) : [index]
+    if (!selectedRows.has(index)) { anchorRow.current = index; setSelectedRows(new Set([index])) }
+    const cell = (event.target as HTMLElement).closest('td')
+    const column = cell ? cell.cellIndex - 1 : -1
+    onRowMenu(event, {
+      rows: indices.map((selected) => rows[selected]).filter((value): value is unknown[] => Array.isArray(value)),
+      columns: result?.columns ?? [],
+      cell: column >= 0 ? String(row[column] ?? 'NULL') : '',
+    })
+  }
   if (!result) return <p className="database-result-empty">{emptyMessage ?? t('database.queryHint')}</p>
   if (!result.columns.length) return <p className="database-result-empty">{t('database.affectedRows', { count: result.affectedRows })}</p>
   const visibleRows = virtualizer.getVirtualItems().filter((virtualRow) => virtualRow.index < rows.length)
@@ -63,7 +156,7 @@ export const DatabaseResultGrid = memo(function DatabaseResultGrid({ result, onC
     {result.columns.map((column, index) => <th key={index}>{column}</th>)}
   </tr></thead><tbody>
     {paddingTop > 0 && <tr className="database-virtual-spacer" aria-hidden="true"><td colSpan={columnCount} style={{ height: paddingTop }} /></tr>}
-    {visibleRows.map((virtualRow) => { const row = rows[virtualRow.index]!; return <tr key={virtualRow.key} data-index={virtualRow.index} ref={virtualizer.measureElement}><td className="database-row-number">{rowOffset + virtualRow.index + 1}</td>{row.map((value, j) => <td key={j}
+    {visibleRows.map((virtualRow) => { const row = rows[virtualRow.index]!; return <tr key={virtualRow.key} data-index={virtualRow.index} ref={virtualizer.measureElement} className={selectedRows.has(virtualRow.index) ? 'selected' : undefined} onClick={(event) => { if (suppressClick.current) { suppressClick.current = false; return } selectRow(virtualRow.index, event) }} onPointerDown={(event) => startRowDrag(event, virtualRow.index)} onContextMenu={(event) => openRowMenu(event, virtualRow.index, row)}><td className="database-row-number">{rowOffset + virtualRow.index + 1}</td>{row.map((value, j) => <td key={j}
     className={value === null ? 'database-null' : undefined} title={String(value ?? 'NULL')}
     onDoubleClick={() => onCopy(String(value ?? 'NULL'))}>{String(value ?? 'NULL')}</td>)}</tr> })}
     {paddingBottom > 0 && <tr className="database-virtual-spacer" aria-hidden="true"><td colSpan={columnCount} style={{ height: paddingBottom }} /></tr>}
@@ -72,14 +165,22 @@ export const DatabaseResultGrid = memo(function DatabaseResultGrid({ result, onC
   </div>
 })
 
-// Export the visible result snapshot. Never rerun SQL (which may contain writes).
-export function downloadDatabaseResult(result: DatabaseQueryResult, format: 'csv' | 'json'): void {
-  const text = format === 'json'
-    ? JSON.stringify(result.rows.map((row) => Object.fromEntries(result.columns.map((column, index) => [column, row[index] ?? null]))), null, 2)
-    : '\uFEFF' + [result.columns, ...result.rows].map((row) => row.map((cell) => `"${String(cell ?? '').replaceAll('"', '""')}"`).join(',')).join('\r\n')
-  const url = URL.createObjectURL(new Blob([text], { type: format === 'json' ? 'application/json' : 'text/csv;charset=utf-8' }))
+// Downloads stay plain Blobs; the webview routes them to the OS download folder.
+export function downloadDatabaseFile(text: string, filename: string, mime: string): void {
+  const url = URL.createObjectURL(new Blob([text], { type: mime }))
   const link = document.createElement('a')
-  link.href = url; link.download = `query-result.${format}`; link.click()
+  link.href = url; link.download = filename; link.click()
   // Allow the webview to consume the URL before releasing it.
   setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+// Export the visible result snapshot. Never rerun SQL (which may contain writes).
+export function downloadDatabaseResult(result: DatabaseQueryResult, format: 'csv' | 'json'): void {
+  if (format === 'json') {
+    const text = JSON.stringify(result.rows.map((row) => Object.fromEntries(result.columns.map((column, index) => [column, row[index] ?? null]))), null, 2)
+    downloadDatabaseFile(text, 'query-result.json', 'application/json')
+    return
+  }
+  const text = '\uFEFF' + [result.columns, ...result.rows].map((row) => row.map((cell) => `"${String(cell ?? '').replaceAll('"', '""')}"`).join(',')).join('\r\n')
+  downloadDatabaseFile(text, 'query-result.csv', 'text/csv;charset=utf-8')
 }

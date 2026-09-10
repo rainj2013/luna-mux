@@ -9,6 +9,7 @@ import { databasePaneTarget, parseDatabasePaneTarget } from './database-pane-tar
 import { agentAdapterId } from './terminal-input'
 import { SftpPane } from './components/SftpPane'
 import { HelpDialog } from './components/HelpDialog'
+import { FileDialog } from './components/FileDialog'
 import { colorWithOpacity, terminalBackgroundStyle } from './terminal-style'
 import { availableLanguages, getNativeMenuLabels, useI18n, type MessageKey } from './i18n'
 import { PRODUCT_INFO } from './product-info'
@@ -29,8 +30,14 @@ type SidebarPointerDrag = { pointerId: number; type: 'bookmark' | 'group'; value
 type SidebarPointerDrop = { type: 'bookmark'; id: string; group: string; position: 'before' | 'after' } | { type: 'group'; group: string; position: 'before' | 'after' | 'inside' }
 type MuxPointerDrag = { pointerId: number; type: 'session' | 'pane'; id: string; muxSessionId?: string; startX: number; startY: number; active: boolean }
 type MuxPointerDrop = { type: 'session' | 'pane'; id: string; position: 'before' | 'after' }
-type ConfirmationOptions = { title: string; message: string; detail?: string; kind: 'warning' | 'danger'; confirmLabel: string }
+// grantLabel adds a third, opt-in choice (for example "allow for this session").
+// Choosing it runs onGrant and still resolves true, so the confirmed action proceeds.
+type ConfirmationOptions = { title: string; message: string; detail?: string; kind: 'warning' | 'danger'; confirmLabel: string; grantLabel?: string; onGrant?(): void }
 type ConfirmAction = (options: ConfirmationOptions) => Promise<boolean>
+
+// Text entry keeps the platform edit menu (cut/copy/paste); every other target uses
+// the app's own menus, so the WebView page menu never appears anywhere.
+const TEXT_ENTRY_SELECTOR = 'textarea, [contenteditable="true"], input:not([type]), input[type="text"], input[type="search"], input[type="url"], input[type="tel"], input[type="email"], input[type="password"], input[type="number"]'
 type PendingConfirmation = ConfirmationOptions & { resolve(value: boolean): void }
 
 const emptyBookmark: BookmarkInput = { name: '', host: '', port: 22, username: '', authType: 'password', privateKeyPath: '', jumpBookmarkId: '', groupName: '', favorite: false, keepaliveEnabled: true, keepaliveIntervalSeconds: 15, keepaliveCountMax: 3, note: '' }
@@ -292,7 +299,7 @@ export function App(): React.JSX.Element {
       showError(message)
     }
   }
-  const openDatabasePane = async (profile: DatabaseProfile, paneTitle = '', readOnly = false): Promise<void> => {
+  const openDatabasePane = async (profile: DatabaseProfile, paneTitle = '', readOnly = true): Promise<void> => {
     const session = muxSessions.find((item) => item.id === activeMuxSessionId)
     if (!session) return
     try {
@@ -449,8 +456,12 @@ export function App(): React.JSX.Element {
   }, [])
 
   useEffect(() => {
-    if (window.api.platform !== 'win32') return
-    const preventBrowserMenu = (event: MouseEvent): void => event.preventDefault()
+    // Text entry keeps its own edit menu; elsewhere the WebView page menu
+    // (reload, back, inspect) is suppressed and panes render their own.
+    const preventBrowserMenu = (event: MouseEvent): void => {
+      if ((event.target as Element | null)?.closest?.(TEXT_ENTRY_SELECTOR)) return
+      event.preventDefault()
+    }
     document.addEventListener('contextmenu', preventBrowserMenu)
     return () => document.removeEventListener('contextmenu', preventBrowserMenu)
   }, [])
@@ -2375,6 +2386,7 @@ function DeploymentDialog({ bookmark, sessionId, onClose, onConfirm, onError }: 
   const [profile, setProfile] = useState<DeploymentProfile>(empty)
   const [diff, setDiff] = useState<DeploymentDiffEntry[] | null>(null)
   const [loading, setLoading] = useState(false)
+  const [directoryPicker, setDirectoryPicker] = useState(false)
   useEffect(() => { void window.api.deployments.list(bookmark.id).then((items) => { setProfiles(items); if (items[0]) setProfile(items[0]) }).catch((error) => onError(errorMessage(error))) }, [bookmark.id])
   const set = <K extends keyof DeploymentProfile>(key: K, value: DeploymentProfile[K]): void => { setProfile((current) => ({ ...current, [key]: value })); setDiff(null) }
   const save = async (): Promise<DeploymentProfile | undefined> => {
@@ -2402,9 +2414,10 @@ function DeploymentDialog({ bookmark, sessionId, onClose, onConfirm, onError }: 
   const counts = diff ? Object.fromEntries(['new', 'changed', 'same', 'remote-only'].map((status) => [status, diff.filter((item) => item.status === status).length])) : {}
   return <Modal title={t('app.deployToValue', { value0: bookmark.name })} onClose={onClose} wide><div className="deployment-dialog">
     <div className="deployment-profile-bar"><select value={profile.id} onChange={(event) => { const selected = profiles.find((item) => item.id === event.target.value); if (selected) { setProfile(selected); setDiff(null) } }}><option value={profile.id}>{profiles.some((item) => item.id === profile.id) ? profile.name || t('common.unnamedProfile') : t('app.newDeploymentProfile')}</option>{profiles.filter((item) => item.id !== profile.id).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><button className="secondary-button" onClick={() => { setProfile(empty()); setDiff(null) }}><CirclePlus size={15} />{t('common.new')}</button>{profiles.some((item) => item.id === profile.id) && <button className="icon-button danger" title={t('app.deleteDeploymentProfile')} onClick={async () => { await window.api.deployments.remove(profile.id); const next = profiles.filter((item) => item.id !== profile.id); setProfiles(next); setProfile(next[0] ?? empty()); setDiff(null) }}><Trash2 size={15} /></button>}</div>
-    <div className="form-grid"><label>{t('app.profileName')}<input value={profile.name} onChange={(event) => set('name', event.target.value)} /></label><label>{t('app.localDirectory')}<div className="input-button"><input readOnly value={profile.localDirectory} /><button className="secondary-button" onClick={async () => { const path = await window.api.files.chooseLocalDirectory(); if (path) set('localDirectory', path) }}>{t('common.choose')}</button></div></label><label>{t('app.remoteDirectory')}<input value={profile.remoteDirectory} onChange={(event) => set('remoteDirectory', event.target.value)} /></label><label className="check-label"><input type="checkbox" checked={profile.deleteExtraneous} onChange={(event) => set('deleteExtraneous', event.target.checked)} />{t('app.deleteExtraRemoteFilesAfterAllUploadsSucceed')}</label></div>
+    <div className="form-grid"><label>{t('app.profileName')}<input value={profile.name} onChange={(event) => set('name', event.target.value)} /></label><label>{t('app.localDirectory')}<div className="input-button"><input readOnly value={profile.localDirectory} /><button className="secondary-button" onClick={() => setDirectoryPicker(true)}>{t('common.choose')}</button></div></label><label>{t('app.remoteDirectory')}<input value={profile.remoteDirectory} onChange={(event) => set('remoteDirectory', event.target.value)} /></label><label className="check-label"><input type="checkbox" checked={profile.deleteExtraneous} onChange={(event) => set('deleteExtraneous', event.target.checked)} />{t('app.deleteExtraRemoteFilesAfterAllUploadsSucceed')}</label></div>
     {diff && <><div className="deployment-summary"><span>{t('common.new2')} {counts['new'] ?? 0}</span><span>{t('app.changed')} {counts['changed'] ?? 0}</span><span>{t('common.same')} {counts['same'] ?? 0}</span><span>{t('app.remoteOnly')} {counts['remote-only'] ?? 0}</span></div><div className="deployment-diff">{diff.filter((item) => item.status !== 'same').slice(0, 300).map((item) => <div key={`${item.status}:${item.relativePath}`}><span className={item.status}>{({ new: t('common.new2'), changed: t('app.update'), 'remote-only': t('common.remote'), same: t('common.same') } as const)[item.status]}</span><code>{item.relativePath}</code></div>)}</div></>}
     <div className="dialog-actions"><button className="secondary-button" onClick={onClose}>{t('common.cancel')}</button><button className="secondary-button" disabled={loading} onClick={() => void preview()}>{loading ? t('app.comparing') : t('app.saveAndPreview')}</button><button className="primary-button" disabled={!diff || loading} onClick={() => void execute()}><Rocket size={15} />{t('common.startDeployment')}</button></div>
+    {directoryPicker && <FileDialog mode="directory" title={t('app.localDirectory')} initialDirectory={profile.localDirectory || undefined} onCancel={() => setDirectoryPicker(false)} onConfirm={(path) => { setDirectoryPicker(false); set('localDirectory', path) }} />}
   </div></Modal>
 }
 
@@ -2902,14 +2915,17 @@ function MuxSessionDialog({ mode, session, onClose, onSave }: { mode: 'create' |
   const { t } = useI18n()
   const [name, setName] = useState(session?.name ?? '')
   const [rootPath, setRootPath] = useState(session?.rootPath ?? '')
-  const chooseRoot = async (): Promise<void> => {
-    const path = await window.api.files.chooseLocalDirectory()
-    if (path) { setRootPath(path); if (!name.trim()) setName(path.split(/[\\/]/).filter(Boolean).at(-1) ?? '') }
+  const [rootPicker, setRootPicker] = useState(false)
+  const chooseRoot = (path: string): void => {
+    setRootPicker(false)
+    setRootPath(path)
+    if (!name.trim()) setName(path.split(/[\\/]/).filter(Boolean).at(-1) ?? '')
   }
   return <Modal title={mode === 'create' ? t('app.newSession') : t('app.renameSession')} onClose={onClose}><form className="form-grid compact-form" onSubmit={(event) => { event.preventDefault(); onSave(name.trim(), rootPath.trim()) }}>
     <label>{t('app.sessionName')}<input autoFocus required value={name} onChange={(event) => setName(event.target.value)} placeholder={t('app.untitledSession')} /></label>
-    <label>{t('app.projectRoot')}<div className="input-button"><input value={rootPath} onChange={(event) => setRootPath(event.target.value)} placeholder={t('app.optionalProjectRoot')} /><button type="button" className="secondary-button" onClick={() => void chooseRoot()}>{t('common.choose')}</button></div></label>
+    <label>{t('app.projectRoot')}<div className="input-button"><input value={rootPath} onChange={(event) => setRootPath(event.target.value)} placeholder={t('app.optionalProjectRoot')} /><button type="button" className="secondary-button" onClick={() => setRootPicker(true)}>{t('common.choose')}</button></div></label>
     <div className="dialog-actions"><button type="button" className="secondary-button" onClick={onClose}>{t('common.cancel')}</button><button type="submit" className="primary-button">{t('common.save')}</button></div>
+    {rootPicker && <FileDialog mode="directory" title={t('app.projectRoot')} initialDirectory={rootPath || undefined} onCancel={() => setRootPicker(false)} onConfirm={chooseRoot} />}
   </form></Modal>
 }
 
@@ -2964,6 +2980,7 @@ function PaneNameDialog({ pane, onClose, onSave }: { pane: WorkspaceTab; onClose
 function BookmarkDialog({ bookmark, connections, groups, onClose, onSaved, onError }: { bookmark?: Bookmark; connections: Bookmark[]; groups: string[]; onClose(): void; onSaved(): void; onError(message: string): void }): React.JSX.Element {
   const { t } = useI18n()
   const [form, setForm] = useState<BookmarkInput>(bookmark ? { name: bookmark.name, host: bookmark.host, port: bookmark.port, username: bookmark.username, authType: bookmark.authType, privateKeyPath: bookmark.privateKeyPath, jumpBookmarkId: bookmark.jumpBookmarkId, groupName: bookmark.groupName, favorite: bookmark.favorite, keepaliveEnabled: bookmark.keepaliveEnabled, keepaliveIntervalSeconds: bookmark.keepaliveIntervalSeconds, keepaliveCountMax: bookmark.keepaliveCountMax, note: bookmark.note } : emptyBookmark)
+  const [keyPicker, setKeyPicker] = useState(false)
   const set = <K extends keyof BookmarkInput>(key: K, value: BookmarkInput[K]): void => setForm((current) => ({ ...current, [key]: value }))
   const jumpCandidates = connections.filter((item) => item.id !== bookmark?.id && !item.jumpBookmarkId)
   return <Modal title={bookmark ? t('common.editConnection') : t('common.newConnection')} onClose={onClose}><form className="form-grid" onSubmit={async (event) => { event.preventDefault(); try { await window.api.bookmarks.save({ ...form, id: bookmark?.id }); onSaved() } catch (error) { onError(errorMessage(error)) } }}>
@@ -2972,13 +2989,14 @@ function BookmarkDialog({ bookmark, connections, groups, onClose, onSaved, onErr
     <div className="form-row"><label>{t('app.hostIpOrDomain')}<input required value={form.host} onChange={(event) => set('host', event.target.value)} placeholder="192.168.1.10" /></label><label className="port-field">{t('app.port')}<input type="number" min="1" max="65535" value={form.port} onChange={(event) => set('port', Number(event.target.value))} /></label></div>
     <label>{t('app.username')}<input required value={form.username} onChange={(event) => set('username', event.target.value)} placeholder="root" /></label>
     <label>{t('app.authentication')}<select value={form.authType} onChange={(event) => set('authType', event.target.value as BookmarkInput['authType'])}><option value="password">{t('app.password')}</option><option value="privateKey">{t('common.privateKey')}</option><option value="agent">SSH Agent</option></select></label>
-    {form.authType === 'privateKey' && <label>{t('app.privateKeyFile')}<div className="input-button"><input readOnly value={form.privateKeyPath} placeholder={t('app.chooseAnOpensshPrivateKey')} /><button type="button" className="secondary-button" onClick={async () => { const path = await window.api.files.choosePrivateKey(); if (path) set('privateKeyPath', path) }}>{t('common.choose')}</button></div></label>}
+    {form.authType === 'privateKey' && <label>{t('app.privateKeyFile')}<div className="input-button"><input readOnly value={form.privateKeyPath} placeholder={t('app.chooseAnOpensshPrivateKey')} /><button type="button" className="secondary-button" onClick={() => setKeyPicker(true)}>{t('common.choose')}</button></div></label>}
     <label>{t('app.route')}<select value={form.jumpBookmarkId} onChange={(event) => set('jumpBookmarkId', event.target.value)}><option value="">{t('app.direct')}</option>{jumpCandidates.map((item) => <option key={item.id} value={item.id}>{t('app.viaValueValueValue', { value0: item.name, value1: item.username, value2: item.host })}</option>)}</select></label>
     <label className="check-label"><input type="checkbox" checked={form.keepaliveEnabled} onChange={(event) => set('keepaliveEnabled', event.target.checked)} />{t('app.keepTheSshSessionAlive')}</label>
     {form.keepaliveEnabled && <div className="form-row"><label>{t('app.keepaliveIntervalSeconds')}<input type="number" min="5" max="300" value={form.keepaliveIntervalSeconds} onChange={(event) => set('keepaliveIntervalSeconds', Number(event.target.value))} /></label><label>{t('app.maximumMissedResponses')}<input type="number" min="1" max="10" value={form.keepaliveCountMax} onChange={(event) => set('keepaliveCountMax', Number(event.target.value))} /></label></div>}
     <label>{t('app.notes')}<textarea rows={3} value={form.note} onChange={(event) => set('note', event.target.value)} placeholder={t('common.optional')} /></label>
     {bookmark?.hasSavedCredential && <button type="button" className="text-button danger" onClick={async () => { await window.api.bookmarks.forgetCredential(bookmark.id); onSaved() }}>{t('app.clearSavedCredentials')}</button>}
     <div className="dialog-actions"><button type="button" className="secondary-button" onClick={onClose}>{t('common.cancel')}</button><button className="primary-button" type="submit">{t('common.save')}</button></div>
+    {keyPicker && <FileDialog mode="open" title={t('app.privateKeyFile')} initialDirectory={/[\\/]/.test(form.privateKeyPath) ? form.privateKeyPath.replace(/[\\/][^\\/]*$/, '') || '/' : undefined} onCancel={() => setKeyPicker(false)} onConfirm={(path) => { setKeyPicker(false); set('privateKeyPath', path) }} />}
   </form></Modal>
 }
 
@@ -3029,9 +3047,10 @@ function Modal({ title, onClose, children, wide = false, raised = false, classNa
 
 function ConfirmationDialog({ confirmation, onDecision }: { confirmation: ConfirmationOptions; onDecision(accepted: boolean): void }): React.JSX.Element {
   const { t } = useI18n()
+  const { grantLabel, onGrant } = confirmation
   return <Modal title={confirmation.title} onClose={() => onDecision(false)} raised className="secondary-confirm-dialog"><div className={`confirmation-dialog ${confirmation.kind}`}>
     <div className="confirmation-heading">{confirmation.kind === 'danger' ? <Trash2 size={22} /> : <ShieldAlert size={22} />}<div><strong>{confirmation.message}</strong>{confirmation.detail && <span>{confirmation.detail}</span>}</div></div>
-    <div className="dialog-actions"><button type="button" autoFocus className="secondary-button" onClick={() => onDecision(false)}>{t('common.cancel')}</button><button type="button" className={confirmation.kind === 'danger' ? 'danger-button' : 'primary-button'} onClick={() => onDecision(true)}>{confirmation.kind === 'danger' ? <Trash2 size={15} /> : <Rocket size={15} />}{confirmation.confirmLabel}</button></div>
+    <div className="dialog-actions"><button type="button" autoFocus className="secondary-button" onClick={() => onDecision(false)}>{t('common.cancel')}</button>{grantLabel && <button type="button" className="secondary-button" onClick={() => { onGrant?.(); onDecision(true) }}>{grantLabel}</button>}<button type="button" className={confirmation.kind === 'danger' ? 'danger-button' : 'primary-button'} onClick={() => onDecision(true)}>{confirmation.kind === 'danger' ? <Trash2 size={15} /> : <Rocket size={15} />}{confirmation.confirmLabel}</button></div>
   </div></Modal>
 }
 

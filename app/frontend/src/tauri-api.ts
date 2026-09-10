@@ -1,10 +1,9 @@
-import { open as openFileDialog } from '@tauri-apps/plugin-dialog'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { readImage, readText, writeText } from '@tauri-apps/plugin-clipboard-manager'
-import type { AiSettingsInput, AiShell, AppApi, AppEvent, AppIconId, AppLanguage, BookmarkInput, BrowserRuntimeEvent, ConnectInput, ConflictResolution, ControlStateChangedEvent, DeploymentProfile, LunaRemoteImportSelection, ManagedAgentEvent, ManagedAgentNotificationActivation, NativeMenuLabels, Platform, PortForwardProfile, TerminalSettings, TransferRequest, UiTheme, DatabaseProfileInput, DatabaseConnectionConfig, DatabaseQueryResult, DatabaseColumnInfo, DatabaseIndexInfo, DatabaseForeignKeyInfo, DatabasePaneUiAction, DatabasePaneUiRequest } from './types'
+import type { AiSettingsInput, AiShell, AppApi, AppEvent, AppIconId, AppLanguage, BookmarkInput, BrowserRuntimeEvent, ConnectInput, ConflictResolution, ControlStateChangedEvent, DeploymentProfile, LunaRemoteImportSelection, ManagedAgentEvent, ManagedAgentNotificationActivation, NativeMenuLabels, Platform, PortForwardProfile, TerminalSettings, TransferRequest, UiTheme, DatabaseProfileInput, DatabaseConnectionConfig, DatabaseQueryResult, DatabaseSqlExport, DatabaseColumnInfo, DatabaseIndexInfo, DatabaseForeignKeyInfo, DatabasePaneUiAction, DatabasePaneUiRequest } from './types'
 import type { TerminalRuntimeEvent } from './terminal-runtime-contract'
 
 const call = <T>(command: string, args?: Record<string, unknown>): Promise<T> => invoke<T>(command, args).catch((error) => {
@@ -126,11 +125,11 @@ export async function createTauriApi(): Promise<AppApi> {
       disconnect: (runtimeId: string) => call('database_runtime_disconnect', { runtimeId }),
       execute: (runtimeId: string, sql: string, maxRows?: number, pageOffset?: number) => call<DatabaseQueryResult>('database_runtime_execute', { runtimeId, sql, maxRows, pageOffset }),
       listTables: (runtimeId: string) => call<string[]>('database_runtime_list_tables', { runtimeId }),
-      exportCsv: (runtimeId: string, sql: string) => call<string>('database_runtime_export_csv', { runtimeId, sql }),
-      exportJson: (runtimeId: string, sql: string) => call<string>('database_runtime_export_json', { runtimeId, sql }),
       describeTable: (runtimeId: string, table: string) => call<DatabaseColumnInfo[]>('database_runtime_describe_table', { runtimeId, table }),
-      importSql: (runtimeId: string, script: string) => call<void>('database_runtime_import_sql', { runtimeId, script }),
-      importRows: (runtimeId: string, table: string, columns: string[], rows: Array<Array<unknown>>) => call<number>('database_runtime_import_rows', { runtimeId, table, columns, rows }),
+      // Whole-database SQL only: both directions take a file path, so a large dump never has to
+      // travel through the webview as a JavaScript string.
+      exportSql: (runtimeId: string, path: string, table?: string) => call<DatabaseSqlExport>('database_runtime_export_sql', { runtimeId, path, table }),
+      importSqlFile: (runtimeId: string, path: string) => call<void>('database_runtime_import_sql_file', { runtimeId, path }),
       addColumn: (runtimeId: string, table: string, column: string, dataType: string) => call<number>('database_runtime_add_column', { runtimeId, table, column, dataType }),
       dropColumn: (runtimeId: string, table: string, column: string) => call<number>('database_runtime_drop_column', { runtimeId, table, column }),
       listIndexes: (runtimeId: string, table: string) => call<DatabaseIndexInfo[]>('database_runtime_list_indexes', { runtimeId, table }),
@@ -187,7 +186,6 @@ export async function createTauriApi(): Promise<AppApi> {
       clear: () => call('control_audit_clear')
     },
     files: {
-      chooseDatabaseFile: () => openFileDialog({ multiple: false, directory: false, filters: [{ name: 'SQLite', extensions: ['db', 'sqlite', 'sqlite3'] }, { name: 'All files', extensions: ['*'] }] }),
       home: () => call('files_home'),
       parentLocal: (path) => call('files_parent_local', { path }),
       remoteHome: (sessionId) => call('files_remote_home', { sessionId }),
@@ -198,9 +196,7 @@ export async function createTauriApi(): Promise<AppApi> {
       remove: (remote, sessionId, paths) => call('files_remove', { remote, sessionId, paths }),
       preview: (remote, sessionId, path, position) => call('files_preview', { remote, sessionId, path, position }),
       getFavorites: (bookmarkId) => call('files_get_favorites', { bookmarkId }),
-      setFavorites: (bookmarkId, value) => call('files_set_favorites', { bookmarkId, value }),
-      chooseLocalDirectory: () => call('files_choose_local_directory'),
-      choosePrivateKey: () => call('files_choose_private_key')
+      setFavorites: (bookmarkId, value) => call('files_set_favorites', { bookmarkId, value })
     },
     transfers: {
       list: () => call('transfers_list'),

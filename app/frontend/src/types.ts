@@ -373,6 +373,8 @@ export type DatabaseRuntimeStatus = 'connecting' | 'ready' | 'disconnected' | 'e
 export interface DatabaseRuntimeSummary { id: string; driver: string; status: DatabaseRuntimeStatus; error?: string | null }
 export interface DatabaseConnectionConfig { driver: DatabaseDriver; profileId?: string; host?: string; port?: number; database?: string; username?: string; password?: string; readOnly?: boolean; sslEnabled?: boolean; sqlitePath?: string }
 export interface DatabaseQueryResult { columns: string[]; rows: Array<Array<unknown>>; affectedRows: number; truncated: boolean; hasMore?: boolean }
+// Result of a native dump written straight to a file; `bytes` is the size of that file.
+export interface DatabaseSqlExport { tables: number; rows: number; bytes: number }
 export type DatabasePaneUiAction = { action: 'snapshot' } | { action: 'fill'; ref: string; value: string } | { action: 'click'; ref: string }
 export interface DatabasePaneUiRequest { requestId: string; paneId: string; mountId: string; action: DatabasePaneUiAction }
 export interface DatabaseColumnInfo { name: string; dataType: string; notNull: boolean; primaryKey: boolean; defaultValue?: string | null; comment?: string | null }
@@ -760,11 +762,9 @@ export interface AppApi {
     disconnect(runtimeId: string): Promise<void>
     execute(runtimeId: string, sql: string, maxRows?: number, pageOffset?: number): Promise<DatabaseQueryResult>
     listTables(runtimeId: string): Promise<string[]>
-    exportCsv(runtimeId: string, sql: string): Promise<string>
-    exportJson(runtimeId: string, sql: string): Promise<string>
     describeTable(runtimeId: string, table: string): Promise<DatabaseColumnInfo[]>
-    importSql(runtimeId: string, script: string): Promise<void>
-    importRows(runtimeId: string, table: string, columns: string[], rows: Array<Array<unknown>>): Promise<number>
+    exportSql(runtimeId: string, path: string, table?: string): Promise<DatabaseSqlExport>
+    importSqlFile(runtimeId: string, path: string): Promise<void>
     addColumn(runtimeId: string, table: string, column: string, dataType: string): Promise<number>
     dropColumn(runtimeId: string, table: string, column: string): Promise<number>
     listIndexes(runtimeId: string, table: string): Promise<DatabaseIndexInfo[]>
@@ -797,7 +797,6 @@ export interface AppApi {
     clear(): Promise<number>
   }
   files: {
-    chooseDatabaseFile(): Promise<string | null>
     home(): Promise<string>
     parentLocal(path: string): Promise<string>
     remoteHome(sessionId: string): Promise<string>
@@ -809,8 +808,6 @@ export interface AppApi {
     preview(remote: boolean, sessionId: string | undefined, path: string, position: 'start' | 'end'): Promise<FilePreview>
     getFavorites(bookmarkId: string): Promise<{ local: string[]; remote: string[] }>
     setFavorites(bookmarkId: string, value: { local: string[]; remote: string[] }): Promise<void>
-    chooseLocalDirectory(): Promise<string | null>
-    choosePrivateKey(): Promise<string | null>
   }
   transfers: {
     list(): Promise<TransferTask[]>

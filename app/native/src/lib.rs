@@ -538,8 +538,6 @@ pub fn run() {
             files_preview,
             files_get_favorites,
             files_set_favorites,
-            files_choose_local_directory,
-            files_choose_private_key,
             transfers_list,
             transfers_enqueue,
             transfers_cancel,

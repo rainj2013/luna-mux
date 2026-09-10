@@ -19,5 +19,7 @@ test('legacy empty and non-database targets never resolve to a DB connection', (
 test('malformed saved references do not crash workspace restoration', () => {
   assert.equal(parseDatabasePaneTarget('database-profile:%E0%A4%A'), undefined)
   assert.equal(parseDatabasePaneTarget('database-profile:%'), undefined)
-  assert.deepEqual(parseDatabasePaneTarget('database-profile:old-id'), { profileId: 'old-id', readOnly: false })
+  // A target saved before the flag existed restores read-only, the safe default.
+  assert.deepEqual(parseDatabasePaneTarget('database-profile:old-id'), { profileId: 'old-id', readOnly: true })
+  assert.deepEqual(parseDatabasePaneTarget('database-profile:old-id?readOnly=false'), { profileId: 'old-id', readOnly: false })
 })
