@@ -822,5 +822,22 @@ export default {
   "app.chromeProcess": "Chrome process",
   "app.browserProfile": "Resource profile",
   "app.openManagedChrome": "Focus managed Chrome window",
-  "app.startBrowser": "Start browser"
+  "app.startBrowser": "Start browser",
+  "database.chooseDatabaseFile": "Choose SQLite database file",
+  "database.exportSqlFileTitle": "Export as SQL",
+  "database.importSqlFileTitle": "Import SQL file",
+  "fileDialog.allFiles": "All files",
+  "fileDialog.empty": "This directory is empty",
+  "fileDialog.fileName": "File name",
+  "fileDialog.fileType": "File type",
+  "fileDialog.filterPlaceholder": "Filter this directory",
+  "fileDialog.hideHidden": "Hide hidden files",
+  "fileDialog.loading": "Loading directory…",
+  "fileDialog.noMatches": "No matches",
+  "fileDialog.parent": "Parent directory",
+  "fileDialog.path": "Path",
+  "fileDialog.refresh": "Refresh",
+  "fileDialog.showHidden": "Show hidden files",
+  "fileDialog.sqlFiles": "SQL files (*.sql)",
+  "fileDialog.sqliteFiles": "SQLite databases (*.db, *.sqlite, *.sqlite3)"
 } as const

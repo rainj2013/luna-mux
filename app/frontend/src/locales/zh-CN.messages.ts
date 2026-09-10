@@ -822,5 +822,22 @@ export default {
   "app.chromeProcess": "Chrome 进程",
   "app.browserProfile": "Resource 配置目录",
   "app.openManagedChrome": "切换到受管 Chrome 窗口",
-  "app.startBrowser": "启动浏览器"
+  "app.startBrowser": "启动浏览器",
+  "database.chooseDatabaseFile": "选择 SQLite 数据库文件",
+  "database.exportSqlFileTitle": "导出为 SQL 文件",
+  "database.importSqlFileTitle": "导入 SQL 文件",
+  "fileDialog.allFiles": "所有文件",
+  "fileDialog.empty": "此目录为空",
+  "fileDialog.fileName": "文件名",
+  "fileDialog.fileType": "文件类型",
+  "fileDialog.filterPlaceholder": "筛选当前目录",
+  "fileDialog.hideHidden": "不显示隐藏文件",
+  "fileDialog.loading": "正在加载目录…",
+  "fileDialog.noMatches": "没有匹配项",
+  "fileDialog.parent": "上级目录",
+  "fileDialog.path": "路径",
+  "fileDialog.refresh": "刷新",
+  "fileDialog.showHidden": "显示隐藏文件",
+  "fileDialog.sqlFiles": "SQL 文件 (*.sql)",
+  "fileDialog.sqliteFiles": "SQLite 数据库 (*.db, *.sqlite, *.sqlite3)"
 } as const

@@ -587,6 +587,35 @@ body.mux-split-resizing { cursor: col-resize; user-select: none; }
 .file-delete-confirm ul { max-height: 142px; margin: 0; padding: 9px 11px 9px 29px; overflow: auto; color: var(--text-muted); border: 1px solid var(--danger); border-radius: 5px; background: var(--danger-surface); font: 11px/1.6 Consolas, "SFMono-Regular", monospace; }
 .file-delete-confirm li { padding-left: 2px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .file-delete-confirm .error-text { overflow-wrap: anywhere; }
+/* Custom file picker: same layout on every platform, so no native panel chrome (macOS would add
+   a Tags field, for example) and no platform-specific path navigation. */
+.file-dialog-backdrop { z-index: 186; }
+.file-dialog { width: min(720px, 100%); height: min(560px, calc(100vh - 60px)); display: grid; grid-template-rows: 46px 40px 30px 37px minmax(0, 1fr) auto; overflow: hidden; }
+.file-dialog-toolbar { padding: 4px 8px; display: flex; align-items: center; gap: 5px; border-bottom: 1px solid var(--border-soft); }
+.file-dialog-toolbar .is-loading svg { animation: spin .8s linear infinite; }
+.file-dialog-path { min-width: 0; flex: 1; }
+.file-dialog-path input { width: 100%; height: 28px; padding: 0 9px; border: 1px solid var(--border-strong); border-radius: 5px; outline: 0; color: var(--text); background: var(--input-bg); font-size: 11px; }
+.file-dialog-path input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--focus-ring); }
+.file-dialog-crumbs { min-width: 0; padding: 0 10px; display: flex; align-items: center; gap: 2px; overflow-x: auto; border-bottom: 1px solid var(--border-soft); }
+.file-dialog-crumbs > span { flex: none; display: inline-flex; align-items: center; gap: 2px; }
+.file-dialog-crumbs small { color: var(--text-subtle); font-size: 10px; }
+.file-dialog-crumbs button { max-width: 180px; height: 22px; padding: 0 5px; overflow: hidden; color: var(--text-muted); background: transparent; border: 0; border-radius: 4px; cursor: pointer; font-size: 11px; white-space: nowrap; text-overflow: ellipsis; }
+.file-dialog-crumbs button:hover:not(.active) { color: var(--text-strong); background: var(--surface-hover); }
+.file-dialog-crumbs button.active { color: var(--text-strong); font-weight: 500; }
+.file-dialog-search { padding: 4px 8px; display: flex; align-items: center; gap: 5px; }
+.file-dialog-search .icon-button { width: 27px; height: 27px; }
+.file-dialog-search .icon-button.active { color: var(--accent-text); background: var(--selection-bg); }
+.file-dialog-search select { min-width: 90px; max-width: 200px; height: 27px; border: 1px solid var(--border-strong); border-radius: 5px; font-size: 10px; }
+.file-dialog-list { min-height: 0; padding: 2px 6px 6px; overflow: auto; border-top: 1px solid var(--border-soft); }
+.file-dialog-list:focus { outline: none; }
+.file-dialog-list:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+.file-dialog-list .file-row { border-radius: 4px; }
+.file-dialog-footer { padding: 10px 12px 12px; display: flex; align-items: flex-end; gap: 10px; border-top: 1px solid var(--border); background: var(--surface-muted); }
+.file-dialog-name { min-width: 0; flex: 1; }
+.file-dialog-name label { display: grid; gap: 5px; color: var(--text-muted); font-size: 11px; }
+.file-dialog-name input { width: 100%; height: 30px; padding: 0 9px; border: 1px solid var(--border-strong); border-radius: 5px; outline: 0; color: var(--text); background: var(--input-bg); font-size: 11px; }
+.file-dialog-name input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--focus-ring); }
+.file-dialog-footer .dialog-actions { flex: none; margin: 0; }
 .help-backdrop { position: fixed; z-index: 190; inset: 0; display: grid; place-items: center; padding: 20px; background: var(--overlay); }
 .help-dialog { width: min(1080px, 100%); height: min(720px, calc(100vh - 40px)); min-height: 0; display: grid; grid-template-rows: 50px minmax(0, 1fr); overflow: hidden; border: 1px solid var(--border-strong); border-radius: var(--radius-shell); background: var(--surface-raised); box-shadow: 0 20px 64px var(--shadow); }
 .help-dialog > header { min-width: 0; padding: 0 12px 0 17px; display: flex; align-items: center; gap: 12px; border-bottom: 1px solid var(--border); }
