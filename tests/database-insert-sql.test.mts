@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { DATABASE_INSERT_ROWS_PER_STATEMENT, databaseInsertSql, sqlIdentifier, sqlLiteral } from '../app/frontend/src/database-insert-sql.ts'
+import { DATABASE_INSERT_ROWS_PER_STATEMENT, databaseInsertSql, queryResultTarget, sqlIdentifier, sqlLiteral } from '../app/frontend/src/database-insert-sql.ts'
 
 test('literals follow the value type', () => {
   assert.equal(sqlLiteral(null, 'sqlite'), 'NULL')
@@ -58,4 +58,11 @@ test('empty inputs produce no SQL', () => {
   assert.equal(databaseInsertSql('', ['a'], [['x']], 'sqlite'), '')
   assert.equal(databaseInsertSql('t', [], [['x']], 'sqlite'), '')
   assert.equal(databaseInsertSql('t', ['a'], [], 'sqlite'), '')
+})
+
+test('query result targets come from simple FROM clauses with a neutral fallback', () => {
+  assert.equal(queryResultTarget('select id from users where id > 1'), 'users')
+  assert.equal(queryResultTarget('select * from app.users'), 'users')
+  assert.equal(queryResultTarget('/* from ignored */ select 1'), 'query_result')
+  assert.equal(queryResultTarget('select 1'), 'query_result')
 })
