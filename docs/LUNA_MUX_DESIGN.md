@@ -114,6 +114,8 @@ Session 同时承载项目上下文与协作授权，避免为每对窗格另建
 
 应用负责浏览器生命周期，`agent_browser` 负责页面自动化。自动化绑定 Session 的现有页面，普通导航复用该页面；网页操作不能自行启动或替换浏览器进程。
 
+Browser Runtime 启动 Chrome 时启用 WebMCP 页面 API 和预览客户端使用的测试接口（`WebMCP,WebMCPTesting`）；本地及远程 Agent 共用的 MCP 工具组包含 `webmcp`，用于发现、调用、查询异步结果和取消网页提供的工具。网页仍须自行注册工具，实际可用性取决于 Chrome 和网页使用的 API 版本。
+
 CDP 仅绑定本地回环地址，端口和连接信息属于临时运行状态。远程 Agent 通过经认证的 Runtime 通信桥访问 Session 浏览器，原始 CDP 不转发到远端。远程开发服务使用独立 SSH 隧道，浏览器资源不拥有隧道。
 
 工具按资源归属路由：应用资源由 Luna MCP 控制，网页内容由 `agent_browser` 操作，开发与主机工作使用对应原生工具。终端 Pane 与浏览器标签页是不同资源。
