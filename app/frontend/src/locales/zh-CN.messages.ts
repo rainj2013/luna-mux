@@ -118,7 +118,7 @@ export default {
   "database.clearPassword": "清除已保存密码（保存后生效）",
   "database.passwordSaveFailed": "连接设置已保存，但系统密码保存失败。请重试保存后再连接。",
   "database.passwordHint": "密码随连接保存到系统凭据库。使用 SSH 转发时，主机填写本地转发地址。",
-  "database.readOnly": "当前为只读模式，无法执行写入操作",
+  "database.readOnly": "当前为只读模式，无法执行写入操作，请调整访问权限后再试",
   "database.readOnlyLocked": "连接期间只读开关只对人工操作开放，请先在窗格工具栏切换",
   "database.tls": "使用 TLS 加密",
   "database.disconnectToEdit": "断开连接后可修改这些设置。",

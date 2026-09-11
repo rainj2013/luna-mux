@@ -118,7 +118,7 @@ export default {
   "database.clearPassword": "Clear saved password (applies on save)",
   "database.passwordSaveFailed": "Connection settings were saved, but the system credential store failed. Retry saving before connecting.",
   "database.passwordHint": "Passwords are saved in the system credential store with the connection. For SSH forwarding, use the local forwarded address.",
-  "database.readOnly": "This connection is read-only, so writes are blocked",
+  "database.readOnly": "This connection is read-only, so writes are blocked. Adjust the access permissions and try again.",
   "database.readOnlyLocked": "While connected, only the pane's access toggles can change read-only mode",
   "database.tls": "Use TLS encryption",
   "database.disconnectToEdit": "Disconnect before changing these settings.",

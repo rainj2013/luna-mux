@@ -33,6 +33,13 @@ A Session corresponds to one project directory and persists its project root and
 - Local and remote terminals share one xterm.js UI, including search, clipboard handling, themes, fonts, backgrounds, and output flow control.
 - Restarting the app restores Sessions and layouts without reconnecting hosts or restarting processes behind the user's back.
 
+## Database Panes
+
+Database panes connect to SQLite, MySQL/MariaDB, and PostgreSQL within the current Session. They browse tables and views, inspect columns/indexes/foreign keys, run paginated SQL queries, and import or export CSV, JSON, and SQL; SQLite also supports selected schema edits.
+
+- Each database pane has its own connection. Saved profiles keep connection settings while passwords remain in the system credential store.
+- Panes open read-only by default; DML and DDL writes require confirmation under the current Session's authorization.
+
 ## Agents in the Terminal
 
 Launch a supported agent (currently including Codex and Claude Code) in any pane and Luna Mux detects it, then injects a Hook and MCP servers to extend its capabilities.
