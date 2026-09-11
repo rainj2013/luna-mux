@@ -192,6 +192,16 @@ npm run build:win:webview2
 
 兼容版体积更大，只适合系统缺少 WebView2 且安装时无法联网的场景。构建机首次打包仍需联网下载 Microsoft WebView2 离线安装器。`npm run build:win:offline` 作为旧命令的兼容别名继续保留。发布前应在 Windows 真机验证标准版和兼容版的安装、覆盖安装、卸载及重启恢复。
 
+如果需要连续构建两个 Windows 变体，可以只编译一次原生程序，再分别生成安装器：
+
+```powershell
+npm run build:win:prepare
+npm run bundle:win
+npm run bundle:win:webview2
+```
+
+`build:win:prepare` 只执行前端和 Rust 编译，后两个命令只执行 NSIS 打包，适合本地反复验证安装器配置。
+
 ## GitHub Actions
 
 仓库中的 `Build and Release` 工作流会构建四个安装包。

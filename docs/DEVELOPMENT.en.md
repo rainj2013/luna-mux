@@ -192,6 +192,16 @@ npm run build:win:webview2
 
 The compatibility version is larger and only suits machines that lack WebView2 and cannot go online during installation. The first build on a build machine still needs to download the Microsoft WebView2 offline installer online. `npm run build:win:offline` remains as a compatibility alias for the old command. Verify install, over-install, uninstall, and restart-recovery of both the standard and compatibility versions on real Windows hardware before release.
 
+When building both Windows variants consecutively, compile the native application once and then create each installer:
+
+```powershell
+npm run build:win:prepare
+npm run bundle:win
+npm run bundle:win:webview2
+```
+
+`build:win:prepare` runs the frontend and Rust compilation only; the two bundle commands only create NSIS installers, which is useful for repeatedly testing installer configuration locally.
+
 ## GitHub Actions
 
 The `Build and Release` workflow in the repository builds four installers.

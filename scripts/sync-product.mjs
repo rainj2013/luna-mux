@@ -68,7 +68,8 @@ const releaseWorkflowPath = path.join(root, '.github', 'workflows', 'release.yml
 const artifactStem = product.displayName.replaceAll(/\s+/g, '-')
 const releaseWorkflow = fs.readFileSync(releaseWorkflowPath, 'utf8')
   .replace(/"release-assets\/[^"]+_macos-\$\{\{ matrix\.arch \}\}\.dmg"/, `"release-assets/${artifactStem}_macos-\${{ matrix.arch }}.dmg"`)
-  .replace(/"release-assets\/[^"]+_windows-x64-\$\{\{ matrix\.variant \}\}-setup\.exe"/, `"release-assets/${artifactStem}_windows-x64-\${{ matrix.variant }}-setup.exe"`)
+  .replace(/"release-assets\/[^"]+_windows-x64-setup\.exe"/, `"release-assets/${artifactStem}_windows-x64-setup.exe"`)
+  .replace(/"release-assets\/[^"]+_windows-x64-with-webview2-setup\.exe"/, `"release-assets/${artifactStem}_windows-x64-with-webview2-setup.exe"`)
   .replace(/--title "[^"]+ \$GITHUB_REF_NAME"/, `--title "${product.displayName} $GITHUB_REF_NAME"`)
 generated.set('.github/workflows/release.yml', releaseWorkflow)
 
