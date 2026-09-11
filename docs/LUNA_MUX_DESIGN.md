@@ -1,6 +1,6 @@
 # Luna Mux 设计方案
 
-最后更新：2026-09-05
+最后更新：2026-09-11
 
 ## 1. 产品定位
 
@@ -14,8 +14,9 @@ Luna Mux 是面向 Coding Agent 的本地与远程终端工作台，以项目级
 Application
 └── Mux Session
     ├── Pane
-    │   └── Terminal Runtime
-    │       └── Agent 进程（可选）
+    │   ├── Terminal Runtime
+    │   │   └── Agent 进程（可选）
+    │   └── Database Runtime（可选）
     └── Browser Resource
         └── Browser Runtime（按需启动）
 ```
@@ -25,6 +26,7 @@ Application
 | Mux Session | 项目级容器，拥有项目根目录、终端布局和浏览器资源，也是协作与授权边界 |
 | Pane | 布局树中的稳定叶节点，保存终端目标、工作目录和标题 |
 | Terminal Runtime | Pane 的一次运行实例，拥有终端连接、输入输出和进程生命周期 |
+| Database Runtime | 数据库 Pane 的一次运行实例，拥有数据库连接和查询状态 |
 | Agent | Runtime 中被识别的 Coding Agent 进程，通过适配器接入 |
 | Browser Resource | Session 下的持久化浏览器定义，独立于终端布局 |
 | Browser Runtime | 浏览器资源的一次运行实例，拥有浏览器进程和自动化连接 |
@@ -112,11 +114,15 @@ Session 同时承载项目上下文与协作授权，避免为每对窗格另建
 
 应用负责浏览器生命周期，`agent_browser` 负责页面自动化。自动化绑定 Session 的现有页面，普通导航复用该页面；网页操作不能自行启动或替换浏览器进程。
 
-Browser Runtime 启动 Chrome 时启用 WebMCP 页面 API 和预览客户端使用的测试接口（`WebMCP,WebMCPTesting`）；本地及远程 Agent 共用的 MCP 工具组包含 `webmcp`，用于发现、调用、查询异步结果和取消网页提供的工具。网页仍须自行注册工具，实际可用性取决于 Chrome 和网页使用的 API 版本。
-
 CDP 仅绑定本地回环地址，端口和连接信息属于临时运行状态。远程 Agent 通过经认证的 Runtime 通信桥访问 Session 浏览器，原始 CDP 不转发到远端。远程开发服务使用独立 SSH 隧道，浏览器资源不拥有隧道。
 
 工具按资源归属路由：应用资源由 Luna MCP 控制，网页内容由 `agent_browser` 操作，开发与主机工作使用对应原生工具。终端 Pane 与浏览器标签页是不同资源。
+
+### 3.6 数据库窗格
+
+数据库窗格是 Session 中的一种 Pane 类型，每个窗格拥有独立的 Database Runtime 和连接 Profile。支持 SQLite、MySQL/MariaDB 与 PostgreSQL，可浏览表和视图、查看字段/索引/外键、执行带分页的 SQL 查询，以及导入导出 CSV、JSON 和 SQL；SQLite 还支持部分结构编辑。
+
+Profile 保存连接配置和系统凭据引用，密码始终由系统凭据库管理。Pane 默认以只读模式连接，DML 与 DDL 写入分别经过会话授权；Runtime 仅保存活动连接和查询状态，随窗格关闭或应用退出清理。
 
 ## 4. 数据与安全边界
 

@@ -1,6 +1,6 @@
 # Luna Mux Design
 
-Last updated: 2026-09-05
+Last updated: 2026-09-11
 
 ## 1. Product Scope
 
@@ -14,8 +14,9 @@ The desktop supports Windows and macOS, with local shells, WSL, and SSH as termi
 Application
 └── Mux Session
     ├── Pane
-    │   └── Terminal Runtime
-    │       └── Agent process (optional)
+    │   ├── Terminal Runtime
+    │   │   └── Agent process (optional)
+    │   └── Database Runtime (optional)
     └── Browser Resource
         └── Browser Runtime (started on demand)
 ```
@@ -25,6 +26,7 @@ Application
 | Mux Session | Project container owning the root directory, terminal layout, and browser resources; also the collaboration and authorization boundary |
 | Pane | Stable layout leaf storing the terminal target, working directory, and title |
 | Terminal Runtime | One running instance of a Pane, owning its terminal connection, I/O, and process lifecycle |
+| Database Runtime | One running instance of a database Pane, owning its database connection and query state |
 | Agent | A detected coding agent process within a Runtime, integrated through an adapter |
 | Browser Resource | Persistent browser definition within a Session, separate from the terminal layout |
 | Browser Runtime | One running browser instance, owning its process and automation connection |
@@ -112,11 +114,15 @@ Browsers run in independent desktop Chrome windows outside the terminal layout, 
 
 The app owns browser lifecycle; `agent_browser` owns page automation. Automation binds to the Session's existing page and reuses it for ordinary navigation. Page operations cannot independently launch or replace the browser process.
 
-Browser Runtime enables the Chrome WebMCP page API and testing interfaces used by preview clients (`WebMCP,WebMCPTesting`). The MCP tool profile shared by local and remote Agents includes `webmcp` for discovering and invoking page tools, retrieving detached results, and cancelling calls. Pages must register their own tools; availability depends on the Chrome and page API versions.
-
 CDP binds only to local loopback, with ports and connection details kept as temporary runtime state. Remote Agents access the Session browser through authenticated Runtime communication bridges; raw CDP is not forwarded remotely. Remote development services use separate SSH tunnels, which browser resources do not own.
 
 Tool routing follows resource ownership: Luna MCP controls application resources, `agent_browser` operates web content, and native tools handle development and host work. Terminal Panes and browser tabs are distinct resources.
+
+### 3.6 Database Panes
+
+Database panes are a Pane type within a Session. Each pane owns its own Database Runtime and connection Profile. They support SQLite, MySQL/MariaDB, and PostgreSQL, with table and view browsing, column/index/foreign-key inspection, paginated SQL queries, and CSV, JSON, and SQL import/export; SQLite also supports selected schema edits.
+
+Profiles store connection settings and a system credential reference; passwords remain in the system credential store. Panes connect read-only by default, with DML and DDL writes authorized separately per Session. The Runtime holds only the active connection and query state and is cleaned up when the pane closes or the app exits.
 
 ## 4. Data and Security Boundaries
 
