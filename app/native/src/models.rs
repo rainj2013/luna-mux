@@ -135,6 +135,7 @@ pub enum MuxSplitDirection {
 pub enum MuxPaneKind {
     Terminal,
     Browser,
+    Database,
 }
 
 impl MuxPaneKind {
@@ -142,15 +143,44 @@ impl MuxPaneKind {
         match self {
             Self::Terminal => "terminal",
             Self::Browser => "browser",
+            Self::Database => "database",
         }
     }
 
     pub fn parse(value: &str) -> Self {
         match value {
             "browser" => Self::Browser,
+            "database" => Self::Database,
             _ => Self::Terminal,
         }
     }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum DatabaseDriver { Sqlite, Mysql, Postgresql }
+
+impl DatabaseDriver {
+    pub fn as_str(&self) -> &'static str { match self { Self::Sqlite => "sqlite", Self::Mysql => "mysql", Self::Postgresql => "postgresql" } }
+    pub fn parse(value: &str) -> Self { match value { "mysql" | "mariadb" => Self::Mysql, "postgresql" | "postgres" => Self::Postgresql, _ => Self::Sqlite } }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseProfile {
+    pub id: String, pub name: String, pub driver: DatabaseDriver, pub host: String, pub port: u16,
+    pub username: String, pub database_name: String, pub group_name: String, pub favorite: bool,
+    pub sort_order: i64, pub ssh_bookmark_id: String, pub ssl_enabled: bool, pub note: String,
+    pub created_at: String, pub updated_at: String, pub has_saved_credential: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseProfileInput {
+    #[serde(default)] pub id: Option<String>, pub name: String, pub driver: DatabaseDriver,
+    #[serde(default)] pub host: String, #[serde(default)] pub port: u16, #[serde(default)] pub username: String,
+    #[serde(default)] pub database_name: String, #[serde(default)] pub group_name: String, #[serde(default)] pub favorite: bool,
+    #[serde(default)] pub ssh_bookmark_id: String, #[serde(default)] pub ssl_enabled: bool, #[serde(default)] pub note: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

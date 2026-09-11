@@ -3,7 +3,7 @@ import { listen } from '@tauri-apps/api/event'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { readImage, readText, writeText } from '@tauri-apps/plugin-clipboard-manager'
-import type { AiSettingsInput, AiShell, AppApi, AppEvent, AppIconId, AppLanguage, BookmarkInput, BrowserRuntimeEvent, ConnectInput, ConflictResolution, ControlStateChangedEvent, DeploymentProfile, LunaRemoteImportSelection, ManagedAgentEvent, ManagedAgentNotificationActivation, NativeMenuLabels, Platform, PortForwardProfile, TerminalSettings, TransferRequest, UiTheme } from './types'
+import type { AiSettingsInput, AiShell, AppApi, AppEvent, AppIconId, AppLanguage, BookmarkInput, BrowserRuntimeEvent, ConnectInput, ConflictResolution, ControlStateChangedEvent, DeploymentProfile, LunaRemoteImportSelection, ManagedAgentEvent, ManagedAgentNotificationActivation, NativeMenuLabels, Platform, PortForwardProfile, TerminalSettings, TransferRequest, UiTheme, DatabaseProfileInput, DatabaseConnectionConfig, DatabaseQueryResult, DatabaseSqlExport, DatabaseSqlExportProgress, DatabaseColumnInfo, DatabaseIndexInfo, DatabaseForeignKeyInfo, DatabasePaneUiAction, DatabasePaneUiRequest } from './types'
 import type { TerminalRuntimeEvent } from './terminal-runtime-contract'
 
 const call = <T>(command: string, args?: Record<string, unknown>): Promise<T> => invoke<T>(command, args).catch((error) => {
@@ -12,6 +12,27 @@ const call = <T>(command: string, args?: Record<string, unknown>): Promise<T> =>
 
 const send = (command: string, args?: Record<string, unknown>): void => {
   void call(command, args).catch((error) => console.warn(`Tauri command ${command} failed`, error))
+}
+
+const DATABASE_EXPORT_PROGRESS_EVENT = 'database-export:progress'
+
+async function databaseExport<T>(command: string, args: Record<string, unknown>, onProgress?: (progress: DatabaseSqlExportProgress) => void): Promise<T> {
+  const operationId = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  let unlisten: (() => void) | undefined
+  if (onProgress) {
+    try {
+      unlisten = await listen<DatabaseSqlExportProgress>(DATABASE_EXPORT_PROGRESS_EVENT, (event) => {
+        if (event.payload.operationId === operationId) onProgress(event.payload)
+      })
+    } catch {
+      // The export remains usable without progress events if event registration is unavailable.
+    }
+  }
+  try {
+    return await call<T>(command, { ...args, operationId })
+  } finally {
+    unlisten?.()
+  }
 }
 
 const readClipboardContent = async (): Promise<import('./types').ClipboardContent> => {
@@ -110,6 +131,42 @@ export async function createTauriApi(): Promise<AppApi> {
       mouse: (runtimeId, event) => call('browser_runtime_mouse', { runtimeId, event }),
       key: (runtimeId, event) => call('browser_runtime_key', { runtimeId, event })
     },
+    databaseProfiles: {
+      list: () => call('database_profiles_list'),
+      save: (input: DatabaseProfileInput) => call('database_profiles_save', { input }),
+      remove: (id: string) => call('database_profiles_remove', { id }),
+      reorder: (ids: string[]) => call('database_profiles_reorder', { ids }),
+      moveToGroup: (id: string, group: string) => call('database_profiles_move_to_group', { id, group }),
+      saveCredential: (id: string, password: string) => call('database_profiles_save_credential', { id, password }),
+      forgetCredential: (id: string) => call('database_profiles_forget_credential', { id })
+    },
+    databaseRuntimes: {
+      list: () => call('database_runtimes_list'),
+      connect: (config: DatabaseConnectionConfig) => call('database_runtime_connect', { config }),
+      disconnect: (runtimeId: string) => call('database_runtime_disconnect', { runtimeId }),
+      execute: (runtimeId: string, sql: string, maxRows?: number, pageOffset?: number) => call<DatabaseQueryResult>('database_runtime_execute', { runtimeId, sql, maxRows, pageOffset }),
+      listTables: (runtimeId: string) => call<string[]>('database_runtime_list_tables', { runtimeId }),
+      describeTable: (runtimeId: string, table: string) => call<DatabaseColumnInfo[]>('database_runtime_describe_table', { runtimeId, table }),
+      // SQL exports take a file path, so a large dump never has to travel through the webview as
+      // a JavaScript string. Progress is delivered through the native event channel.
+      exportSql: (runtimeId: string, path: string, table: string | undefined, schemaOnly: boolean, onProgress?: (progress: DatabaseSqlExportProgress) => void) => databaseExport<DatabaseSqlExport>('database_runtime_export_sql', { runtimeId, path, table, schemaOnly }, onProgress),
+      writeQuerySql: (path: string, sql: string, rows: number, onProgress?: (progress: DatabaseSqlExportProgress) => void) => databaseExport<DatabaseSqlExport>('database_runtime_write_query_sql', { path, sql, rows }, onProgress),
+      importSqlFile: (runtimeId: string, path: string) => call<void>('database_runtime_import_sql_file', { runtimeId, path }),
+      addColumn: (runtimeId: string, table: string, column: string, dataType: string) => call<number>('database_runtime_add_column', { runtimeId, table, column, dataType }),
+      dropColumn: (runtimeId: string, table: string, column: string) => call<number>('database_runtime_drop_column', { runtimeId, table, column }),
+      listIndexes: (runtimeId: string, table: string) => call<DatabaseIndexInfo[]>('database_runtime_list_indexes', { runtimeId, table }),
+      listForeignKeys: (runtimeId: string, table: string) => call<DatabaseForeignKeyInfo[]>('database_runtime_list_foreign_keys', { runtimeId, table }),
+      createIndex: (runtimeId: string, table: string, index: string, column: string, unique: boolean) => call<number>('database_runtime_create_index', { runtimeId, table, index, column, unique }),
+      dropIndex: (runtimeId: string, index: string) => call<number>('database_runtime_drop_index', { runtimeId, index })
+    },
+    databaseConnectionTest: (config: DatabaseConnectionConfig) => call<void>('database_connection_test', { config }),
+    databasePaneUi: {
+      mount: (paneId: string, mountId: string, mounted: boolean) => call<void>('database_pane_ui_mount', { paneId, mountId, mounted }),
+      respond: (requestId: string, paneId: string, mountId: string, result: unknown) => call<void>('database_pane_ui_respond', { requestId, paneId, mountId, result }),
+      request: (paneId: string, action: DatabasePaneUiAction) => call<unknown>('database_pane_ui_request', { paneId, action }),
+      onRequest: (listener: (request: DatabasePaneUiRequest) => void) => { let stopped = false; let unlisten: (() => void) | undefined; void listen<DatabasePaneUiRequest>('database-pane-ui:request', (event) => { if (!stopped) listener(event.payload) }).then((stop) => { if (stopped) stop(); else unlisten = stop }).catch(() => {}); return () => { stopped = true; unlisten?.() } }
+    },
+    databaseProtocolConnect: (config: DatabaseConnectionConfig, password?: string) => call<void>('database_protocol_connect', { config, password }),
     bookmarkGroups: {
       list: () => call('bookmark_groups_list'),
       create: (name) => call('bookmark_groups_create', { name }),
@@ -161,9 +218,7 @@ export async function createTauriApi(): Promise<AppApi> {
       remove: (remote, sessionId, paths) => call('files_remove', { remote, sessionId, paths }),
       preview: (remote, sessionId, path, position) => call('files_preview', { remote, sessionId, path, position }),
       getFavorites: (bookmarkId) => call('files_get_favorites', { bookmarkId }),
-      setFavorites: (bookmarkId, value) => call('files_set_favorites', { bookmarkId, value }),
-      chooseLocalDirectory: () => call('files_choose_local_directory'),
-      choosePrivateKey: () => call('files_choose_private_key')
+      setFavorites: (bookmarkId, value) => call('files_set_favorites', { bookmarkId, value })
     },
     transfers: {
       list: () => call('transfers_list'),

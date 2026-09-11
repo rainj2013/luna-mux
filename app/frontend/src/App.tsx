@@ -2,14 +2,19 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowRight, Bookmark as BookmarkIcon, Bot, Check, ChevronDown, ChevronRight, CircleHelp, CirclePlus, Columns2, Columns3, Copy, Database as DatabaseIcon, Download, Edit3, ExternalLink, Eye, EyeOff, FileInput, FileJson2, Folder, FolderOpen, FolderPlus, Globe2, Grid2x2, GripVertical, History as HistoryIcon, Image as ImageIcon, Info, KeyRound, Languages, LayoutGrid, Maximize2, Minimize, Minus, Monitor, Moon, Network, Palette, PanelLeftClose, PanelLeftOpen, Play, Plus, Power, Rocket, RotateCcw, Rows2, Rows3, Search, Send, Server, Settings as SettingsIcon, ShieldAlert, Sparkles, Square, SquareTerminal, Star, Stethoscope, Sun, Trash2, Upload, WandSparkles, X } from 'lucide-react'
 import { BUNDLED_TERMINAL_FONT, DEFAULT_AI_SETTINGS, DEFAULT_TERMINAL_SETTINGS, type AgentLaunchProfile, type AiCommandHistoryEntry, type AiCommandSuggestion, type AiProvider, type AiRawExchange, type AiRiskAssessment, type AiSettings, type AiSettingsInput, type AiShell, type AiThinkingMode, type AppEvent, type AppIconId, type AppIconSettings, type AppLanguage, type Bookmark, type BookmarkArchivePreview, type BookmarkArchiveSource, type BookmarkInput, type BrowserResource, type BrowserRuntime, type BrowserRuntimeStatus, type BrowserTunnel, type ChromeInstallation, type ConflictResolution, type ConnectInput, type DeploymentDiffEntry, type DeploymentProfile, type DoctorCheck, type DoctorCheckStatus, type DoctorManagedAgent, type DoctorReport, type DoctorRuntimeCheck, type HostKeyPrompt, type LunaRemoteImportPreview, type LunaRemoteImportResult, type LunaRemoteSource, type ManagedAgentEvent, type ManagedAgentStatus, type MuxPane, type MuxSession, type MuxSplitNode, type PortForwardProfile, type SessionStatus, type SshConfigPreview, type TerminalRuntime, type TerminalRuntimeEvent, type TerminalSettings, type TerminalTarget, type TransferTask, type TunnelSummary, type UiTheme } from './types'
 import { discardTerminalSnapshot, TerminalPane, type TerminalPaneHandle } from './components/TerminalPane'
+import { DatabasePane, type DatabasePaneHandle } from './components/DatabasePane'
+import type { DatabaseProfile } from './types'
+import { layoutFromPanes, paneIdsInLayout, layoutForPreset, resizeVisibleSplit, type LayoutPreset } from './mux-layout'
+import { databasePaneTarget, parseDatabasePaneTarget } from './database-pane-target'
 import { agentAdapterId } from './terminal-input'
 import { SftpPane } from './components/SftpPane'
 import { HelpDialog } from './components/HelpDialog'
+import { FileDialog } from './components/FileDialog'
 import { colorWithOpacity, terminalBackgroundStyle } from './terminal-style'
 import { availableLanguages, getNativeMenuLabels, useI18n, type MessageKey } from './i18n'
 import { PRODUCT_INFO } from './product-info'
 
-interface WorkspaceTab extends MuxPane { key: string; sessionId?: string; runtimeId?: string; agentId?: string; status: SessionStatus; error?: string }
+interface WorkspaceTab extends MuxPane { databaseRevision?: number; initialDatabaseProfile?: DatabaseProfile; initialDatabaseReadOnly?: boolean; key: string; sessionId?: string; runtimeId?: string; agentId?: string; status: SessionStatus; error?: string }
 interface AiCommandTarget { name: string; detail: string; runtimeId?: string; connected: boolean; remote: boolean; initialShell: AiShell }
 interface BrowserResourceState extends BrowserResource { runtime?: BrowserRuntime; tunnel?: BrowserTunnel; status: BrowserRuntimeStatus | 'stopped'; error?: string }
 interface ManagedAgentSummary { agentId: string; paneId: string; runtimeId: string; status: ManagedAgentStatus | 'starting' | 'stopped'; waitingReason?: string; timestamp?: string; eventCount: number; unread: boolean; hasStructuredEvents: boolean; latest?: ManagedAgentEvent; latestAttention?: ManagedAgentEvent }
@@ -25,10 +30,15 @@ type SidebarPointerDrag = { pointerId: number; type: 'bookmark' | 'group'; value
 type SidebarPointerDrop = { type: 'bookmark'; id: string; group: string; position: 'before' | 'after' } | { type: 'group'; group: string; position: 'before' | 'after' | 'inside' }
 type MuxPointerDrag = { pointerId: number; type: 'session' | 'pane'; id: string; muxSessionId?: string; startX: number; startY: number; active: boolean }
 type MuxPointerDrop = { type: 'session' | 'pane'; id: string; position: 'before' | 'after' }
-type ConfirmationOptions = { title: string; message: string; detail?: string; kind: 'warning' | 'danger'; confirmLabel: string }
+// grantLabel adds a third, opt-in choice (for example "allow for this session").
+// Choosing it runs onGrant and still resolves true, so the confirmed action proceeds.
+type ConfirmationOptions = { title: string; message: string; detail?: string; kind: 'warning' | 'danger'; confirmLabel: string; grantLabel?: string; onGrant?(): void }
 type ConfirmAction = (options: ConfirmationOptions) => Promise<boolean>
+
+// Text entry keeps the platform edit menu (cut/copy/paste); every other target uses
+// the app's own menus, so the WebView page menu never appears anywhere.
+const TEXT_ENTRY_SELECTOR = 'textarea, [contenteditable="true"], input:not([type]), input[type="text"], input[type="search"], input[type="url"], input[type="tel"], input[type="email"], input[type="password"], input[type="number"]'
 type PendingConfirmation = ConfirmationOptions & { resolve(value: boolean): void }
-type LayoutPreset = 'horizontal' | 'vertical' | 'twoColumns'
 
 const emptyBookmark: BookmarkInput = { name: '', host: '', port: 22, username: '', authType: 'password', privateKeyPath: '', jumpBookmarkId: '', groupName: '', favorite: false, keepaliveEnabled: true, keepaliveIntervalSeconds: 15, keepaliveCountMax: 3, note: '' }
 type ConnectionCredentials = Omit<ConnectInput, 'bookmarkId' | 'newSession'>
@@ -193,6 +203,8 @@ export function App(): React.JSX.Element {
   const [muxSessionDialog, setMuxSessionDialog] = useState<MuxSessionDialogState | null>(null)
   const [paneRenameDialog, setPaneRenameDialog] = useState<WorkspaceTab | null>(null)
   const [connectionLibraryDialog, setConnectionLibraryDialog] = useState(false)
+  const databaseManagerRef = useRef<DatabasePaneHandle>(null)
+  const [databaseLibraryDialog, setDatabaseLibraryDialog] = useState(false)
   const [paneLauncher, setPaneLauncher] = useState<{ targets: TerminalTarget[]; loading: boolean } | null>(null)
   const [confirmation, setConfirmation] = useState<PendingConfirmation | null>(null)
   const [toast, setToast] = useState('')
@@ -207,6 +219,7 @@ export function App(): React.JSX.Element {
   const muxReorderInFlightRef = useRef(false)
   const suppressSidebarClickRef = useRef(false)
   const terminalPaneRefs = useRef(new Map<string, TerminalPaneHandle>())
+  const databasePaneRefs = useRef(new Map<string, DatabasePaneHandle>())
   const browserResourceStartInFlightRef = useRef(new Set<string>())
   const terminalTargetsCacheRef = useRef<TerminalTarget[] | null>(null)
 
@@ -286,6 +299,17 @@ export function App(): React.JSX.Element {
       showError(message)
     }
   }
+  const openDatabasePane = async (profile: DatabaseProfile, paneTitle = '', readOnly = true): Promise<void> => {
+    const session = muxSessions.find((item) => item.id === activeMuxSessionId)
+    if (!session) return
+    try {
+      const title = paneTitle.trim() || profile.name
+      const saved = await window.api.muxPanes.save({ muxSessionId: session.id, kind: 'database', title, targetId: databasePaneTarget(profile.id, readOnly), cwd: '' })
+      setTabs((current) => [...current, { ...saved, key: saved.id, status: 'disconnected', initialDatabaseProfile: profile, initialDatabaseReadOnly: readOnly }])
+      await persistSessionLayout(session, layoutForNewPane(session, sessionTabs, saved.id, activeKey || undefined))
+      setActiveKey(saved.id); setPaneLauncher(null); setDatabaseLibraryDialog(false); setWorkspaceView('terminal')
+    } catch (error) { showError(errorMessage(error)) }
+  }
   const startBrowserResource = async (resource: BrowserResourceState): Promise<void> => {
     if (browserResourceStartInFlightRef.current.has(resource.id)) return
     const activeResource = browserResources.find((item) => item.id !== resource.id && item.muxSessionId === resource.muxSessionId && (item.status === 'running' || item.status === 'starting'))
@@ -327,6 +351,7 @@ export function App(): React.JSX.Element {
     await startBrowserResource({ ...resource, runtime: undefined, tunnel: undefined, status: 'stopped', error: undefined })
   }
   const startLocalPane = async (pane: WorkspaceTab): Promise<void> => {
+    if (pane.kind !== 'terminal') return
     const runtimeId = crypto.randomUUID()
     const agentId = pane.launchProfileId ? crypto.randomUUID() : undefined
     try {
@@ -431,8 +456,12 @@ export function App(): React.JSX.Element {
   }, [])
 
   useEffect(() => {
-    if (window.api.platform !== 'win32') return
-    const preventBrowserMenu = (event: MouseEvent): void => event.preventDefault()
+    // Text entry keeps its own edit menu; elsewhere the WebView page menu
+    // (reload, back, inspect) is suppressed and panes render their own.
+    const preventBrowserMenu = (event: MouseEvent): void => {
+      if ((event.target as Element | null)?.closest?.(TEXT_ENTRY_SELECTOR)) return
+      event.preventDefault()
+    }
     document.addEventListener('contextmenu', preventBrowserMenu)
     return () => document.removeEventListener('contextmenu', preventBrowserMenu)
   }, [])
@@ -534,7 +563,7 @@ export function App(): React.JSX.Element {
       setActiveKey(pane.id)
       setWorkspaceView('terminal')
       setMaximizedPaneId('')
-      if (start) void (async () => {
+      if (start && pane.kind === 'terminal') void (async () => {
         const runtimeId = crypto.randomUUID()
         const agentId = pane.launchProfileId ? crypto.randomUUID() : undefined
         setTabs((current) => current.map((item) => item.id === pane.id ? { ...item, runtimeId, agentId, status: 'connecting', error: undefined } : item))
@@ -1075,7 +1104,7 @@ export function App(): React.JSX.Element {
       if (!accepted) return
     }
     try {
-      if (tab.runtimeId) await window.api.terminalRuntimes.close(tab.runtimeId)
+      if (tab.kind === 'terminal' && tab.runtimeId) await window.api.terminalRuntimes.close(tab.runtimeId)
       await window.api.muxPanes.remove(tab.id)
     } catch (error) {
       showError(errorMessage(error))
@@ -1205,7 +1234,6 @@ export function App(): React.JSX.Element {
     return () => window.removeEventListener('keydown', onKeyDown, true)
   }, [activeBookmark, activeTab, activeKey, sessionTabs, activeMuxSession])
 
-
   const saveSettings = async (settings: TerminalSettings, previewImage: string, appIcon: AppIconId, theme: UiTheme, appLanguage: AppLanguage, ai: AiSettingsInput, remoteAgentIntegration: boolean): Promise<void> => {
     try {
       const terminalChanged = JSON.stringify(settings) !== JSON.stringify(terminalSettings)
@@ -1318,7 +1346,7 @@ export function App(): React.JSX.Element {
     if (!owner) return
     try {
       const savedPane = await window.api.muxPanes.save({ muxSessionId: owner.id, kind: pane.kind, title: pane.title, targetId: pane.targetId, bookmarkId: pane.bookmarkId, cwd: pane.cwd })
-      const nextPane: WorkspaceTab = { ...savedPane, key: savedPane.id, status: 'disconnected' }
+      const nextPane: WorkspaceTab = { ...savedPane, key: savedPane.id, status: 'disconnected', initialDatabaseProfile: pane.initialDatabaseProfile, initialDatabaseReadOnly: pane.initialDatabaseReadOnly }
       setTabs((current) => [...current, nextPane])
       await persistSessionLayout(owner, insertPaneInLayout(layoutFromPanes(owner.layout, sessionTabs.filter((item) => !minimizedPaneIds.has(item.id))), pane.id, savedPane.id, direction))
       setActiveKey(savedPane.id)
@@ -1344,7 +1372,20 @@ export function App(): React.JSX.Element {
     if (activeKey === pane.key) setActiveKey(siblings[0]?.key ?? '')
   }
 
+  const saveDatabasePaneProfile = async (pane: WorkspaceTab, profile: DatabaseProfile, readOnly: boolean): Promise<void> => {
+    const targetId = databasePaneTarget(profile.id, readOnly)
+    if (pane.targetId === targetId) return
+    const saved = await window.api.muxPanes.save({ id: pane.id, muxSessionId: pane.muxSessionId, kind: 'database', title: pane.title, targetId, cwd: pane.cwd })
+    setTabs((current) => current.map((item) => item.id === pane.id ? { ...item, ...saved, initialDatabaseProfile: profile, initialDatabaseReadOnly: readOnly } : item))
+  }
   const reconnectPane = (pane: WorkspaceTab): void => {
+    if (pane.kind === 'database') {
+      setActiveMuxSessionId(pane.muxSessionId); setActiveKey(pane.key); setWorkspaceView('terminal')
+      setTabs((current) => current.map((item) => item.id === pane.id ? { ...item, runtimeId: undefined, sessionId: undefined, agentId: undefined, status: 'disconnected', error: undefined } : item))
+      requestAnimationFrame(() => { void databasePaneRefs.current.get(pane.key)?.reconnect() })
+      return
+    }
+    if (pane.kind !== 'terminal') return
     const bookmark = pane.bookmarkId ? bookmarkMap.get(pane.bookmarkId) : undefined
     if (bookmark) openBookmark(bookmark, { tabKey: pane.key, newSession: true, launchAgentProfileId: pane.launchProfileId || undefined })
     else void startLocalPane(pane)
@@ -1359,6 +1400,10 @@ export function App(): React.JSX.Element {
   }
 
   const restartPane = async (pane: WorkspaceTab): Promise<void> => {
+    if (pane.kind === 'database') {
+      setTabs((current) => current.map((item) => item.id === pane.id ? { ...item, databaseRevision: (item.databaseRevision ?? 0) + 1, runtimeId: undefined, sessionId: undefined, agentId: undefined, status: 'disconnected', error: undefined } : item))
+      return
+    }
     if (pane.runtimeId) await window.api.terminalRuntimes.close(pane.runtimeId).catch((error) => showError(errorMessage(error)))
     const stopped = { ...pane, runtimeId: undefined, sessionId: undefined, status: 'disconnected' as SessionStatus, error: undefined }
     setTabs((current) => current.map((item) => item.id === pane.id ? stopped : item))
@@ -1387,9 +1432,9 @@ export function App(): React.JSX.Element {
 
   const resizeLayout = (path: string, ratio: number, persist: boolean): void => {
     if (!activeMuxSession) return
-    const currentLayout = layoutFromPanes(activeMuxSession.layout, visibleSessionTabs)
+    const currentLayout = layoutFromPanes(activeMuxSession.layout, sessionTabs)
     if (!currentLayout) return
-    const layout = setSplitRatio(currentLayout, path, ratio)
+    const layout = resizeVisibleSplit(currentLayout, new Set(visibleSessionTabs.map((pane) => pane.id)), path, ratio)
     setMuxSessions((current) => current.map((session) => session.id === activeMuxSession.id ? { ...session, layout } : session))
     if (persist) void persistSessionLayout(activeMuxSession, layout).catch((error) => showError(errorMessage(error)))
   }
@@ -1490,7 +1535,7 @@ export function App(): React.JSX.Element {
                     <span className="mux-drag-handle" title={t('app.dragToReorder')} onPointerDown={(event) => startMuxPointerDrag(event, 'pane', pane.id, session.id)}><GripVertical size={12} /></span>
                     <button className="mux-pane-select" title={paneLabel} onClick={() => { if (minimized) { void restorePane(pane); return }; setActiveMuxSessionId(pane.muxSessionId); setActiveKey(pane.key); setWorkspaceView('terminal'); setMaximizedPaneId(''); if (agent) markAgentRead(agent.agentId) }} onDoubleClick={() => { if (!minimized && pane.status !== 'connected') reconnectPane(pane) }}>
                       <span className={`status-dot ${pane.status}`} />
-                      {agent ? <Sparkles size={14} /> : pane.bookmarkId ? <Server size={14} /> : <SquareTerminal size={14} />}
+                      {pane.kind === 'database' ? <DatabaseIcon size={14} /> : agent ? <Sparkles size={14} /> : pane.bookmarkId ? <Server size={14} /> : <SquareTerminal size={14} />}
                       <span className="mux-pane-copy">
                         <span className="mux-pane-title">{pane.title}</span>
                         {pane.error && <small className="mux-pane-error">{pane.error}</small>}
@@ -1536,12 +1581,13 @@ export function App(): React.JSX.Element {
         </div>
         <div className="session-stack">
           {muxSessions.map((session) => {
-            const panes = tabs.filter((pane) => pane.muxSessionId === session.id && !minimizedPaneIds.has(pane.id))
-            const layout = layoutFromPanes(session.layout, panes)
+            const allPanes = tabs.filter((pane) => pane.muxSessionId === session.id)
+            const panes = allPanes.filter((pane) => !minimizedPaneIds.has(pane.id))
+            const layout = layoutFromPanes(layoutFromPanes(session.layout, allPanes), panes)
             if (!layout) return null
             const shown = session.id === activeMuxSessionId && workspaceView === 'terminal'
             const hasBackgroundImage = Boolean(terminalSettings.backgroundImagePath && terminalBackground)
-            return <div key={session.id} hidden={!shown} className={`terminal-workspace ${hasBackgroundImage ? 'has-background-image' : ''}`} style={terminalBackgroundStyle(terminalSettings, terminalBackground)}><MuxLayout node={layout} panes={panes} bookmarks={bookmarkMap} activePaneId={shown ? activeKey : ''} settings={terminalSettings} backgroundImage={terminalBackground} agentAttentionByPane={agentAttentionByPane} activeAgentAdapterByPane={activeAgentAdapterByPane} terminalPaneRefs={terminalPaneRefs} onFocus={(pane) => { setActiveKey(pane.key); const agent = allAgents.find((item) => item.paneId === pane.id); if (agent) markAgentRead(agent.agentId) }} onTerminalAgentAction={(pane) => { const agent = allAgents.find((item) => item.paneId === pane.id); if (agent) dismissAgentWaitingAttention(agent) }} onRuntimeError={(pane, runtimeId, message) => { setTabs((current) => current.map((item) => item.key === pane.key && item.runtimeId === runtimeId ? { ...item, status: 'error', error: message } : item)); showError(message) }} onReconnect={reconnectPane} onReauthenticate={reauthenticatePane} onSplit={(pane, direction) => void splitPane(pane, direction)} onClose={closeTab} onResize={resizeLayout} onToggleMaximize={(paneId) => setMaximizedPaneId((current) => current === paneId ? '' : paneId)} onMinimize={minimizePane} onOpenSettings={() => openSettings('terminal')} maximizedPaneId={shown ? visibleMaximizedPaneId : ''} /></div>
+            return <div key={session.id} hidden={!shown} className={`terminal-workspace ${hasBackgroundImage ? 'has-background-image' : ''}`} style={terminalBackgroundStyle(terminalSettings, terminalBackground)}><MuxLayout node={layout} panes={panes} bookmarks={bookmarkMap} activePaneId={shown ? activeKey : ''} settings={terminalSettings} backgroundImage={terminalBackground} agentAttentionByPane={agentAttentionByPane} activeAgentAdapterByPane={activeAgentAdapterByPane} terminalPaneRefs={terminalPaneRefs} databasePaneRefs={databasePaneRefs} onDatabaseProfileSelected={saveDatabasePaneProfile} onDatabaseConnectionStateChange={(pane, status, error) => setTabs((current) => current.map((item) => item.id === pane.id ? { ...item, status, error } : item))} onFocus={(pane) => { setActiveKey(pane.key); const agent = allAgents.find((item) => item.paneId === pane.id); if (agent) markAgentRead(agent.agentId) }} onTerminalAgentAction={(pane) => { const agent = allAgents.find((item) => item.paneId === pane.id); if (agent) dismissAgentWaitingAttention(agent) }} onRuntimeError={(pane, runtimeId, message) => { setTabs((current) => current.map((item) => item.key === pane.key && item.runtimeId === runtimeId ? { ...item, status: 'error', error: message } : item)); showError(message) }} onReconnect={reconnectPane} onReauthenticate={reauthenticatePane} onSplit={(pane, direction) => void splitPane(pane, direction)} onClose={closeTab} onResize={resizeLayout} onToggleMaximize={(paneId) => setMaximizedPaneId((current) => current === paneId ? '' : paneId)} onMinimize={minimizePane} onOpenSettings={() => openSettings('terminal')} onManageDatabases={() => setDatabaseLibraryDialog(true)} onConfirm={confirmAction} maximizedPaneId={shown ? visibleMaximizedPaneId : ''} /></div>
           })}
           {!activeMuxSession ? <div className="welcome-state"><div className="welcome-icon"><SquareTerminal size={30} /></div><h2>{t('app.createYourFirstSession')}</h2><div className="welcome-actions"><button className="primary-button" onClick={() => setMuxSessionDialog({ mode: 'create' })}><CirclePlus size={16} />{t('app.newSession')}</button></div></div>
             : sessionTabs.length === 0 && sessionBrowserResources.length === 0 ? <div className="welcome-state"><div className="welcome-icon"><SquareTerminal size={30} /></div><h2>{activeMuxSession.name}</h2>{activeMuxSession.rootPath && <p>{activeMuxSession.rootPath}</p>}<div className="welcome-actions"><button className="primary-button" onClick={() => void openPaneLauncher()}><CirclePlus size={16} />{t('app.addFirstPane')}</button></div></div>
@@ -1612,7 +1658,7 @@ export function App(): React.JSX.Element {
       <div className="resource-library-footer"><span>{t('app.doubleClickTargetToAddPane')}</span><div><button className="text-button" onClick={() => void importConnectionArchive()}>{t('app.importConnectionBackup')}</button><button className="text-button" onClick={() => void importLunaRemoteDatabase()}>{t('app.importFromLunaRemote')}</button><button className="text-button" onClick={() => void exportConnectionArchive()}>{t('app.exportConnectionBackup')}</button></div></div>
     </div></Modal>}
     {groupDialog && <GroupNameDialog mode={groupDialog.mode} initialName={groupDialog.group ?? ''} onClose={() => setGroupDialog(null)} onSave={(name) => void saveGroup(name)} />}
-    {paneLauncher && <PaneLauncherDialog targets={paneLauncher.targets} loading={paneLauncher.loading} onClose={() => setPaneLauncher(null)} onManageConnections={() => { setPaneLauncher(null); setConnectionLibraryDialog(true) }} onSelect={(target, paneTitle) => {
+    {paneLauncher && <PaneLauncherDialog targets={paneLauncher.targets} loading={paneLauncher.loading} onClose={() => setPaneLauncher(null)} onManageConnections={() => { setPaneLauncher(null); setConnectionLibraryDialog(true) }} onCreateDatabase={(profile, title) => void openDatabasePane(profile, title)} onManageDatabases={() => { setPaneLauncher(null); setDatabaseLibraryDialog(true) }} onSelect={(target, paneTitle) => {
       if (target.transport === 'ssh') {
         const bookmark = bookmarkMap.get(target.id.replace(/^ssh-bookmark:/, ''))
         if (!bookmark) { showError(t('app.sshTargetUnavailable')); return }
@@ -1620,6 +1666,7 @@ export function App(): React.JSX.Element {
         openBookmark(bookmark, { newSession: true, paneTitle })
       } else void openLocalTerminal(target, paneTitle)
     }} />}
+    {databaseLibraryDialog && <Modal title={t('database.manageConnections')} onClose={() => { void (async () => { if (await databaseManagerRef.current?.confirmClose()) setDatabaseLibraryDialog(false) })() }} wide className="database-library-dialog"><DatabasePane ref={databaseManagerRef} onConfirm={confirmAction} visible managementOnly onOpen={(profile, readOnly) => openDatabasePane(profile, '', readOnly)} /></Modal>}
     {muxSessionDialog && <MuxSessionDialog mode={muxSessionDialog.mode} session={muxSessionDialog.session} onClose={() => setMuxSessionDialog(null)} onSave={(name, rootPath) => void saveMuxSession(name, rootPath)} />}
     {paneRenameDialog && <PaneNameDialog pane={paneRenameDialog} onClose={() => setPaneRenameDialog(null)} onSave={(title) => void renamePane(paneRenameDialog, title)} />}
     {bookmarkDialog && <BookmarkDialog bookmark={bookmarkDialog === 'new' ? undefined : bookmarkDialog} connections={bookmarks} groups={bookmarkGroupNames} onClose={() => setBookmarkDialog(null)} onSaved={async () => { setBookmarkDialog(null); await reloadSidebarData() }} onError={showError} />}
@@ -1949,27 +1996,6 @@ function SshConfigImportDialog({ preview, onClose, onImported, onError }: { prev
   </div></Modal>
 }
 
-function layoutFromPanes(layout: MuxSplitNode | undefined, panes: WorkspaceTab[]): MuxSplitNode | undefined {
-  const paneIds = new Set(panes.map((pane) => pane.id))
-  const prune = (node: MuxSplitNode | undefined): MuxSplitNode | undefined => {
-    if (!node) return undefined
-    if (node.type === 'pane') return paneIds.has(node.paneId) ? node : undefined
-    const first = prune(node.first)
-    const second = prune(node.second)
-    if (!first) return second
-    if (!second) return first
-    return { ...node, first, second }
-  }
-  let normalized = prune(layout)
-  const placed = new Set(normalized ? paneIdsInLayout(normalized) : [])
-  for (const pane of panes) {
-    if (placed.has(pane.id)) continue
-    const leaf: MuxSplitNode = { type: 'pane', paneId: pane.id }
-    normalized = normalized ? { type: 'split', direction: 'horizontal', ratio: 0.5, first: normalized, second: leaf } : leaf
-  }
-  return normalized
-}
-
 function insertPaneInLayout(layout: MuxSplitNode | undefined, anchorPaneId: string | undefined, paneId: string, direction: 'horizontal' | 'vertical'): MuxSplitNode {
   const leaf: MuxSplitNode = { type: 'pane', paneId }
   if (!layout) return leaf
@@ -2005,20 +2031,6 @@ function removePaneFromLayout(layout: MuxSplitNode | undefined, paneId: string):
   return { ...layout, first, second }
 }
 
-function setSplitRatio(layout: MuxSplitNode, path: string, ratio: number, currentPath = ''): MuxSplitNode {
-  if (layout.type === 'pane') return layout
-  if (path === currentPath) return { ...layout, ratio }
-  return {
-    ...layout,
-    first: setSplitRatio(layout.first, path, ratio, `${currentPath}0`),
-    second: setSplitRatio(layout.second, path, ratio, `${currentPath}1`)
-  }
-}
-
-function paneIdsInLayout(layout: MuxSplitNode): string[] {
-  return layout.type === 'pane' ? [layout.paneId] : [...paneIdsInLayout(layout.first), ...paneIdsInLayout(layout.second)]
-}
-
 function remapLayoutPaneIds(layout: MuxSplitNode, paneIds: string[]): MuxSplitNode {
   let index = 0
   const remap = (node: MuxSplitNode): MuxSplitNode => node.type === 'pane'
@@ -2045,29 +2057,6 @@ function reorderMuxSessionsByIds(sessions: MuxSession[], ids: string[]): MuxSess
     .map((session, sortOrder) => ({ ...session, sortOrder }))
 }
 
-function balancedLayout(nodes: MuxSplitNode[], direction: 'horizontal' | 'vertical'): MuxSplitNode {
-  if (nodes.length === 1) return nodes[0]!
-  const midpoint = Math.ceil(nodes.length / 2)
-  return {
-    type: 'split',
-    direction,
-    ratio: midpoint / nodes.length,
-    first: balancedLayout(nodes.slice(0, midpoint), direction),
-    second: balancedLayout(nodes.slice(midpoint), direction)
-  }
-}
-
-function layoutForPreset(paneIds: string[], preset: LayoutPreset): MuxSplitNode {
-  const leaves = paneIds.map((paneId): MuxSplitNode => ({ type: 'pane', paneId }))
-  if (preset !== 'twoColumns') return balancedLayout(leaves, preset)
-  const rows: MuxSplitNode[] = []
-  for (let index = 0; index < leaves.length; index += 2) {
-    const row = leaves.slice(index, index + 2)
-    rows.push(row.length === 1 ? row[0]! : balancedLayout(row, 'horizontal'))
-  }
-  return balancedLayout(rows, 'vertical')
-}
-
 interface MuxLayoutProps {
   node: MuxSplitNode
   panes: WorkspaceTab[]
@@ -2078,6 +2067,9 @@ interface MuxLayoutProps {
   agentAttentionByPane: Map<string, AgentAttentionTone>
   activeAgentAdapterByPane: Map<string, string>
   terminalPaneRefs: React.MutableRefObject<Map<string, TerminalPaneHandle>>
+  databasePaneRefs: React.MutableRefObject<Map<string, DatabasePaneHandle>>
+  onDatabaseProfileSelected(pane: WorkspaceTab, profile: DatabaseProfile, readOnly: boolean): Promise<void>
+  onDatabaseConnectionStateChange(pane: WorkspaceTab, status: SessionStatus, error?: string): void
   onFocus(pane: WorkspaceTab): void
   onTerminalAgentAction(pane: WorkspaceTab): void
   onRuntimeError(pane: WorkspaceTab, runtimeId: string, message: string): void
@@ -2089,11 +2081,13 @@ interface MuxLayoutProps {
   onToggleMaximize(paneId: string): void
   onMinimize(pane: WorkspaceTab): void
   onOpenSettings(): void
+  onManageDatabases(): void
+  onConfirm: ConfirmAction
   maximizedPaneId: string
   path?: string
 }
 
-function MuxLayout({ node, panes, bookmarks, activePaneId, settings, backgroundImage, agentAttentionByPane, activeAgentAdapterByPane, terminalPaneRefs, onFocus, onTerminalAgentAction, onRuntimeError, onReconnect, onReauthenticate, onSplit, onClose, onResize, onToggleMaximize, onMinimize, onOpenSettings, maximizedPaneId, path = '' }: MuxLayoutProps): React.JSX.Element | null {
+function MuxLayout({ node, panes, bookmarks, activePaneId, settings, backgroundImage, agentAttentionByPane, activeAgentAdapterByPane, terminalPaneRefs, databasePaneRefs, onDatabaseProfileSelected, onDatabaseConnectionStateChange, onFocus, onTerminalAgentAction, onRuntimeError, onReconnect, onReauthenticate, onSplit, onClose, onResize, onToggleMaximize, onMinimize, onOpenSettings, onManageDatabases, onConfirm, maximizedPaneId, path = '' }: MuxLayoutProps): React.JSX.Element | null {
   const { t } = useI18n()
   if (node.type === 'pane') {
     const pane = panes.find((item) => item.id === node.paneId)
@@ -2113,7 +2107,7 @@ function MuxLayout({ node, panes, bookmarks, activePaneId, settings, backgroundI
     return <section className={['mux-leaf', active ? 'active' : '', attentionTone ? `attention-${attentionTone}` : '', maximizeClass].filter(Boolean).join(' ')} onPointerDown={() => onFocus(pane)}>
       <header className="mux-leaf-header">
         <span className={`status-dot ${pane.status}`} />
-        {pane.bookmarkId ? <Server size={13} /> : <SquareTerminal size={13} />}
+        {pane.kind === 'database' ? <DatabaseIcon size={13} /> : pane.bookmarkId ? <Server size={13} /> : <SquareTerminal size={13} />}
         <strong title={pane.title}>{pane.title}</strong>
         <div className="mux-leaf-actions">
           <button className="icon-button" title={t('app.splitRight')} aria-label={t('app.splitRight')} onClick={() => onSplit(pane, 'horizontal')}><Columns2 size={14} /></button>
@@ -2123,7 +2117,7 @@ function MuxLayout({ node, panes, bookmarks, activePaneId, settings, backgroundI
           <button className="icon-button danger" title={t('app.closePane')} aria-label={t('app.closePane')} onClick={() => onClose(pane)}><X size={14} /></button>
         </div>
       </header>
-      <div className="terminal-region"><TerminalPane key={pane.key} paneId={pane.id} targetId={pane.targetId} activeAgentAdapterId={activeAgentAdapterByPane.get(pane.id)} ref={(terminalPane) => { if (terminalPane) terminalPaneRefs.current.set(pane.key, terminalPane); else terminalPaneRefs.current.delete(pane.key) }} runtimeId={pane.runtimeId} connected={pane.status === 'connected'} connecting={pane.status === 'connecting'} visible={maximizedPaneId ? pane.id === maximizedPaneId : active} settings={settings} backgroundImage={backgroundImage} stoppedState={stoppedState} onAgentAction={() => onTerminalAgentAction(pane)} onRuntimeError={(runtimeId, message) => { onRuntimeError(pane, runtimeId, message) }} onStart={() => authenticationFailure ? onReauthenticate(pane) : onReconnect(pane)} onClose={() => onClose(pane)} onOpenSettings={onOpenSettings} /></div>
+      <div className="terminal-region">{pane.kind === 'database' ? <DatabasePane key={`${pane.id}:${pane.databaseRevision ?? 0}`} ref={(handle) => { if (handle) databasePaneRefs.current.set(pane.key, handle); else databasePaneRefs.current.delete(pane.key) }} visible={active} paneId={pane.id} initialProfile={pane.initialDatabaseProfile} initialProfileId={parseDatabasePaneTarget(pane.targetId)?.profileId} initialReadOnly={pane.initialDatabaseReadOnly ?? parseDatabasePaneTarget(pane.targetId)?.readOnly} onProfileSelected={(profile, readOnly) => onDatabaseProfileSelected(pane, profile, readOnly)} onConnectionStateChange={(status, error) => onDatabaseConnectionStateChange(pane, status, error)} onManageConnections={onManageDatabases} onConfirm={onConfirm} /> : <TerminalPane key={pane.key} paneId={pane.id} targetId={pane.targetId} activeAgentAdapterId={activeAgentAdapterByPane.get(pane.id)} ref={(terminalPane) => { if (terminalPane) terminalPaneRefs.current.set(pane.key, terminalPane); else terminalPaneRefs.current.delete(pane.key) }} runtimeId={pane.runtimeId} connected={pane.status === 'connected'} connecting={pane.status === 'connecting'} visible={maximizedPaneId ? pane.id === maximizedPaneId : active} settings={settings} backgroundImage={backgroundImage} stoppedState={stoppedState} onAgentAction={() => onTerminalAgentAction(pane)} onRuntimeError={(runtimeId, message) => { onRuntimeError(pane, runtimeId, message) }} onStart={() => authenticationFailure ? onReauthenticate(pane) : onReconnect(pane)} onClose={() => onClose(pane)} onOpenSettings={onOpenSettings} />}</div>
     </section>
   }
   const direction = node.direction
@@ -2153,9 +2147,9 @@ function MuxLayout({ node, panes, bookmarks, activePaneId, settings, backgroundI
     : { gridTemplateRows: `minmax(0, ${node.ratio}fr) 5px minmax(0, ${1 - node.ratio}fr)` }
   const maximizeClass = maximizedPaneId ? paneIdsInLayout(node).includes(maximizedPaneId) ? 'maximized-branch' : 'maximize-hidden' : ''
   return <div className={['mux-split', direction, maximizeClass].filter(Boolean).join(' ')} style={style}>
-    <MuxLayout node={node.first} panes={panes} bookmarks={bookmarks} activePaneId={activePaneId} settings={settings} backgroundImage={backgroundImage} agentAttentionByPane={agentAttentionByPane} activeAgentAdapterByPane={activeAgentAdapterByPane} terminalPaneRefs={terminalPaneRefs} onFocus={onFocus} onTerminalAgentAction={onTerminalAgentAction} onRuntimeError={onRuntimeError} onReconnect={onReconnect} onReauthenticate={onReauthenticate} onSplit={onSplit} onClose={onClose} onResize={onResize} onToggleMaximize={onToggleMaximize} onMinimize={onMinimize} onOpenSettings={onOpenSettings} maximizedPaneId={maximizedPaneId} path={`${path}0`} />
+    <MuxLayout node={node.first} panes={panes} bookmarks={bookmarks} activePaneId={activePaneId} settings={settings} backgroundImage={backgroundImage} agentAttentionByPane={agentAttentionByPane} activeAgentAdapterByPane={activeAgentAdapterByPane} terminalPaneRefs={terminalPaneRefs} databasePaneRefs={databasePaneRefs} onDatabaseProfileSelected={onDatabaseProfileSelected} onDatabaseConnectionStateChange={onDatabaseConnectionStateChange} onFocus={onFocus} onTerminalAgentAction={onTerminalAgentAction} onRuntimeError={onRuntimeError} onReconnect={onReconnect} onReauthenticate={onReauthenticate} onSplit={onSplit} onClose={onClose} onResize={onResize} onToggleMaximize={onToggleMaximize} onMinimize={onMinimize} onOpenSettings={onOpenSettings} onManageDatabases={onManageDatabases} onConfirm={onConfirm} maximizedPaneId={maximizedPaneId} path={`${path}0`} />
     <div className="mux-split-divider" role="separator" aria-orientation={direction === 'horizontal' ? 'vertical' : 'horizontal'} onPointerDown={startResize} />
-    <MuxLayout node={node.second} panes={panes} bookmarks={bookmarks} activePaneId={activePaneId} settings={settings} backgroundImage={backgroundImage} agentAttentionByPane={agentAttentionByPane} activeAgentAdapterByPane={activeAgentAdapterByPane} terminalPaneRefs={terminalPaneRefs} onFocus={onFocus} onTerminalAgentAction={onTerminalAgentAction} onRuntimeError={onRuntimeError} onReconnect={onReconnect} onReauthenticate={onReauthenticate} onSplit={onSplit} onClose={onClose} onResize={onResize} onToggleMaximize={onToggleMaximize} onMinimize={onMinimize} onOpenSettings={onOpenSettings} maximizedPaneId={maximizedPaneId} path={`${path}1`} />
+    <MuxLayout node={node.second} panes={panes} bookmarks={bookmarks} activePaneId={activePaneId} settings={settings} backgroundImage={backgroundImage} agentAttentionByPane={agentAttentionByPane} activeAgentAdapterByPane={activeAgentAdapterByPane} terminalPaneRefs={terminalPaneRefs} databasePaneRefs={databasePaneRefs} onDatabaseProfileSelected={onDatabaseProfileSelected} onDatabaseConnectionStateChange={onDatabaseConnectionStateChange} onFocus={onFocus} onTerminalAgentAction={onTerminalAgentAction} onRuntimeError={onRuntimeError} onReconnect={onReconnect} onReauthenticate={onReauthenticate} onSplit={onSplit} onClose={onClose} onResize={onResize} onToggleMaximize={onToggleMaximize} onMinimize={onMinimize} onOpenSettings={onOpenSettings} onManageDatabases={onManageDatabases} onConfirm={onConfirm} maximizedPaneId={maximizedPaneId} path={`${path}1`} />
   </div>
 }
 
@@ -2392,6 +2386,7 @@ function DeploymentDialog({ bookmark, sessionId, onClose, onConfirm, onError }: 
   const [profile, setProfile] = useState<DeploymentProfile>(empty)
   const [diff, setDiff] = useState<DeploymentDiffEntry[] | null>(null)
   const [loading, setLoading] = useState(false)
+  const [directoryPicker, setDirectoryPicker] = useState(false)
   useEffect(() => { void window.api.deployments.list(bookmark.id).then((items) => { setProfiles(items); if (items[0]) setProfile(items[0]) }).catch((error) => onError(errorMessage(error))) }, [bookmark.id])
   const set = <K extends keyof DeploymentProfile>(key: K, value: DeploymentProfile[K]): void => { setProfile((current) => ({ ...current, [key]: value })); setDiff(null) }
   const save = async (): Promise<DeploymentProfile | undefined> => {
@@ -2419,9 +2414,10 @@ function DeploymentDialog({ bookmark, sessionId, onClose, onConfirm, onError }: 
   const counts = diff ? Object.fromEntries(['new', 'changed', 'same', 'remote-only'].map((status) => [status, diff.filter((item) => item.status === status).length])) : {}
   return <Modal title={t('app.deployToValue', { value0: bookmark.name })} onClose={onClose} wide><div className="deployment-dialog">
     <div className="deployment-profile-bar"><select value={profile.id} onChange={(event) => { const selected = profiles.find((item) => item.id === event.target.value); if (selected) { setProfile(selected); setDiff(null) } }}><option value={profile.id}>{profiles.some((item) => item.id === profile.id) ? profile.name || t('common.unnamedProfile') : t('app.newDeploymentProfile')}</option>{profiles.filter((item) => item.id !== profile.id).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><button className="secondary-button" onClick={() => { setProfile(empty()); setDiff(null) }}><CirclePlus size={15} />{t('common.new')}</button>{profiles.some((item) => item.id === profile.id) && <button className="icon-button danger" title={t('app.deleteDeploymentProfile')} onClick={async () => { await window.api.deployments.remove(profile.id); const next = profiles.filter((item) => item.id !== profile.id); setProfiles(next); setProfile(next[0] ?? empty()); setDiff(null) }}><Trash2 size={15} /></button>}</div>
-    <div className="form-grid"><label>{t('app.profileName')}<input value={profile.name} onChange={(event) => set('name', event.target.value)} /></label><label>{t('app.localDirectory')}<div className="input-button"><input readOnly value={profile.localDirectory} /><button className="secondary-button" onClick={async () => { const path = await window.api.files.chooseLocalDirectory(); if (path) set('localDirectory', path) }}>{t('common.choose')}</button></div></label><label>{t('app.remoteDirectory')}<input value={profile.remoteDirectory} onChange={(event) => set('remoteDirectory', event.target.value)} /></label><label className="check-label"><input type="checkbox" checked={profile.deleteExtraneous} onChange={(event) => set('deleteExtraneous', event.target.checked)} />{t('app.deleteExtraRemoteFilesAfterAllUploadsSucceed')}</label></div>
+    <div className="form-grid"><label>{t('app.profileName')}<input value={profile.name} onChange={(event) => set('name', event.target.value)} /></label><label>{t('app.localDirectory')}<div className="input-button"><input readOnly value={profile.localDirectory} /><button className="secondary-button" onClick={() => setDirectoryPicker(true)}>{t('common.choose')}</button></div></label><label>{t('app.remoteDirectory')}<input value={profile.remoteDirectory} onChange={(event) => set('remoteDirectory', event.target.value)} /></label><label className="check-label"><input type="checkbox" checked={profile.deleteExtraneous} onChange={(event) => set('deleteExtraneous', event.target.checked)} />{t('app.deleteExtraRemoteFilesAfterAllUploadsSucceed')}</label></div>
     {diff && <><div className="deployment-summary"><span>{t('common.new2')} {counts['new'] ?? 0}</span><span>{t('app.changed')} {counts['changed'] ?? 0}</span><span>{t('common.same')} {counts['same'] ?? 0}</span><span>{t('app.remoteOnly')} {counts['remote-only'] ?? 0}</span></div><div className="deployment-diff">{diff.filter((item) => item.status !== 'same').slice(0, 300).map((item) => <div key={`${item.status}:${item.relativePath}`}><span className={item.status}>{({ new: t('common.new2'), changed: t('app.update'), 'remote-only': t('common.remote'), same: t('common.same') } as const)[item.status]}</span><code>{item.relativePath}</code></div>)}</div></>}
     <div className="dialog-actions"><button className="secondary-button" onClick={onClose}>{t('common.cancel')}</button><button className="secondary-button" disabled={loading} onClick={() => void preview()}>{loading ? t('app.comparing') : t('app.saveAndPreview')}</button><button className="primary-button" disabled={!diff || loading} onClick={() => void execute()}><Rocket size={15} />{t('common.startDeployment')}</button></div>
+    {directoryPicker && <FileDialog mode="directory" title={t('app.localDirectory')} initialDirectory={profile.localDirectory || undefined} onCancel={() => setDirectoryPicker(false)} onConfirm={(path) => { setDirectoryPicker(false); set('localDirectory', path) }} />}
   </div></Modal>
 }
 
@@ -2919,28 +2915,56 @@ function MuxSessionDialog({ mode, session, onClose, onSave }: { mode: 'create' |
   const { t } = useI18n()
   const [name, setName] = useState(session?.name ?? '')
   const [rootPath, setRootPath] = useState(session?.rootPath ?? '')
-  const chooseRoot = async (): Promise<void> => {
-    const path = await window.api.files.chooseLocalDirectory()
-    if (path) { setRootPath(path); if (!name.trim()) setName(path.split(/[\\/]/).filter(Boolean).at(-1) ?? '') }
+  const [rootPicker, setRootPicker] = useState(false)
+  const chooseRoot = (path: string): void => {
+    setRootPicker(false)
+    setRootPath(path)
+    if (!name.trim()) setName(path.split(/[\\/]/).filter(Boolean).at(-1) ?? '')
   }
   return <Modal title={mode === 'create' ? t('app.newSession') : t('app.renameSession')} onClose={onClose}><form className="form-grid compact-form" onSubmit={(event) => { event.preventDefault(); onSave(name.trim(), rootPath.trim()) }}>
     <label>{t('app.sessionName')}<input autoFocus required value={name} onChange={(event) => setName(event.target.value)} placeholder={t('app.untitledSession')} /></label>
-    <label>{t('app.projectRoot')}<div className="input-button"><input value={rootPath} onChange={(event) => setRootPath(event.target.value)} placeholder={t('app.optionalProjectRoot')} /><button type="button" className="secondary-button" onClick={() => void chooseRoot()}>{t('common.choose')}</button></div></label>
+    <label>{t('app.projectRoot')}<div className="input-button"><input value={rootPath} onChange={(event) => setRootPath(event.target.value)} placeholder={t('app.optionalProjectRoot')} /><button type="button" className="secondary-button" onClick={() => setRootPicker(true)}>{t('common.choose')}</button></div></label>
     <div className="dialog-actions"><button type="button" className="secondary-button" onClick={onClose}>{t('common.cancel')}</button><button type="submit" className="primary-button">{t('common.save')}</button></div>
+    {rootPicker && <FileDialog mode="directory" title={t('app.projectRoot')} initialDirectory={rootPath || undefined} onCancel={() => setRootPicker(false)} onConfirm={chooseRoot} />}
   </form></Modal>
 }
 
-function PaneLauncherDialog({ targets, loading, onClose, onManageConnections, onSelect }: { targets: TerminalTarget[]; loading: boolean; onClose(): void; onManageConnections(): void; onSelect(target: TerminalTarget, paneTitle: string): void }): React.JSX.Element {
+function PaneLauncherDialog({ targets, loading, onClose, onManageConnections, onCreateDatabase, onManageDatabases, onSelect }: { targets: TerminalTarget[]; loading: boolean; onClose(): void; onManageConnections(): void; onCreateDatabase(profile: DatabaseProfile, title: string): void; onManageDatabases(): void; onSelect(target: TerminalTarget, paneTitle: string): void }): React.JSX.Element {
   const { t } = useI18n()
   const [paneTitle, setPaneTitle] = useState('')
+  const [databaseProfiles, setDatabaseProfiles] = useState<DatabaseProfile[]>([])
+  const [databaseLoading, setDatabaseLoading] = useState(true)
+  const [databaseError, setDatabaseError] = useState('')
+  useEffect(() => {
+    let cancelled = false
+    void window.api.databaseProfiles.list().then((items) => {
+      if (!cancelled) setDatabaseProfiles(items)
+    }).catch((error) => { if (!cancelled) setDatabaseError(errorMessage(error)) })
+      .finally(() => { if (!cancelled) setDatabaseLoading(false) })
+    return () => { cancelled = true }
+  }, [])
   const localTargets = targets.filter((target) => target.transport === 'localPty')
   const sshTargets = targets.filter((target) => target.transport === 'ssh')
-  const renderTarget = (target: TerminalTarget): React.JSX.Element => <button key={target.id} type="button" onClick={() => onSelect(target, paneTitle.trim())}>{target.transport === 'ssh' ? <Server size={18} /> : <SquareTerminal size={18} />}<span><strong>{target.label}</strong><small>{target.transport === 'ssh' ? t('app.sshEnvironment') : target.kind === 'wsl' ? t('app.wslEnvironment') : t('app.localEnvironment')}</small></span><ChevronRight size={16} /></button>
+  const renderTarget = (target: TerminalTarget): React.JSX.Element => <button key={target.id} type="button" onClick={() => onSelect(target, paneTitle.trim())}><span><strong>{target.label}</strong><small>{target.transport === 'ssh' ? t('app.sshEnvironment') : target.kind === 'wsl' ? t('app.wslEnvironment') : t('app.localEnvironment')}</small></span><ChevronRight size={16} /></button>
   return <Modal title={t('app.addPane')} onClose={onClose} className="pane-launcher-dialog"><div className="pane-launcher">
     <label className="pane-name-field">{t('app.paneName')}<input autoFocus value={paneTitle} onChange={(event) => setPaneTitle(event.target.value)} placeholder={t('app.paneNamePlaceholder')} /></label>
     {loading && <div className="pane-target-loading"><span className="status-dot connecting" />{t('app.loadingTerminalTargets')}</div>}
-    <section><header><span>{t('app.onThisComputer')}</span><small>{localTargets.length}</small></header><div className="local-target-list">{localTargets.map(renderTarget)}</div></section>
-    <section><header><span>{t('app.overSsh')}</span><button className="text-button" onClick={onManageConnections}>{t('app.manageSshTargets')}</button></header><div className="local-target-list">{sshTargets.map(renderTarget)}{sshTargets.length === 0 && !loading && <button type="button" className="empty-target" onClick={onManageConnections}><Server size={18} /><span><strong>{t('app.noSshTargets')}</strong><small>{t('app.addSshTargetToUse')}</small></span><ChevronRight size={16} /></button>}</div></section>
+    <section><header className="pane-category-heading"><SquareTerminal size={18} /><span>{t('app.localTerminal')}</span><small>{localTargets.length}</small></header><div className="local-target-list">{localTargets.map(renderTarget)}</div></section>
+    <details className="pane-launcher-category">
+      <summary><Server size={18} /><span>{t('app.overSsh')}</span><small>{sshTargets.length}</small><ChevronRight className="pane-category-chevron" size={15} /></summary>
+      <div className="pane-category-actions"><button type="button" className="text-button" onClick={onManageConnections}>{t('app.manageSshTargets')}</button></div>
+      <div className="local-target-list">{sshTargets.map(renderTarget)}{sshTargets.length === 0 && !loading && <button type="button" className="empty-target" onClick={onManageConnections}><span><strong>{t('app.noSshTargets')}</strong><small>{t('app.addSshTargetToUse')}</small></span><ChevronRight size={16} /></button>}</div>
+    </details>
+    <details className="pane-launcher-category">
+      <summary><DatabaseIcon size={18} /><span>{t('database.connectionList')}</span><small>{databaseProfiles.length}</small><ChevronRight className="pane-category-chevron" size={15} /></summary>
+      <div className="pane-category-actions"><button type="button" className="text-button" onClick={onManageDatabases}>{t('database.manageConnections')}</button></div>
+      {databaseLoading && <div className="pane-target-loading">{t('database.loadingConnections')}</div>}
+      {databaseError && <div className="pane-target-loading error-text" role="alert">{databaseError}</div>}
+      <div className="local-target-list">
+        {databaseProfiles.map((profile) => <button key={profile.id} type="button" onClick={() => onCreateDatabase(profile, paneTitle.trim())}><span><strong>{profile.name}</strong><small>{profile.driver === 'sqlite' ? 'SQLite' : profile.driver === 'mysql' ? 'MySQL / MariaDB' : 'PostgreSQL'} · {profile.host}{profile.driver !== 'sqlite' ? `:${profile.port}` : ''}</small></span><ChevronRight size={16} /></button>)}
+        {!databaseLoading && !databaseError && databaseProfiles.length === 0 && <button type="button" className="empty-target" onClick={onManageDatabases}><span><strong>{t('database.noConnections')}</strong><small>{t('database.newConnection')}</small></span><ChevronRight size={16} /></button>}
+      </div>
+    </details>
   </div></Modal>
 }
 
@@ -2956,6 +2980,7 @@ function PaneNameDialog({ pane, onClose, onSave }: { pane: WorkspaceTab; onClose
 function BookmarkDialog({ bookmark, connections, groups, onClose, onSaved, onError }: { bookmark?: Bookmark; connections: Bookmark[]; groups: string[]; onClose(): void; onSaved(): void; onError(message: string): void }): React.JSX.Element {
   const { t } = useI18n()
   const [form, setForm] = useState<BookmarkInput>(bookmark ? { name: bookmark.name, host: bookmark.host, port: bookmark.port, username: bookmark.username, authType: bookmark.authType, privateKeyPath: bookmark.privateKeyPath, jumpBookmarkId: bookmark.jumpBookmarkId, groupName: bookmark.groupName, favorite: bookmark.favorite, keepaliveEnabled: bookmark.keepaliveEnabled, keepaliveIntervalSeconds: bookmark.keepaliveIntervalSeconds, keepaliveCountMax: bookmark.keepaliveCountMax, note: bookmark.note } : emptyBookmark)
+  const [keyPicker, setKeyPicker] = useState(false)
   const set = <K extends keyof BookmarkInput>(key: K, value: BookmarkInput[K]): void => setForm((current) => ({ ...current, [key]: value }))
   const jumpCandidates = connections.filter((item) => item.id !== bookmark?.id && !item.jumpBookmarkId)
   return <Modal title={bookmark ? t('common.editConnection') : t('common.newConnection')} onClose={onClose}><form className="form-grid" onSubmit={async (event) => { event.preventDefault(); try { await window.api.bookmarks.save({ ...form, id: bookmark?.id }); onSaved() } catch (error) { onError(errorMessage(error)) } }}>
@@ -2964,13 +2989,14 @@ function BookmarkDialog({ bookmark, connections, groups, onClose, onSaved, onErr
     <div className="form-row"><label>{t('app.hostIpOrDomain')}<input required value={form.host} onChange={(event) => set('host', event.target.value)} placeholder="192.168.1.10" /></label><label className="port-field">{t('app.port')}<input type="number" min="1" max="65535" value={form.port} onChange={(event) => set('port', Number(event.target.value))} /></label></div>
     <label>{t('app.username')}<input required value={form.username} onChange={(event) => set('username', event.target.value)} placeholder="root" /></label>
     <label>{t('app.authentication')}<select value={form.authType} onChange={(event) => set('authType', event.target.value as BookmarkInput['authType'])}><option value="password">{t('app.password')}</option><option value="privateKey">{t('common.privateKey')}</option><option value="agent">SSH Agent</option></select></label>
-    {form.authType === 'privateKey' && <label>{t('app.privateKeyFile')}<div className="input-button"><input readOnly value={form.privateKeyPath} placeholder={t('app.chooseAnOpensshPrivateKey')} /><button type="button" className="secondary-button" onClick={async () => { const path = await window.api.files.choosePrivateKey(); if (path) set('privateKeyPath', path) }}>{t('common.choose')}</button></div></label>}
+    {form.authType === 'privateKey' && <label>{t('app.privateKeyFile')}<div className="input-button"><input readOnly value={form.privateKeyPath} placeholder={t('app.chooseAnOpensshPrivateKey')} /><button type="button" className="secondary-button" onClick={() => setKeyPicker(true)}>{t('common.choose')}</button></div></label>}
     <label>{t('app.route')}<select value={form.jumpBookmarkId} onChange={(event) => set('jumpBookmarkId', event.target.value)}><option value="">{t('app.direct')}</option>{jumpCandidates.map((item) => <option key={item.id} value={item.id}>{t('app.viaValueValueValue', { value0: item.name, value1: item.username, value2: item.host })}</option>)}</select></label>
     <label className="check-label"><input type="checkbox" checked={form.keepaliveEnabled} onChange={(event) => set('keepaliveEnabled', event.target.checked)} />{t('app.keepTheSshSessionAlive')}</label>
     {form.keepaliveEnabled && <div className="form-row"><label>{t('app.keepaliveIntervalSeconds')}<input type="number" min="5" max="300" value={form.keepaliveIntervalSeconds} onChange={(event) => set('keepaliveIntervalSeconds', Number(event.target.value))} /></label><label>{t('app.maximumMissedResponses')}<input type="number" min="1" max="10" value={form.keepaliveCountMax} onChange={(event) => set('keepaliveCountMax', Number(event.target.value))} /></label></div>}
     <label>{t('app.notes')}<textarea rows={3} value={form.note} onChange={(event) => set('note', event.target.value)} placeholder={t('common.optional')} /></label>
     {bookmark?.hasSavedCredential && <button type="button" className="text-button danger" onClick={async () => { await window.api.bookmarks.forgetCredential(bookmark.id); onSaved() }}>{t('app.clearSavedCredentials')}</button>}
     <div className="dialog-actions"><button type="button" className="secondary-button" onClick={onClose}>{t('common.cancel')}</button><button className="primary-button" type="submit">{t('common.save')}</button></div>
+    {keyPicker && <FileDialog mode="open" title={t('app.privateKeyFile')} initialDirectory={/[\\/]/.test(form.privateKeyPath) ? form.privateKeyPath.replace(/[\\/][^\\/]*$/, '') || '/' : undefined} onCancel={() => setKeyPicker(false)} onConfirm={(path) => { setKeyPicker(false); set('privateKeyPath', path) }} />}
   </form></Modal>
 }
 
@@ -3021,9 +3047,10 @@ function Modal({ title, onClose, children, wide = false, raised = false, classNa
 
 function ConfirmationDialog({ confirmation, onDecision }: { confirmation: ConfirmationOptions; onDecision(accepted: boolean): void }): React.JSX.Element {
   const { t } = useI18n()
+  const { grantLabel, onGrant } = confirmation
   return <Modal title={confirmation.title} onClose={() => onDecision(false)} raised className="secondary-confirm-dialog"><div className={`confirmation-dialog ${confirmation.kind}`}>
     <div className="confirmation-heading">{confirmation.kind === 'danger' ? <Trash2 size={22} /> : <ShieldAlert size={22} />}<div><strong>{confirmation.message}</strong>{confirmation.detail && <span>{confirmation.detail}</span>}</div></div>
-    <div className="dialog-actions"><button type="button" autoFocus className="secondary-button" onClick={() => onDecision(false)}>{t('common.cancel')}</button><button type="button" className={confirmation.kind === 'danger' ? 'danger-button' : 'primary-button'} onClick={() => onDecision(true)}>{confirmation.kind === 'danger' ? <Trash2 size={15} /> : <Rocket size={15} />}{confirmation.confirmLabel}</button></div>
+    <div className="dialog-actions"><button type="button" autoFocus className="secondary-button" onClick={() => onDecision(false)}>{t('common.cancel')}</button>{grantLabel && <button type="button" className="secondary-button" onClick={() => { onGrant?.(); onDecision(true) }}>{grantLabel}</button>}<button type="button" className={confirmation.kind === 'danger' ? 'danger-button' : 'primary-button'} onClick={() => onDecision(true)}>{confirmation.kind === 'danger' ? <Trash2 size={15} /> : <Rocket size={15} />}{confirmation.confirmLabel}</button></div>
   </div></Modal>
 }
 

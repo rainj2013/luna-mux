@@ -33,6 +33,8 @@ pub enum ControlResourceKind {
     Application,
     Settings,
     ConnectionProfile,
+    DatabaseProfile,
+    DatabaseRuntime,
     MuxSession,
     Pane,
     TerminalTarget,

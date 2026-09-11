@@ -34,6 +34,8 @@ use crate::{
     },
     control_service::{self, InProcessControlService, LunaControlService},
     database::Database,
+    database_pane_ui::{DatabasePaneUiBridge, PaneUiAction},
+    database_runtime::{DatabaseConnectionConfig, DatabaseExportProgressSink, DatabaseRuntimeManager, DatabaseRuntimeSummary, DatabaseQueryResult, DatabaseSqlExportProgress},
     doctor::{self, AgentCheckReport, DoctorManagedAgent, DoctorRuntimeInput},
     local_pty_backend::InProcessLocalPtyTerminalBackend,
     luna_mcp::{LunaMcpService, MCP_AUTHORIZATION_ENV},
@@ -75,12 +77,261 @@ pub struct AppState {
     pub transfers: Arc<TransferManager>,
     pub tunnels: Arc<TunnelManager>,
     pub browser_runtimes: Arc<BrowserRuntimeManager>,
+    pub database_runtimes: Arc<DatabaseRuntimeManager>,
+    pub database_pane_ui: Arc<DatabasePaneUiBridge>,
     pub agent_notification_focus: Arc<Mutex<AgentNotificationFocus>>,
     pub ai_diagnostics: ai::AiDiagnostics,
     pub allowed_imports: Mutex<HashSet<PathBuf>>,
     pub pending_archive_imports: Mutex<HashMap<String, BookmarkArchive>>,
     pub pending_luna_remote_imports: Mutex<HashMap<String, LunaRemoteSnapshot>>,
     pub exit_cleanup_started: AtomicBool,
+}
+
+// Tauri synchronous commands run on the UI thread. Never wait for database I/O there.
+async fn database_worker<T: Send + 'static>(operation: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(operation).await
+        .map_err(|_| "数据库后台任务异常终止".to_string())?
+}
+
+fn export_progress_sink(app: AppHandle, operation_id: String) -> DatabaseExportProgressSink {
+    Arc::new(move |current, total, table| {
+        let _ = app.emit("database-export:progress", DatabaseSqlExportProgress {
+            operation_id: operation_id.clone(),
+            current,
+            total,
+            table: table.map(str::to_owned),
+        });
+    })
+}
+
+fn resolve_database_password(db: &Database, config: &mut DatabaseConnectionConfig) -> Result<(), String> {
+    if config.password.is_some() || matches!(config.driver, crate::database_runtime::DatabaseDriver::Sqlite) { return Ok(()); }
+    let Some(id) = config.profile_id.as_deref() else { return Ok(()); };
+    let profile = db.list_database_profiles()?.into_iter().find(|profile| profile.id == id)
+        .ok_or_else(|| "数据库连接不存在".to_string())?;
+    let driver = match config.driver {
+        crate::database_runtime::DatabaseDriver::Postgres => DatabaseDriver::Postgresql,
+        _ => DatabaseDriver::Mysql,
+    };
+    let default_port = if driver == DatabaseDriver::Postgresql { 5432 } else { 3306 };
+    // Never send a saved secret to an edited endpoint or through a downgraded TLS setting.
+    if profile.driver != driver || Some(profile.host.as_str()) != config.host.as_deref()
+        || profile.port != config.port.unwrap_or(default_port)
+        || profile.username != config.username.as_deref().unwrap_or_default()
+        || profile.database_name != config.database.as_deref().unwrap_or_default()
+        || profile.ssl_enabled != config.ssl_enabled {
+        return Err("连接设置已变更，请在表单中重新输入密码".into());
+    }
+    if profile.has_saved_credential { config.password = db.get_database_credential(id); }
+    Ok(())
+}
+
+#[cfg(test)]
+mod database_command_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn database_worker_does_not_run_on_the_calling_thread() {
+        let caller = std::thread::current().id();
+        let worker = database_worker(move || Ok(std::thread::current().id())).await.unwrap();
+        assert_ne!(caller, worker);
+    }
+
+    #[test]
+    fn saved_password_resolution_checks_the_destination_and_explicit_empty_password() {
+        let path = std::env::temp_dir().join(format!("luna-db-command-{}.sqlite", Uuid::new_v4()));
+        let db = Database::open(&path, "luna-mux-synthetic-test-no-credentials").unwrap();
+        let profile = db.save_database_profile(serde_json::from_value(json!({
+            "name": "fixture", "driver": "mysql", "host": "127.0.0.1", "port": 3306,
+            "username": "fixture", "databaseName": "demo", "sslEnabled": true
+        })).unwrap()).unwrap();
+        let original = json!({"profileId": profile.id, "driver": "mysql", "host": "127.0.0.1", "port": 3306,
+            "username": "fixture", "database": "demo", "sslEnabled": true});
+        let mut matching: DatabaseConnectionConfig = serde_json::from_value(original.clone()).unwrap();
+        resolve_database_password(&db, &mut matching).unwrap();
+        assert!(matching.password.is_none()); // No credential reference: never consult the OS store.
+        for (field, value) in [("host", json!("192.0.2.1")), ("port", json!(3307)),
+            ("username", json!("different")), ("database", json!("other")),
+            ("sslEnabled", json!(false)), ("driver", json!("postgresql"))] {
+            let mut changed = original.clone(); changed[field] = value;
+            let mut config: DatabaseConnectionConfig = serde_json::from_value(changed.clone()).unwrap();
+            assert!(resolve_database_password(&db, &mut config).is_err(), "must reject changed {field}");
+            changed["password"] = json!("");
+            let mut explicit: DatabaseConnectionConfig = serde_json::from_value(changed).unwrap();
+            resolve_database_password(&db, &mut explicit).unwrap();
+            assert_eq!(explicit.password.as_deref(), Some(""));
+        }
+        let mut missing = matching; missing.profile_id = Some("missing".into());
+        assert!(resolve_database_password(&db, &mut missing).is_err());
+        drop(db); let _ = std::fs::remove_file(path);
+    }
+}
+
+#[tauri::command]
+pub fn database_profiles_list(state: State<AppState>) -> Result<Vec<DatabaseProfile>, String> { state.db.list_database_profiles() }
+
+#[tauri::command]
+pub fn database_profiles_save(state: State<AppState>, input: DatabaseProfileInput) -> Result<DatabaseProfile, String> { state.db.save_database_profile(input) }
+
+#[tauri::command]
+pub fn database_profiles_remove(state: State<AppState>, id: String) -> Result<(), String> { state.db.remove_database_profile(&id) }
+
+#[tauri::command]
+pub fn database_profiles_reorder(state: State<AppState>, ids: Vec<String>) -> Result<Vec<DatabaseProfile>, String> { state.db.reorder_database_profiles(&ids) }
+
+#[tauri::command]
+pub fn database_profiles_move_to_group(state: State<AppState>, id: String, group: String) -> Result<Vec<DatabaseProfile>, String> { state.db.move_database_profile_to_group(&id, &group) }
+#[tauri::command]
+pub async fn database_profiles_save_credential(state: State<'_, AppState>, id: String, password: String) -> Result<(), String> {
+    let db = state.db.clone();
+    database_worker(move || db.save_database_credential(&id, &password)).await
+}
+#[tauri::command]
+pub async fn database_profiles_forget_credential(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    let db = state.db.clone();
+    database_worker(move || db.forget_database_credential(&id)).await
+}
+
+#[tauri::command]
+pub fn database_pane_ui_mount(state: State<AppState>, pane_id: String, mount_id: String, mounted: bool) -> Result<(), String> {
+    let pane = state.db.list_mux_panes(None)?.into_iter().find(|pane| pane.id == pane_id).ok_or_else(|| "Mux Pane 不存在".to_string())?;
+    if pane.kind != MuxPaneKind::Database { return Err("目标 Pane 不是数据库窗格".into()); }
+    state.database_pane_ui.mount(&pane_id, &mount_id, mounted)
+}
+
+#[tauri::command]
+pub fn database_pane_ui_respond(state: State<AppState>, request_id: String, pane_id: String, mount_id: String, result: serde_json::Value) -> Result<(), String> {
+    let result = if let Some(error) = result.get("error").and_then(|value| value.as_str()) { Err(error.to_string()) } else { Ok(result.get("value").cloned().unwrap_or(result)) };
+    state.database_pane_ui.respond(&request_id, &pane_id, &mount_id, result)
+}
+
+#[tauri::command]
+pub async fn database_pane_ui_request(app: AppHandle, state: State<'_, AppState>, pane_id: String, action: PaneUiAction) -> Result<serde_json::Value, String> {
+    let pane = state.db.list_mux_panes(None)?.into_iter().find(|pane| pane.id == pane_id).ok_or_else(|| "Mux Pane 不存在".to_string())?;
+    if pane.kind != MuxPaneKind::Database { return Err("目标 Pane 不是数据库窗格".into()); }
+    state.database_pane_ui.request(&pane_id, action, |request| app.emit("database-pane-ui:request", request).map_err(|e| e.to_string())).await
+}
+
+#[tauri::command]
+pub async fn database_runtimes_list(state: State<'_, AppState>) -> Result<Vec<DatabaseRuntimeSummary>, String> {
+    let manager = state.database_runtimes.clone();
+    database_worker(move || { manager.list() }).await
+}
+
+#[tauri::command]
+pub async fn database_runtime_connect(state: State<'_, AppState>, mut config: DatabaseConnectionConfig) -> Result<DatabaseRuntimeSummary, String> {
+    let manager = state.database_runtimes.clone();
+    let db = state.db.clone();
+    database_worker(move || { resolve_database_password(&db, &mut config)?;
+        manager.connect(config) }).await
+}
+
+#[tauri::command]
+pub async fn database_runtime_disconnect(state: State<'_, AppState>, runtime_id: String) -> Result<(), String> {
+    let manager = state.database_runtimes.clone();
+    database_worker(move || { manager.disconnect(&runtime_id) }).await
+}
+
+#[tauri::command]
+pub async fn database_runtime_execute(state: State<'_, AppState>, runtime_id: String, sql: String, max_rows: Option<usize>, page_offset: Option<usize>) -> Result<DatabaseQueryResult, String> {
+    let manager = state.database_runtimes.clone();
+    database_worker(move || { if sql.trim().is_empty() { return Err("SQL 不能为空".into()); }
+    let page_size = max_rows.unwrap_or(500);
+    if let Some(offset) = page_offset { manager.execute_page(&runtime_id, &sql, offset, page_size) } else { manager.execute(&runtime_id, &sql, page_size) } }).await
+}
+
+#[tauri::command]
+pub async fn database_runtime_list_tables(state: State<'_, AppState>, runtime_id: String) -> Result<Vec<String>, String> {
+    let manager = state.database_runtimes.clone();
+    database_worker(move || { manager.list_tables(&runtime_id) }).await
+}
+
+#[tauri::command]
+pub async fn database_runtime_export_csv(state: State<'_, AppState>, runtime_id: String, sql: String) -> Result<String, String> {
+    let manager = state.database_runtimes.clone();
+    database_worker(move || { manager.export_csv(&runtime_id, &sql) }).await
+}
+
+#[tauri::command]
+pub async fn database_runtime_export_json(state: State<'_, AppState>, runtime_id: String, sql: String) -> Result<String, String> {
+    let manager = state.database_runtimes.clone();
+    database_worker(move || { manager.export_json(&runtime_id, &sql) }).await
+}
+
+#[tauri::command]
+pub async fn database_runtime_write_query_sql(app: AppHandle, operation_id: Option<String>, path: String, sql: String, rows: u64) -> Result<crate::database_runtime::DatabaseSqlExport, String> {
+    let progress = operation_id.map(|id| export_progress_sink(app, id));
+    database_worker(move || crate::database_runtime::write_query_sql_file_with_progress(Path::new(&path), &sql, rows, progress)).await
+}
+
+#[tauri::command]
+pub async fn database_runtime_describe_table(state: State<'_, AppState>, runtime_id: String, table: String) -> Result<Vec<crate::database_runtime::DatabaseColumnInfo>, String> {
+    let manager = state.database_runtimes.clone();
+    database_worker(move || { manager.describe_table(&runtime_id, &table) }).await
+}
+
+#[tauri::command]
+pub async fn database_runtime_export_sql(app: AppHandle, state: State<'_, AppState>, runtime_id: String, operation_id: Option<String>, path: String, table: Option<String>, schema_only: bool) -> Result<crate::database_runtime::DatabaseSqlExport, String> {
+    let manager = state.database_runtimes.clone();
+    let progress = operation_id.map(|id| export_progress_sink(app, id));
+    database_worker(move || manager.export_sql_with_progress(&runtime_id, Path::new(&path), table.as_deref(), schema_only, progress)).await
+}
+#[tauri::command]
+pub async fn database_runtime_import_sql_file(state: State<'_, AppState>, runtime_id: String, path: String) -> Result<(), String> {
+    let manager = state.database_runtimes.clone();
+    database_worker(move || { manager.import_sql_file(&runtime_id, Path::new(&path)) }).await
+}
+#[tauri::command]
+pub async fn database_runtime_import_rows(state: State<'_, AppState>, runtime_id: String, table: String, columns: Vec<String>, rows: Vec<Vec<serde_json::Value>>) -> Result<u64, String> {
+    let manager = state.database_runtimes.clone();
+    database_worker(move || { manager.import_rows(&runtime_id, &table, columns, rows) }).await
+}
+
+#[tauri::command]
+pub async fn database_connection_test(state: State<'_, AppState>, mut config: DatabaseConnectionConfig) -> Result<(), String> {
+    let db = state.db.clone();
+    database_worker(move || {
+        resolve_database_password(&db, &mut config)?;
+        crate::database_runtime::test_connection(config)
+    }).await
+}
+
+#[tauri::command]
+pub async fn database_protocol_connect(mut config: DatabaseConnectionConfig, password: Option<String>) -> Result<(), String> {
+    if password.is_some() { config.password = password; }
+    database_worker(move || crate::database_runtime::test_connection(config)).await
+}
+
+#[tauri::command]
+pub async fn database_runtime_add_column(state: State<'_, AppState>, runtime_id: String, table: String, column: String, data_type: String) -> Result<u64, String> {
+    let manager = state.database_runtimes.clone();
+    database_worker(move || { manager.add_column(&runtime_id, &table, &column, &data_type) }).await
+}
+
+#[tauri::command]
+pub async fn database_runtime_drop_column(state: State<'_, AppState>, runtime_id: String, table: String, column: String) -> Result<u64, String> {
+    let manager = state.database_runtimes.clone();
+    database_worker(move || { manager.drop_column(&runtime_id, &table, &column) }).await
+}
+#[tauri::command]
+pub async fn database_runtime_list_indexes(state: State<'_, AppState>, runtime_id: String, table: String) -> Result<Vec<crate::database_runtime::DatabaseIndexInfo>, String> {
+    let manager = state.database_runtimes.clone();
+    database_worker(move || { manager.list_indexes(&runtime_id, &table) }).await
+}
+#[tauri::command]
+pub async fn database_runtime_list_foreign_keys(state: State<'_, AppState>, runtime_id: String, table: String) -> Result<Vec<crate::database_runtime::DatabaseForeignKeyInfo>, String> {
+    let manager = state.database_runtimes.clone();
+    database_worker(move || { manager.list_foreign_keys(&runtime_id, &table) }).await
+}
+#[tauri::command]
+pub async fn database_runtime_create_index(state: State<'_, AppState>, runtime_id: String, table: String, index: String, column: String, unique: bool) -> Result<u64, String> {
+    let manager = state.database_runtimes.clone();
+    database_worker(move || { manager.create_index(&runtime_id, &table, &index, &column, unique) }).await
+}
+#[tauri::command]
+pub async fn database_runtime_drop_index(state: State<'_, AppState>, runtime_id: String, index: String) -> Result<u64, String> {
+    let manager = state.database_runtimes.clone();
+    database_worker(move || { manager.drop_index(&runtime_id, &index) }).await
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -2141,28 +2392,6 @@ pub fn files_set_favorites(
     state
         .db
         .set_setting(&format!("fileFavorites:{bookmark_id}"), &value)
-}
-#[tauri::command]
-pub async fn files_choose_local_directory(app: AppHandle) -> Option<String> {
-    let (sender, receiver) = tokio::sync::oneshot::channel();
-    app.dialog()
-        .file()
-        .set_title("选择本地部署目录")
-        .pick_folder(move |path| {
-            let _ = sender.send(path);
-        });
-    selected_path(receiver.await.ok().flatten())
-}
-#[tauri::command]
-pub async fn files_choose_private_key(app: AppHandle) -> Option<String> {
-    let (sender, receiver) = tokio::sync::oneshot::channel();
-    app.dialog()
-        .file()
-        .set_title("选择 SSH 私钥")
-        .pick_file(move |path| {
-            let _ = sender.send(path);
-        });
-    selected_path(receiver.await.ok().flatten())
 }
 
 #[tauri::command]

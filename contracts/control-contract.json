@@ -18,7 +18,9 @@
     "agent",
     "browserRuntime",
     "transfer",
-    "tunnel"
+    "tunnel",
+    "databaseProfile",
+    "databaseRuntime"
   ],
   "envelope": {
     "request": [
@@ -99,6 +101,42 @@
       "access": "read",
       "resourceKind": "connectionProfile",
       "mutating": false,
+      "supportsIdempotency": true,
+      "approval": "none"
+    },
+    {
+      "name": "databases.list",
+      "version": 1,
+      "access": "read",
+      "resourceKind": "databaseProfile",
+      "mutating": false,
+      "supportsIdempotency": true,
+      "approval": "none"
+    },
+    {
+      "name": "database.pane.snapshot",
+      "version": 1,
+      "access": "read",
+      "resourceKind": "pane",
+      "mutating": false,
+      "supportsIdempotency": true,
+      "approval": "none"
+    },
+    {
+      "name": "database.pane.fill",
+      "version": 1,
+      "access": "write",
+      "resourceKind": "pane",
+      "mutating": true,
+      "supportsIdempotency": true,
+      "approval": "none"
+    },
+    {
+      "name": "database.pane.click",
+      "version": 1,
+      "access": "write",
+      "resourceKind": "pane",
+      "mutating": true,
       "supportsIdempotency": true,
       "approval": "none"
     },

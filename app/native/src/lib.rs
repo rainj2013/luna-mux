@@ -15,6 +15,8 @@ mod control_approval;
 mod control_contract;
 mod control_service;
 mod database;
+mod database_pane_ui;
+mod database_runtime;
 mod desktop;
 mod doctor;
 mod legacy_agent_hook_cleanup;
@@ -150,6 +152,7 @@ pub fn run() {
                 product::CREDENTIAL_SERVICE,
             )?);
             let browser_runtimes = BrowserRuntimeManager::new(app.handle().clone(), &data_dir);
+            let database_runtimes = Arc::new(database_runtime::DatabaseRuntimeManager::new());
             let selected_theme = database.get_setting("uiTheme", models::UiTheme::default());
             let window = app
                 .get_webview_window("main")
@@ -237,7 +240,7 @@ pub fn run() {
             let control = InProcessControlService::new(
                 database.clone(),
                 terminal_backend.clone(),
-                control_side_effects,
+                control_side_effects.clone(),
                 agent_hooks.clone(),
             );
             let control_adapter = AuthenticatedControlAdapter::new(control.clone());
@@ -412,6 +415,8 @@ pub fn run() {
                 transfers,
                 tunnels,
                 browser_runtimes,
+                database_runtimes,
+                database_pane_ui: control_side_effects.database_pane_ui(),
                 agent_notification_focus,
                 ai_diagnostics: ai::AiDiagnostics::default(),
                 allowed_imports: Mutex::new(HashSet::new()),
@@ -435,6 +440,36 @@ pub fn run() {
             browser_runtime_resize,
             browser_runtime_mouse,
             browser_runtime_key,
+            database_profiles_list,
+            database_profiles_save,
+            database_profiles_remove,
+            database_profiles_reorder,
+            database_profiles_move_to_group,
+            database_profiles_save_credential,
+            database_profiles_forget_credential,
+            database_pane_ui_mount,
+            database_pane_ui_respond,
+            database_pane_ui_request,
+            database_runtimes_list,
+            database_runtime_connect,
+            database_runtime_disconnect,
+            database_runtime_execute,
+            database_runtime_list_tables,
+            database_runtime_export_csv,
+            database_runtime_export_json,
+            database_runtime_write_query_sql,
+            database_runtime_describe_table,
+            database_runtime_export_sql,
+            database_runtime_import_sql_file,
+            database_runtime_import_rows,
+            database_connection_test,
+            database_protocol_connect,
+            database_runtime_add_column,
+            database_runtime_drop_column,
+            database_runtime_list_indexes,
+            database_runtime_list_foreign_keys,
+            database_runtime_create_index,
+            database_runtime_drop_index,
             bookmarks_list,
             mux_sessions_list,
             mux_sessions_save,
@@ -504,8 +539,6 @@ pub fn run() {
             files_preview,
             files_get_favorites,
             files_set_favorites,
-            files_choose_local_directory,
-            files_choose_private_key,
             transfers_list,
             transfers_enqueue,
             transfers_cancel,
@@ -851,6 +884,7 @@ fn begin_exit_cleanup(app: &tauri::AppHandle, code: i32) {
     let tunnels = state.tunnels.clone();
     let luna_mcp = state.luna_mcp.clone();
     let browser_runtimes = state.browser_runtimes.clone();
+    let database_runtimes = state.database_runtimes.clone();
     let ids = sessions
         .list()
         .into_iter()
@@ -864,6 +898,7 @@ fn begin_exit_cleanup(app: &tauri::AppHandle, code: i32) {
                 tunnels.stop_session(&id).await;
             }
             sessions.disconnect_all().await;
+            database_runtimes.disconnect_all();
             local_pty_backend.close_all().await;
         };
         let cleanup = async {
