@@ -373,8 +373,9 @@ export type DatabaseRuntimeStatus = 'connecting' | 'ready' | 'disconnected' | 'e
 export interface DatabaseRuntimeSummary { id: string; driver: string; status: DatabaseRuntimeStatus; error?: string | null }
 export interface DatabaseConnectionConfig { driver: DatabaseDriver; profileId?: string; host?: string; port?: number; database?: string; username?: string; password?: string; readOnly?: boolean; sslEnabled?: boolean; sqlitePath?: string }
 export interface DatabaseQueryResult { columns: string[]; rows: Array<Array<unknown>>; affectedRows: number; truncated: boolean; hasMore?: boolean }
-// Result of a native dump written straight to a file; `bytes` is the size of that file.
+// Result of an SQL export written straight to a file; `bytes` is the size of that file.
 export interface DatabaseSqlExport { tables: number; rows: number; bytes: number }
+export interface DatabaseSqlExportProgress { operationId: string; current: number; total: number; table?: string | null }
 export type DatabasePaneUiAction = { action: 'snapshot' } | { action: 'fill'; ref: string; value: string } | { action: 'click'; ref: string }
 export interface DatabasePaneUiRequest { requestId: string; paneId: string; mountId: string; action: DatabasePaneUiAction }
 export interface DatabaseColumnInfo { name: string; dataType: string; notNull: boolean; primaryKey: boolean; defaultValue?: string | null; comment?: string | null }
@@ -763,7 +764,8 @@ export interface AppApi {
     execute(runtimeId: string, sql: string, maxRows?: number, pageOffset?: number): Promise<DatabaseQueryResult>
     listTables(runtimeId: string): Promise<string[]>
     describeTable(runtimeId: string, table: string): Promise<DatabaseColumnInfo[]>
-    exportSql(runtimeId: string, path: string, table?: string): Promise<DatabaseSqlExport>
+    exportSql(runtimeId: string, path: string, table: string | undefined, schemaOnly: boolean, onProgress?: (progress: DatabaseSqlExportProgress) => void): Promise<DatabaseSqlExport>
+    writeQuerySql(path: string, sql: string, rows: number, onProgress?: (progress: DatabaseSqlExportProgress) => void): Promise<DatabaseSqlExport>
     importSqlFile(runtimeId: string, path: string): Promise<void>
     addColumn(runtimeId: string, table: string, column: string, dataType: string): Promise<number>
     dropColumn(runtimeId: string, table: string, column: string): Promise<number>

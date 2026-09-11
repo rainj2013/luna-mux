@@ -1,32 +1,38 @@
 import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { Check, ChevronDown, ChevronLeft, ChevronRight, ClipboardPaste, Copy, Database, Download, Edit3, Eye, EyeOff, FileCode2, Folder, GripVertical, HardDrive, KeyRound, LoaderCircle, Lock, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Play, Plus, Power, RefreshCw, Search, Server, Settings2, ShieldCheck, Table2, TextSelect, Trash2, Upload, X } from 'lucide-react'
-import { DatabaseMenu, DatabaseResultGrid, downloadDatabaseFile, downloadDatabaseResult } from './DatabaseUi'
+import { open as openNativeDialog, type DialogFilter } from '@tauri-apps/plugin-dialog'
+import { DatabaseMenu, DatabaseResultGrid } from './DatabaseUi'
 import type { DatabaseMenuItem, DatabaseResultSelection } from './DatabaseUi'
-import { FileDialog } from './FileDialog'
-import type { FileDialogFilter, FileDialogOptions } from './FileDialog'
-import { databaseInsertSql } from '../database-insert-sql'
+import { DatabaseFileDialog } from './DatabaseFileDialog'
+import type { DatabaseFileDialogCompletion, DatabaseFileDialogFilter, DatabaseFileDialogProps } from './DatabaseFileDialog'
+import { databaseInsertSql, queryResultTarget } from '../database-insert-sql'
+import { fileDialogJoin } from '../file-dialog-path'
 import { databaseWriteKinds } from '../database-write-kind'
 import type { DatabaseWriteKind, DatabaseWriteKinds } from '../database-write-kind'
 import { pasteAtCaret } from '../database-field-edit'
 import { useI18n } from '../i18n'
 import { databaseSqlCompletionContext, databaseSqlCompletionItems } from '../database-sql-completion'
 import type { DatabaseSqlCompletionItem } from '../database-sql-completion'
-import type { DatabaseColumnInfo, DatabaseDriver, DatabaseForeignKeyInfo, DatabaseIndexInfo, DatabasePaneUiRequest, DatabaseProfile, DatabaseQueryResult, SessionStatus } from '../types'
+import type { DatabaseColumnInfo, DatabaseDriver, DatabaseForeignKeyInfo, DatabaseIndexInfo, DatabasePaneUiRequest, DatabaseProfile, DatabaseQueryResult, DatabaseSqlExportProgress, SessionStatus } from '../types'
 
 export interface DatabasePaneHandle { confirmClose(): Promise<boolean>; reconnect(): Promise<void> }
 const DATABASE_PAGE_SIZES = [50, 100, 200] as const
 // Floating notices (and the connection-test result) clear themselves after this long.
 const DATABASE_NOTICE_MS = 5000
 
-// Filter lists for the in-app file dialog; import and export stay in sync by sharing them.
-const SQL_FILE_FILTERS = (t: ReturnType<typeof useI18n>['t']): FileDialogFilter[] => [
+// Filter lists for file pickers; import and export stay in sync by sharing them.
+const SQL_FILE_FILTERS = (t: ReturnType<typeof useI18n>['t']): DatabaseFileDialogFilter[] => [
   { label: t('fileDialog.sqlFiles'), extensions: ['sql'] },
   { label: t('fileDialog.allFiles'), extensions: [] }
 ]
-const SQLITE_FILE_FILTERS = (t: ReturnType<typeof useI18n>['t']): FileDialogFilter[] => [
+const SQLITE_FILE_FILTERS = (t: ReturnType<typeof useI18n>['t']): DatabaseFileDialogFilter[] => [
   { label: t('fileDialog.sqliteFiles'), extensions: ['db', 'sqlite', 'sqlite3'] },
   { label: t('fileDialog.allFiles'), extensions: [] }
 ]
+
+function nativeDialogFilters(filters: DatabaseFileDialogFilter[]): DialogFilter[] {
+  return filters.filter((filter) => filter.extensions.length > 0).map((filter) => ({ name: filter.label, extensions: filter.extensions }))
+}
 
 // Export/import notices report file sizes, which grow past raw byte counts very quickly.
 function databaseByteSize(bytes: number): string {
@@ -122,7 +128,8 @@ export function DatabasePane({ ref, onConfirm, visible, paneId = '', initialProf
   const [draggedProfile, setDraggedProfile] = useState('')
   const [profileDrop, setProfileDrop] = useState<{ id: string; position: 'before' | 'after' } | null>(null)
   const [menu, setMenu] = useState<{ x: number; y: number; anchor: HTMLElement; items: DatabaseMenuItem[] } | null>(null)
-  const [fileDialog, setFileDialog] = useState<FileDialogOptions | null>(null)
+  const [fileDialog, setFileDialog] = useState<DatabaseFileDialogProps | null>(null)
+  const [permissionsOpen, setPermissionsOpen] = useState(false)
   const [tableResult, setTableResult] = useState<DatabaseQueryResult | null>(null)
   const [tablePage, setTablePage] = useState(0)
   const [tablePageSize, setTablePageSize] = useState(50)
@@ -139,6 +146,7 @@ export function DatabasePane({ ref, onConfirm, visible, paneId = '', initialProf
   const [completionDismissed, setCompletionDismissed] = useState(true)
   const [editorFocused, setEditorFocused] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
+  const permissionsRef = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const editorRef = useRef<HTMLTextAreaElement>(null)
   const dragCleanup = useRef<() => void>(() => {})
@@ -170,6 +178,14 @@ export function DatabasePane({ ref, onConfirm, visible, paneId = '', initialProf
       .catch((e) => { if (!cancelled) setError(String(e)) })
     return () => { cancelled = true }
   }, [visible])
+  useEffect(() => {
+    if (!permissionsOpen) return
+    const closeOutside = (event: PointerEvent): void => { if (!permissionsRef.current?.contains(event.target as Node)) setPermissionsOpen(false) }
+    const closeOnEscape = (event: KeyboardEvent): void => { if (event.key === 'Escape') { event.preventDefault(); setPermissionsOpen(false) } }
+    window.addEventListener('pointerdown', closeOutside)
+    window.addEventListener('keydown', closeOnEscape, true)
+    return () => { window.removeEventListener('pointerdown', closeOutside); window.removeEventListener('keydown', closeOnEscape, true) }
+  }, [permissionsOpen])
   // `nextReadOnly` and `restart` let the permission toggle rebuild a live runtime before
   // React commits the new state, so read-only never applies to a stale closure.
   const connect = async (nextReadOnly = readOnly, restart = false): Promise<void> => {
@@ -219,6 +235,15 @@ export function DatabasePane({ ref, onConfirm, visible, paneId = '', initialProf
   }
   const confirm = (message: string, danger = true): Promise<boolean> => onConfirm({ title: t('database.title'), message, kind: danger ? 'danger' : 'warning', confirmLabel: t('database.continue') })
   const writeGranted = (kind: DatabaseWriteKind): boolean => kind === 'dml' ? writeGrants.dml : writeGrants.ddl
+  const permissionSummary = readOnly
+    ? t('database.permissionsSummaryReadOnly')
+    : writeGrants.dml && writeGrants.ddl
+      ? t('database.permissionsSummaryAllGranted')
+      : writeGrants.dml
+        ? t('database.permissionsSummaryDmlGranted')
+        : writeGrants.ddl
+          ? t('database.permissionsSummaryDdlGranted')
+          : t('database.permissionsSummaryConfirmEach')
   // A granted kind skips the per-statement dialog until the connection ends.
   const approveWrite = async (kind: DatabaseWriteKind, message: string): Promise<boolean> => writeGranted(kind) || await confirm(message)
   // Read-only is a per-connection choice and is exclusive with write grants. MySQL and
@@ -303,39 +328,82 @@ export function DatabasePane({ ref, onConfirm, visible, paneId = '', initialProf
   }
   // The dump happens in the native process and streams straight to the chosen file, so a large
   // database never becomes a JavaScript string and the webview never holds it in memory.
+  const defaultExportPath = async (filename: string): Promise<string> => {
+    const fallback = filename
+    try {
+      const databaseDirectory = driver === 'sqlite' && path.trim()
+        ? await window.api.files.parentLocal(path.trim())
+        : ''
+      const directory = databaseDirectory || await window.api.files.home()
+      return fileDialogJoin(directory, filename)
+    } catch {
+      return fallback
+    }
+  }
   const exportDatabase = (table?: string): void => {
     if (!runtimeId) return
-    setFileDialog({
-      mode: 'save',
-      title: t('database.exportSqlFileTitle'),
-      defaultFileName: `${databaseFileBase(table || activeProfile?.name || 'database')}.sql`,
-      filters: SQL_FILE_FILTERS(t),
-      onCancel: () => setFileDialog(null),
-      onConfirm: (path) => {
-        setFileDialog(null)
-        void runAction(async () => {
-          const summary = await window.api.databaseRuntimes.exportSql(runtimeId, path, table)
+    const defaultFileName = `${databaseFileBase(table || activeProfile?.name || 'database')}.sql`
+    void defaultExportPath(defaultFileName).then((defaultPath) => {
+      if (!mounted.current || !runtimeId) return
+      setFileDialog({
+        mode: 'save',
+        title: t('database.exportSqlFileTitle'),
+        defaultPath,
+        defaultFileName,
+        filters: SQL_FILE_FILTERS(t),
+        showSchemaOnly: true,
+        onCancel: () => setFileDialog(null),
+        onConfirm: async (path, schemaOnly, onProgress): Promise<DatabaseFileDialogCompletion> => {
+          const summary = await window.api.databaseRuntimes.exportSql(runtimeId, path, table, schemaOnly, onProgress)
+          const details = [
+            ...(!table ? [{ label: t('database.exportTables'), value: String(summary.tables) }] : []),
+            { label: t('database.exportRows'), value: String(summary.rows) },
+            { label: t('database.exportSize'), value: databaseByteSize(summary.bytes) },
+            { label: t('database.exportPath'), value: path },
+            ...(schemaOnly ? [{ label: t('database.exportMode'), value: t('database.schemaOnlyExport') }] : [])
+          ]
           showNotice(table
             ? t('database.exportedTable', { table, rows: summary.rows, size: databaseByteSize(summary.bytes), path })
             : t('database.exported', { tables: summary.tables, rows: summary.rows, size: databaseByteSize(summary.bytes), path }))
-        })
-      }
+          return { title: t('database.exportCompleted'), details }
+        }
+      })
     })
   }
-  // Export the snapshot the query produced: CSV/JSON for the result set, and INSERT SQL when a
-  // target table is selected (a join or aggregate has no table to write back to).
-  const exportCsv = async (): Promise<void> => { const value = view === 'overview' ? tableResult : result; if (value?.columns.length) downloadDatabaseResult(value, 'csv') }
-  const exportJson = async (): Promise<void> => { const value = view === 'overview' ? tableResult : result; if (value?.columns.length) downloadDatabaseResult(value, 'json') }
-  const exportResultSql = async (): Promise<void> => {
+  // Export the visible result snapshot as INSERT statements. The target comes from the executed
+  // query when possible, and otherwise uses a neutral name independent of the left table list.
+  const exportResultSql = (): void => {
     const value = view === 'overview' ? tableResult : result
-    const text = value && selectedTable ? databaseInsertSql(selectedTable, value.columns, value.rows, driver) : ''
-    if (text) downloadDatabaseFile(text + '\n', selectedTable + '.sql', 'application/sql')
+    if (!value?.columns.length || !value.rows.length) return
+    const targetTable = queryResultTarget(executedSql || sql)
+    const text = databaseInsertSql(targetTable, value.columns, value.rows, driver)
+    if (!text) return
+    const defaultFileName = `${databaseFileBase(targetTable)}-result.sql`
+    void defaultExportPath(defaultFileName).then((defaultPath) => {
+      if (!mounted.current) return
+      setFileDialog({
+        mode: 'save',
+        title: t('database.exportResultSqlFileTitle'),
+        defaultPath,
+        defaultFileName,
+        filters: SQL_FILE_FILTERS(t),
+        onCancel: () => setFileDialog(null),
+        onConfirm: async (path, _schemaOnly, onProgress): Promise<DatabaseFileDialogCompletion> => {
+          const summary = await window.api.databaseRuntimes.writeQuerySql(path, text, value.rows.length, onProgress)
+          showNotice(t('database.exportedQuery', { rows: summary.rows, size: databaseByteSize(summary.bytes), path }))
+          return {
+            title: t('database.exportQueryCompleted'),
+            details: [
+              { label: t('database.exportRows'), value: String(summary.rows) },
+              { label: t('database.exportSize'), value: databaseByteSize(summary.bytes) },
+              { label: t('database.exportPath'), value: path },
+              { label: t('database.exportTarget'), value: targetTable }
+            ]
+          }
+        }
+      })
+    })
   }
-  const exportMenu = (): DatabaseMenuItem[] => [
-    { label: t('database.exportCsv'), icon: <Download size={14} />, disabled: !(view === 'overview' ? tableResult : result)?.columns.length, action: () => { void runAction(exportCsv) } },
-    { label: t('database.exportJson'), icon: <Download size={14} />, disabled: !(view === 'overview' ? tableResult : result)?.columns.length, action: () => { void runAction(exportJson) } },
-    { label: selectedTable ? t('database.exportSql') : t('database.exportSqlNoTable'), icon: <FileCode2 size={14} />, disabled: !selectedTable || !(view === 'overview' ? tableResult : result)?.columns.length, action: () => { void runAction(exportResultSql) } }
-  ]
   const copyCell = useCallback((value: string): void => { void window.api.system.writeClipboard(value).then(() => showNotice(t('database.copied'))).catch((e) => setError(String(e))) }, [t, showNotice])
   // The grid only knows values, so the INSERT target comes from the selected table and
   // is spelled out in the menu label.
@@ -378,6 +446,14 @@ export function DatabasePane({ ref, onConfirm, visible, paneId = '', initialProf
         })
       }
     })
+  }
+  const chooseSqlitePath = async (): Promise<void> => {
+    try {
+      const selected = await openNativeDialog({ title: t('database.chooseDatabaseFile'), defaultPath: path || undefined, filters: nativeDialogFilters(SQLITE_FILE_FILTERS(t)), multiple: false, directory: false })
+      if (typeof selected === 'string') setPath(selected)
+    } catch (caught) {
+      setError(String(caught))
+    }
   }
   const inspectTable = async (table: string): Promise<void> => {
     if (!runtimeId || !table) return
@@ -478,7 +554,7 @@ export function DatabasePane({ ref, onConfirm, visible, paneId = '', initialProf
   useEffect(() => { if (!paneId || managementOnly) return; void window.api.databasePaneUi.mount(paneId, mountId, true); const stop = window.api.databasePaneUi.onRequest((request: DatabasePaneUiRequest) => { if (request.paneId !== paneId || request.mountId !== mountId) return; void (async () => { try { if (request.action.action === 'snapshot') await window.api.databasePaneUi.respond(request.requestId, paneId, mountId, { value: snapshotRef.current() }); else if (request.action.action === 'fill') { const ref = request.action.ref; const value = request.action.value; if (ref === 'sql') setSql(value); else if (ref === 'selectedTable') { if (actionInFlight.current || connecting.current) throw new Error(t('database.working')); setSelectedTable(value); setTableResult(null); setTablePage(0); setStructureLoaded(''); setColumns([]); setIndexes([]); setForeignKeys([]) } else if (ref === 'name') setName(value); else if (ref === 'path') setPath(value); else if (ref === 'host') setHost(value); else if (ref === 'port') setPort(Number(value)); else if (ref === 'username') setUsername(value); else if (ref === 'databaseName') setDatabaseName(value); else if (ref === 'driver') setDriver(value as DatabaseDriver); else if (ref === 'sslEnabled') setSslEnabled(value === 'true'); else if (ref === 'readOnly') { if (runtimeId) throw new Error(t('database.readOnlyLocked')); await applyReadOnly(value === 'true') } else if (ref === 'newColumnName') setNewColumnName(value); else if (ref === 'newColumnType') setNewColumnType(value); else if (ref === 'newIndexName') setNewIndexName(value); else if (ref === 'newIndexColumn') setNewIndexColumn(value); else throw new Error('该控件不支持填写'); await window.api.databasePaneUi.respond(request.requestId, paneId, mountId, { value: { accepted: true, ref } }) } else { const action = controls.current[request.action.ref]; if (!action) throw new Error('未知或禁用的数据库窗格控件'); const value = await action(); await window.api.databasePaneUi.respond(request.requestId, paneId, mountId, { value: { accepted: true, ref: request.action.ref, result: value ?? null } }) } } catch (e) { await window.api.databasePaneUi.respond(request.requestId, paneId, mountId, { error: String(e) }) } })() }); return () => { stop(); void window.api.databasePaneUi.mount(paneId, mountId, false) } }, [paneId, mountId, managementOnly])
   const selectProfile = (id: string): void => { setPassword(''); setPasswordEdited(false); setPasswordVisible(false); setCredentialSaveFailed(false); setProfileId(id); const p = profiles.find((item) => item.id === id); if (!p) return; setName(p.name); setGroupName(p.groupName); setPath(p.driver === 'sqlite' ? p.host : ''); setDriver(p.driver); setHost(p.driver === 'sqlite' ? '127.0.0.1' : p.host); setPort(p.port || (p.driver === 'postgresql' ? 5432 : 3306)); setUsername(p.username); setDatabaseName(p.databaseName); setSslEnabled(p.sslEnabled) }
   // A write grant belongs to one connection, so it lives until the connection is dropped.
-  const disconnect = async (): Promise<void> => { if (runtimeId) await window.api.databaseRuntimes.disconnect(runtimeId); ownedRuntime.current = ''; setRuntimeId(''); setWriteGrants({ dml: false, ddl: false }); setTables([]); setColumnsByTable({}); setResult(null); setTableResult(null); setTablePage(0); setStructureLoaded(''); setSelectedTable(''); setTableSidebarCollapsed(false); setView('overview'); onConnectionStateChange?.('disconnected') }
+  const disconnect = async (): Promise<void> => { if (runtimeId) await window.api.databaseRuntimes.disconnect(runtimeId); ownedRuntime.current = ''; setRuntimeId(''); setPermissionsOpen(false); setWriteGrants({ dml: false, ddl: false }); setTables([]); setColumnsByTable({}); setResult(null); setTableResult(null); setTablePage(0); setStructureLoaded(''); setSelectedTable(''); setTableSidebarCollapsed(false); setView('overview'); onConnectionStateChange?.('disconnected') }
   const activeProfile = profiles.find((profile) => profile.id === profileId)
   const driverLabels: Record<DatabaseDriver, string> = { sqlite: 'SQLite', mysql: 'MySQL / MariaDB', postgresql: 'PostgreSQL' }
   const validEndpoint = driver === 'sqlite' ? Boolean(path.trim()) : Boolean(host.trim()) && Number.isInteger(port) && port >= 1 && port <= 65535
@@ -694,14 +770,18 @@ export function DatabasePane({ ref, onConfirm, visible, paneId = '', initialProf
   }}>
     {!managementOnly && <header className="database-toolbar">
       <div className="database-toolbar-title"><Database size={15} /><span title={activeProfile?.host}>{activeProfile ? driverLabels[activeProfile.driver] + ' · ' + activeProfile.host : t('database.title')}</span></div>
-      <span className="database-connection-state">{busy ? <LoaderCircle size={12} className="database-spinner" /> : <i className={runtimeId ? 'connected' : ''} />}{busy ? t('database.working') : runtimeId ? t('database.connected') : t('database.disconnected')}</span>
-      <div className="database-grants" role="group" aria-label={t('database.permissions')}><span className="database-grants-label">{t('database.permissions')}</span>
-        <button type="button" className={readOnly ? 'database-grant active' : 'database-grant'} aria-pressed={readOnly} aria-label={t(readOnly ? 'database.readOnlyOn' : 'database.readOnlyOff')} title={t(readOnly ? 'database.readOnlyOn' : 'database.readOnlyOff')} disabled={busy} onClick={() => void runAction(() => applyReadOnly(!readOnly))}><Lock size={13} /><span>{t('database.readOnlyShort')}</span></button>
-        <button type="button" className={writeGrants.dml ? 'database-grant active' : 'database-grant'} aria-pressed={writeGrants.dml} aria-label={t(writeGrants.dml ? 'database.grantDmlActive' : 'database.grantDml')} title={t(writeGrants.dml ? 'database.grantDmlActive' : 'database.grantDml')} disabled={busy} onClick={() => void runAction(() => toggleWriteGrant('dml'))}><ShieldCheck size={13} /><span>{t('database.grantDmlShort')}</span></button>
-        <button type="button" className={writeGrants.ddl ? 'database-grant active' : 'database-grant'} aria-pressed={writeGrants.ddl} aria-label={t(writeGrants.ddl ? 'database.grantDdlActive' : 'database.grantDdl')} title={t(writeGrants.ddl ? 'database.grantDdlActive' : 'database.grantDdl')} disabled={busy} onClick={() => void runAction(() => toggleWriteGrant('ddl'))}><ShieldCheck size={13} /><span>{t('database.grantDdlShort')}</span></button>
-      </div>
       <div className="database-toolbar-actions database-connection-actions">
-        <button className="secondary-button database-labeled-action" title={t('database.manageConnections')} disabled={busy} onClick={onManageConnections}><Settings2 size={14} /><span>{t('database.manageConnections')}</span></button>
+        <button className="icon-button database-manage-connections" aria-label={t('database.manageConnections')} title={t('database.manageConnections')} disabled={busy} onClick={onManageConnections}><Settings2 size={15} /></button>
+        <span className="database-toolbar-divider" aria-hidden="true" />
+        <div ref={permissionsRef} className="database-grants">
+          <button type="button" className={'database-permissions-trigger' + (readOnly || writeGrants.dml || writeGrants.ddl ? ' active' : '')} aria-haspopup="menu" aria-expanded={permissionsOpen} aria-label={t('database.permissions')} title={permissionSummary} disabled={busy} onClick={() => setPermissionsOpen((open) => !open)}><ShieldCheck size={14} /><span>{t('database.permissions')}</span><ChevronDown size={13} /></button>
+          {permissionsOpen && <div className="database-permissions-menu" role="menu" aria-label={t('database.permissions')}>
+            <div className="database-permissions-summary" role="status">{permissionSummary}</div>
+            <button type="button" role="menuitemcheckbox" aria-checked={readOnly} className={readOnly ? 'database-permission-option active' : 'database-permission-option'} aria-label={t(readOnly ? 'database.readOnlyOn' : 'database.readOnlyOff')} title={t(readOnly ? 'database.readOnlyOn' : 'database.readOnlyOff')} disabled={busy} onClick={() => void runAction(() => applyReadOnly(!readOnly))}><Lock size={14} /><span>{t('database.readOnlyShort')}</span>{readOnly && <Check size={14} />}</button>
+            <button type="button" role="menuitemcheckbox" aria-checked={writeGrants.dml} className={writeGrants.dml ? 'database-permission-option active' : 'database-permission-option'} aria-label={t(writeGrants.dml ? 'database.grantDmlActive' : 'database.grantDml')} title={t(writeGrants.dml ? 'database.grantDmlActive' : 'database.grantDml')} disabled={busy} onClick={() => void runAction(() => toggleWriteGrant('dml'))}><ShieldCheck size={14} /><span>{t('database.grantDmlShort')}</span>{writeGrants.dml && <Check size={14} />}</button>
+            <button type="button" role="menuitemcheckbox" aria-checked={writeGrants.ddl} className={writeGrants.ddl ? 'database-permission-option active' : 'database-permission-option'} aria-label={t(writeGrants.ddl ? 'database.grantDdlActive' : 'database.grantDdl')} title={t(writeGrants.ddl ? 'database.grantDdlActive' : 'database.grantDdl')} disabled={busy} onClick={() => void runAction(() => toggleWriteGrant('ddl'))}><ShieldCheck size={14} /><span>{t('database.grantDdlShort')}</span>{writeGrants.ddl && <Check size={14} />}</button>
+          </div>}
+        </div>
         {runtimeId && <button className="secondary-button database-labeled-action" title={t('database.disconnect')} disabled={busy} onClick={() => void runAction(disconnect)}><Power size={14} /><span>{t('database.disconnect')}</span></button>}
       </div>
     </header>}
@@ -709,7 +789,7 @@ export function DatabasePane({ ref, onConfirm, visible, paneId = '', initialProf
       <aside className="database-sidebar" aria-label={settingsVisible || !runtimeId ? t('database.connections') : t('database.tables')}>
         <header><strong>{settingsVisible || !runtimeId ? t('database.connections') : t('database.tables')}</strong><div className="database-sidebar-header-actions">
           {runtimeId && !settingsVisible && <>
-            <button className="icon-button" title={readOnly ? t('database.readOnly') : t('database.importSql')} aria-label={t('database.importSql')} disabled={busy || readOnly} onClick={importDatabase}><Upload size={14} /></button>
+            <button className="icon-button" title={readOnly ? t('database.importRequiresWrite') : t('database.importSql')} aria-label={t('database.importSql')} disabled={busy} onClick={importDatabase}><Upload size={14} /></button>
             <button className="icon-button" title={t('database.exportDatabase')} aria-label={t('database.exportDatabase')} disabled={busy} onClick={() => exportDatabase()}><Download size={14} /></button>
           </>}
           {settingsVisible ? <button className="icon-button" title={t('database.newConnection')} aria-label={t('database.newConnection')} disabled={busy} onClick={() => void startNew()}><Plus size={16} /></button>
@@ -769,7 +849,7 @@ export function DatabasePane({ ref, onConfirm, visible, paneId = '', initialProf
                   </label>)}
                 </div>
                 <div className="database-form-columns"><label>{t('database.name')}<input value={name} onChange={(e) => setName(e.target.value)} placeholder={t('database.namePlaceholder')} autoComplete="off" /></label><label>{t('app.group')}<input value={groupName} onChange={(e) => setGroupName(e.target.value)} placeholder={t('common.ungrouped')} /></label></div>
-                {driver === 'sqlite' ? <label>{t('database.path')}<div className="input-button"><input value={path} onChange={(e) => setPath(e.target.value)} placeholder={t('database.pathPlaceholder')} autoComplete="off" /><button type="button" className="secondary-button" onClick={() => setFileDialog({ mode: 'open', title: t('database.chooseDatabaseFile'), filters: SQLITE_FILE_FILTERS(t), onCancel: () => setFileDialog(null), onConfirm: (file) => { setFileDialog(null); setPath(file) } })}>{t('common.choose')}</button></div><span className="field-hint">{t('database.pathHint')}</span></label> : <>
+                {driver === 'sqlite' ? <label>{t('database.path')}<div className="input-button"><input value={path} onChange={(e) => setPath(e.target.value)} placeholder={t('database.pathPlaceholder')} autoComplete="off" /><button type="button" className="secondary-button" onClick={() => void chooseSqlitePath()}><Folder size={14} />{t('common.choose')}</button></div><span className="field-hint">{t('database.pathHint')}</span></label> : <>
                   <div className="form-row"><label>{t('database.host')}<input value={host} onChange={(e) => setHost(e.target.value)} autoComplete="off" /></label><label>{t('database.port')}<input type="number" min={1} max={65535} value={port} onChange={(e) => setPort(Number(e.target.value))} /></label></div>
                   <div className="database-form-columns"><label>{t('database.username')}<input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="off" /></label><label>{t('database.database')}<input value={databaseName} onChange={(e) => setDatabaseName(e.target.value)} /></label></div>
                   <label>{t('app.password')}<div className="password-input">
@@ -823,7 +903,7 @@ export function DatabasePane({ ref, onConfirm, visible, paneId = '', initialProf
                   {completions.map((item, index) => <button type="button" role="option" aria-selected={index === completionIndex} className={index === completionIndex ? 'active' : ''} key={`${item.kind}:${item.label}`} onMouseDown={(e) => { e.preventDefault(); applyCompletion(item) }}><span>{item.label}</span><small>{t(`database.suggestion.${item.kind}`)}</small></button>)}
                 </div>}
               </div>
-              <div className="database-query-actionbar"><div className="database-query-primary-actions"><button className="primary-button" disabled={busy || !sql.trim()} onClick={() => void runAction(execute)}>{busy ? <LoaderCircle size={13} className="database-spinner" /> : <Play size={13} />}{t('database.run')}</button><button className="secondary-button database-labeled-action" disabled={busy || !result?.columns.length} title={t('database.exportData')} onClick={(e) => openMenu(e.currentTarget, exportMenu())}><Download size={14} /><span>{t('database.exportData')}</span></button><span className="database-query-shortcut">{t('database.runHint')}</span></div><div className="database-query-summary"><strong>{t('database.results')}</strong>{result && <span>{t('database.rowCount', { count: result.rows.length })}</span>}{queryTime !== null && <span>{queryTime} ms</span>}{result?.truncated && result.hasMore === undefined && <span>{t('database.truncated')}</span>}</div></div>
+              <div className="database-query-actionbar"><div className="database-query-primary-actions"><button className="primary-button" disabled={busy || !sql.trim()} onClick={() => void runAction(execute)}>{busy ? <LoaderCircle size={13} className="database-spinner" /> : <Play size={13} />}{t('database.run')}</button><button className="secondary-button database-labeled-action" disabled={busy || !result?.columns.length || !result.rows.length} title={t('database.exportData')} onClick={exportResultSql}><Download size={14} /><span>{t('database.exportData')}</span></button><span className="database-query-shortcut">{t('database.runHint')}</span></div><div className="database-query-summary"><strong>{t('database.results')}</strong>{result && <span>{t('database.rowCount', { count: result.rows.length })}</span>}{queryTime !== null && <span>{queryTime} ms</span>}{result?.truncated && result.hasMore === undefined && <span>{t('database.truncated')}</span>}</div></div>
               <DatabaseResultGrid result={result} rowOffset={queryPage * queryPageSize} onCopy={copyCell} onRowMenu={(event, selection) => openMenu(event.currentTarget, resultMenu(selection), event.clientX, event.clientY)} emptyMessage={busy ? t('database.working') : error ? t('database.queryRetryHint') : undefined} />
               <footer className="database-pagination"><div className="database-page-size"><span>{t('database.rowsPerPage')}</span><DatabasePageSizeSelect disabled={busy || executedStatementWrites} value={queryPageSize} label={t('database.rowsPerPage')} onChange={changeQueryPageSize} /></div><div className="database-page-nav"><button className="icon-button" disabled={busy || executedStatementWrites || queryPage === 0} aria-label={t('database.previousPage')} onClick={() => void runAction(() => rerunQueryPage(queryPage - 1, queryPageSize))}><ChevronLeft size={14} /></button><span>{t('database.pageNumber', { page: queryPage + 1 })}</span><button className="icon-button" disabled={busy || executedStatementWrites || !result?.hasMore} aria-label={t('database.nextPage')} onClick={() => void runAction(() => rerunQueryPage(queryPage + 1, queryPageSize))}><ChevronRight size={14} /></button></div></footer>
             </section>}
@@ -848,6 +928,6 @@ export function DatabasePane({ ref, onConfirm, visible, paneId = '', initialProf
     </div>
     {feedback}
     {menu && <DatabaseMenu {...menu} onClose={() => setMenu(null)} />}
-    {fileDialog && <FileDialog {...fileDialog} />}
+    {fileDialog && <DatabaseFileDialog {...fileDialog} />}
   </div>
 }

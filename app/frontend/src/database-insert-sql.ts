@@ -40,3 +40,13 @@ export function databaseInsertSql(table: string, columns: string[], rows: unknow
   }
   return statements.join('\n')
 }
+
+// A result set has no write target of its own. For simple SELECT ... FROM table queries, keep the
+// source table as the INSERT target; expressions, joins, and SELECTs without FROM use a neutral
+// name that the user can replace in the generated SQL before importing it.
+export function queryResultTarget(statement: string): string {
+  const withoutComments = statement.replace(/--[^\r\n]*/g, ' ').replace(/\/\*[\s\S]*?\*\//g, ' ')
+  const match = withoutComments.match(/\bfrom\s+(?:(?:"([^"]+)"|`([^`]+)`|([A-Za-z_][A-Za-z0-9_$]*))(?:\s*\.\s*(?:"([^"]+)"|`([^`]+)`|([A-Za-z_][A-Za-z0-9_$]*)))?)/i)
+  const candidate = match ? (match[4] ?? match[5] ?? match[6] ?? match[1] ?? match[2] ?? match[3]) : undefined
+  return candidate?.trim() || 'query_result'
+}

@@ -164,23 +164,3 @@ export const DatabaseResultGrid = memo(function DatabaseResultGrid({ result, onC
     {!result.rows.length && <p className="database-result-empty">{t('database.noRows')}</p>}
   </div>
 })
-
-// Downloads stay plain Blobs; the webview routes them to the OS download folder.
-export function downloadDatabaseFile(text: string, filename: string, mime: string): void {
-  const url = URL.createObjectURL(new Blob([text], { type: mime }))
-  const link = document.createElement('a')
-  link.href = url; link.download = filename; link.click()
-  // Allow the webview to consume the URL before releasing it.
-  setTimeout(() => URL.revokeObjectURL(url), 1000)
-}
-
-// Export the visible result snapshot. Never rerun SQL (which may contain writes).
-export function downloadDatabaseResult(result: DatabaseQueryResult, format: 'csv' | 'json'): void {
-  if (format === 'json') {
-    const text = JSON.stringify(result.rows.map((row) => Object.fromEntries(result.columns.map((column, index) => [column, row[index] ?? null]))), null, 2)
-    downloadDatabaseFile(text, 'query-result.json', 'application/json')
-    return
-  }
-  const text = '\uFEFF' + [result.columns, ...result.rows].map((row) => row.map((cell) => `"${String(cell ?? '').replaceAll('"', '""')}"`).join(',')).join('\r\n')
-  downloadDatabaseFile(text, 'query-result.csv', 'text/csv;charset=utf-8')
-}
