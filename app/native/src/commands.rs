@@ -35,7 +35,7 @@ use crate::{
     control_service::{self, InProcessControlService, LunaControlService},
     database::Database,
     database_pane_ui::{DatabasePaneUiBridge, PaneUiAction},
-    database_runtime::{DatabaseConnectionConfig, DatabaseRuntimeManager, DatabaseRuntimeSummary, DatabaseQueryResult},
+    database_runtime::{DatabaseConnectionConfig, DatabaseExportProgressSink, DatabaseRuntimeManager, DatabaseRuntimeSummary, DatabaseQueryResult, DatabaseSqlExportProgress},
     doctor::{self, AgentCheckReport, DoctorManagedAgent, DoctorRuntimeInput},
     local_pty_backend::InProcessLocalPtyTerminalBackend,
     luna_mcp::{LunaMcpService, MCP_AUTHORIZATION_ENV},
@@ -91,6 +91,17 @@ pub struct AppState {
 async fn database_worker<T: Send + 'static>(operation: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
     tauri::async_runtime::spawn_blocking(operation).await
         .map_err(|_| "数据库后台任务异常终止".to_string())?
+}
+
+fn export_progress_sink(app: AppHandle, operation_id: String) -> DatabaseExportProgressSink {
+    Arc::new(move |current, total, table| {
+        let _ = app.emit("database-export:progress", DatabaseSqlExportProgress {
+            operation_id: operation_id.clone(),
+            current,
+            total,
+            table: table.map(str::to_owned),
+        });
+    })
 }
 
 fn resolve_database_password(db: &Database, config: &mut DatabaseConnectionConfig) -> Result<(), String> {
@@ -248,15 +259,22 @@ pub async fn database_runtime_export_json(state: State<'_, AppState>, runtime_id
 }
 
 #[tauri::command]
+pub async fn database_runtime_write_query_sql(app: AppHandle, operation_id: Option<String>, path: String, sql: String, rows: u64) -> Result<crate::database_runtime::DatabaseSqlExport, String> {
+    let progress = operation_id.map(|id| export_progress_sink(app, id));
+    database_worker(move || crate::database_runtime::write_query_sql_file_with_progress(Path::new(&path), &sql, rows, progress)).await
+}
+
+#[tauri::command]
 pub async fn database_runtime_describe_table(state: State<'_, AppState>, runtime_id: String, table: String) -> Result<Vec<crate::database_runtime::DatabaseColumnInfo>, String> {
     let manager = state.database_runtimes.clone();
     database_worker(move || { manager.describe_table(&runtime_id, &table) }).await
 }
 
 #[tauri::command]
-pub async fn database_runtime_export_sql(state: State<'_, AppState>, runtime_id: String, path: String, table: Option<String>) -> Result<crate::database_runtime::DatabaseSqlExport, String> {
+pub async fn database_runtime_export_sql(app: AppHandle, state: State<'_, AppState>, runtime_id: String, operation_id: Option<String>, path: String, table: Option<String>, schema_only: bool) -> Result<crate::database_runtime::DatabaseSqlExport, String> {
     let manager = state.database_runtimes.clone();
-    database_worker(move || { manager.export_sql(&runtime_id, Path::new(&path), table.as_deref()) }).await
+    let progress = operation_id.map(|id| export_progress_sink(app, id));
+    database_worker(move || manager.export_sql_with_progress(&runtime_id, Path::new(&path), table.as_deref(), schema_only, progress)).await
 }
 #[tauri::command]
 pub async fn database_runtime_import_sql_file(state: State<'_, AppState>, runtime_id: String, path: String) -> Result<(), String> {

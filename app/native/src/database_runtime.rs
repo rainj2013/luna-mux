@@ -8,12 +8,9 @@ use std::{
     fs::File,
     io::{BufWriter, Write},
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{Arc, Mutex},
     time::Duration,
 };
-
-#[cfg(test)]
-use std::sync::Arc;
 
 use rusqlite::{Connection, OpenFlags, types::ValueRef};
 use mysql_async::prelude::Queryable;
@@ -104,15 +101,23 @@ impl DatabaseRuntimeManager {
     /// `INSERT` statements that name their table, then indexes, triggers and views. Streaming
     /// through a buffered writer keeps memory flat no matter how large the database is.
     /// Writes a SQL dump for the whole database, or for one table/view when `table` is set.
+    #[allow(dead_code)]
     pub fn export_sql(&self, id: &str, path: &Path, table: Option<&str>) -> Result<DatabaseSqlExport, String> {
-        if let Some(config) = self.network_config(id)? { return tauri::async_runtime::block_on(export_network_sql(config, path, table)); }
+        self.export_sql_with_options(id, path, table, false)
+    }
+    #[allow(dead_code)]
+    pub fn export_sql_with_options(&self, id: &str, path: &Path, table: Option<&str>, schema_only: bool) -> Result<DatabaseSqlExport, String> {
+        self.export_sql_with_progress(id, path, table, schema_only, None)
+    }
+    pub fn export_sql_with_progress(&self, id: &str, path: &Path, table: Option<&str>, schema_only: bool, progress: Option<DatabaseExportProgressSink>) -> Result<DatabaseSqlExport, String> {
+        if let Some(config) = self.network_config(id)? { return tauri::async_runtime::block_on(export_network_sql(config, path, table, schema_only, progress)); }
         let mut map = self.runtimes.lock().map_err(|_| "database runtime lock poisoned".to_string())?;
         let record = map.get_mut(id).ok_or_else(|| "database runtime not found".to_string())?;
         let Some(DatabaseHandle::Sqlite(connection)) = record.handle.as_mut() else { return Err("database is disconnected".into()) };
         let mut out = BufWriter::with_capacity(1 << 20, File::create(path).map_err(|e| format!("无法写入导出文件：{e}"))?);
         // One read transaction keeps every table on the same snapshot while the dump streams out.
         let transaction = connection.transaction().map_err(|e| e.to_string())?;
-        let summary = write_sql_dump(&transaction, &mut out, table)?;
+        let summary = write_sql_dump(&transaction, &mut out, table, schema_only, progress.as_ref())?;
         transaction.commit().map_err(|e| e.to_string())?;
         let bytes = finish_dump(out)?;
         Ok(DatabaseSqlExport { tables: summary.tables, rows: summary.rows, bytes })
@@ -211,6 +216,30 @@ pub struct DatabaseQueryResult { pub columns: Vec<String>, pub rows: Vec<Vec<ser
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DatabaseSqlExport { pub tables: usize, pub rows: u64, pub bytes: u64 }
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseSqlExportProgress { pub operation_id: String, pub current: usize, pub total: usize, pub table: Option<String> }
+
+pub type DatabaseExportProgressSink = Arc<dyn Fn(usize, usize, Option<&str>) + Send + Sync>;
+
+/// Write a query result script to the path selected by the user. The SQL is already rendered
+/// in the webview because it represents the visible result snapshot rather than a database dump.
+#[allow(dead_code)]
+pub fn write_query_sql_file(path: &Path, sql: &str, rows: u64) -> Result<DatabaseSqlExport, String> {
+    write_query_sql_file_with_progress(path, sql, rows, None)
+}
+
+pub fn write_query_sql_file_with_progress(path: &Path, sql: &str, rows: u64, progress: Option<DatabaseExportProgressSink>) -> Result<DatabaseSqlExport, String> {
+    if sql.trim().is_empty() { return Err("查询结果为空，无法导出 SQL 文件".into()); }
+    if let Some(report) = progress.as_ref() { report(0, 1, None); }
+    let mut out = create_dump_writer(path)?;
+    out.write_all(sql.as_bytes()).map_err(|e| format!("无法写入导出文件：{e}"))?;
+    if !sql.ends_with('\n') { out.write_all(b"\n").map_err(|e| format!("无法写入导出文件：{e}"))?; }
+    let bytes = finish_dump(out)?;
+    if let Some(report) = progress.as_ref() { report(1, 1, None); }
+    Ok(DatabaseSqlExport { tables: if rows > 0 { 1 } else { 0 }, rows, bytes })
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -518,7 +547,7 @@ fn sqlite_dump_objects(connection: &Connection, table: Option<&str>) -> Result<V
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| e.to_string())
 }
 
-fn write_sql_dump(connection: &Connection, out: &mut impl Write, table: Option<&str>) -> Result<SqlDumpSummary, String> {
+fn write_sql_dump(connection: &Connection, out: &mut impl Write, table: Option<&str>, schema_only: bool, progress: Option<&DatabaseExportProgressSink>) -> Result<SqlDumpSummary, String> {
     let objects = sqlite_dump_objects(connection, table)?;
     if objects.is_empty() && table.is_some() { return Err("数据库中找不到该表或视图".into()); }
     // Tables are created before any data lands, and indexes/triggers/views only afterwards so a
@@ -529,10 +558,20 @@ fn write_sql_dump(connection: &Connection, out: &mut impl Write, table: Option<&
         Some(name) => out.write_all(format!("-- Luna Mux dump: {name}\n\n").as_bytes()),
         None => out.write_all(b"-- Luna Mux database dump\n-- Schema first, then data, then indexes/triggers/views.\n\n"),
     }.map_err(|e| e.to_string())?;
-    for (_, _, sql) in &tables { writeln!(out, "{};", sql.trim_end_matches(';')).map_err(|e| e.to_string())?; }
+    let total_tables = tables.len();
+    if total_tables > 0 { if let Some(report) = progress { report(0, total_tables, None); } }
+    for (index, (_, name, sql)) in tables.iter().enumerate() {
+        writeln!(out, "{};", sql.trim_end_matches(';')).map_err(|e| e.to_string())?;
+        if schema_only { if let Some(report) = progress { report(index + 1, total_tables, Some(name)); } }
+    }
     if !tables.is_empty() { out.write_all(b"\n").map_err(|e| e.to_string())?; }
     let mut rows_written = 0u64;
-    for (_, name, _) in &tables { rows_written += write_sql_table_data(connection, out, name)?; }
+    if !schema_only {
+        for (index, (_, name, _)) in tables.iter().enumerate() {
+            rows_written += write_sql_table_data(connection, out, name)?;
+            if let Some(report) = progress { report(index + 1, total_tables, Some(name)); }
+        }
+    }
     if !tail.is_empty() { out.write_all(b"\n").map_err(|e| e.to_string())?; }
     for (_, _, sql) in &tail { writeln!(out, "{};", sql.trim_end_matches(';')).map_err(|e| e.to_string())?; }
     Ok(SqlDumpSummary { tables: tables.len(), rows: rows_written })
@@ -638,11 +677,11 @@ fn sql_identifier(quote: char, name: &str) -> String { format!("{quote}{}{quote}
 
 fn sql_string_literal(value: &str) -> String { format!("'{}'", value.replace('\'', "''")) }
 
-async fn export_network_sql(config: DatabaseConnectionConfig, path: &Path, table: Option<&str>) -> Result<DatabaseSqlExport, String> {
+async fn export_network_sql(config: DatabaseConnectionConfig, path: &Path, table: Option<&str>, schema_only: bool, progress: Option<DatabaseExportProgressSink>) -> Result<DatabaseSqlExport, String> {
     match config.driver {
         DatabaseDriver::Sqlite => Err("SQLite 使用本地连接".into()),
-        DatabaseDriver::Postgres => postgres_export_sql(config, path, table).await,
-        DatabaseDriver::Mysql | DatabaseDriver::Mariadb => mysql_export_sql(config, path, table).await,
+        DatabaseDriver::Postgres => postgres_export_sql_with_progress(config, path, table, schema_only, progress).await,
+        DatabaseDriver::Mysql | DatabaseDriver::Mariadb => mysql_export_sql_with_progress(config, path, table, schema_only, progress).await,
     }
 }
 
@@ -789,24 +828,37 @@ fn mysql_time_text(negative: bool, days: u32, hours: u8, minutes: u8, seconds: u
     if micros == 0 { base } else { format!("{base}.{micros:06}") }
 }
 
-async fn mysql_export_sql(config: DatabaseConnectionConfig, path: &Path, table: Option<&str>) -> Result<DatabaseSqlExport, String> {
+#[allow(dead_code)]
+async fn mysql_export_sql(config: DatabaseConnectionConfig, path: &Path, table: Option<&str>, schema_only: bool) -> Result<DatabaseSqlExport, String> {
+    mysql_export_sql_with_progress(config, path, table, schema_only, None).await
+}
+
+async fn mysql_export_sql_with_progress(config: DatabaseConnectionConfig, path: &Path, table: Option<&str>, schema_only: bool, progress: Option<DatabaseExportProgressSink>) -> Result<DatabaseSqlExport, String> {
     let mut connection = mysql_client(&config).await?;
     let outcome = async {
         let objects = mysql_dump_objects(&mut connection, table).await?;
         if objects.is_empty() && table.is_some() { return Err("数据库中找不到该表或视图".into()); }
         let (tables, views) = (objects.iter().filter(|object| !object.is_view).collect::<Vec<_>>(), objects.iter().filter(|object| object.is_view).collect::<Vec<_>>());
+        let total_tables = tables.len();
+        if total_tables > 0 { if let Some(report) = progress.as_ref() { report(0, total_tables, None); } }
         let mut out = create_dump_writer(path)?;
         match table {
             Some(name) => out.write_all(format!("-- Luna Mux dump: {name}\n-- Triggers, routines and events are not included.\n\n").as_bytes()),
             None => out.write_all(b"-- Luna Mux database dump\n-- Schema first, then data. Triggers, routines and events are not included.\n\n"),
         }.map_err(|e| e.to_string())?;
         out.write_all(b"SET NAMES utf8mb4;\n\n").map_err(|e| e.to_string())?;
-        for object in &tables {
+        for (index, object) in tables.iter().enumerate() {
             writeln!(out, "DROP TABLE IF EXISTS {};\n{};", sql_identifier('`', &object.name), mysql_object_ddl(&mut connection, object).await?).map_err(|e| e.to_string())?;
+            if schema_only { if let Some(report) = progress.as_ref() { report(index + 1, total_tables, Some(&object.name)); } }
         }
         if !tables.is_empty() { out.write_all(b"\n").map_err(|e| e.to_string())?; }
         let mut rows = 0u64;
-        for object in &tables { rows += mysql_write_table_data(&mut connection, &mut out, &object.name).await?; }
+        if !schema_only {
+            for (index, object) in tables.iter().enumerate() {
+                rows += mysql_write_table_data(&mut connection, &mut out, &object.name).await?;
+                if let Some(report) = progress.as_ref() { report(index + 1, total_tables, Some(&object.name)); }
+            }
+        }
         // Views come last: they may select from any table in the dump.
         if !views.is_empty() { out.write_all(b"\n").map_err(|e| e.to_string())?; }
         for object in &views {
@@ -1002,11 +1054,18 @@ fn postgres_sequence_reset(table: &str, column: &PostgresColumn) -> String {
         sql_string_literal(&postgres_quote_ident(table)), sql_string_literal(&column.name), postgres_quote_ident(table))
 }
 
-async fn postgres_export_sql(config: DatabaseConnectionConfig, path: &Path, table: Option<&str>) -> Result<DatabaseSqlExport, String> {
+#[allow(dead_code)]
+async fn postgres_export_sql(config: DatabaseConnectionConfig, path: &Path, table: Option<&str>, schema_only: bool) -> Result<DatabaseSqlExport, String> {
+    postgres_export_sql_with_progress(config, path, table, schema_only, None).await
+}
+
+async fn postgres_export_sql_with_progress(config: DatabaseConnectionConfig, path: &Path, table: Option<&str>, schema_only: bool, progress: Option<DatabaseExportProgressSink>) -> Result<DatabaseSqlExport, String> {
     let (client, _connection_task) = postgres_client(&config).await?;
     let objects = postgres_dump_objects(&client, table).await?;
     if objects.is_empty() && table.is_some() { return Err("数据库中找不到该表或视图".into()); }
     let (tables, views) = (objects.iter().filter(|object| !object.is_view).collect::<Vec<_>>(), objects.iter().filter(|object| object.is_view).collect::<Vec<_>>());
+    let total_tables = tables.len();
+    if total_tables > 0 { if let Some(report) = progress.as_ref() { report(0, total_tables, None); } }
     let mut out = create_dump_writer(path)?;
     match table {
         Some(name) => out.write_all(format!("-- Luna Mux dump: {name}\n-- Triggers, functions, ownership and grants are not included.\n\n").as_bytes()),
@@ -1014,23 +1073,31 @@ async fn postgres_export_sql(config: DatabaseConnectionConfig, path: &Path, tabl
     }.map_err(|e| e.to_string())?;
     out.write_all(b"SET client_encoding = 'UTF8';\n\n").map_err(|e| e.to_string())?;
     let mut dumped = Vec::new();
-    for object in &tables {
+    for (index, object) in tables.iter().enumerate() {
         let columns = postgres_table_columns(&client, &object.name).await?;
         writeln!(out, "DROP TABLE IF EXISTS {};", postgres_quote_ident(&object.name)).map_err(|e| e.to_string())?;
         writeln!(out, "CREATE TABLE {} (", postgres_quote_ident(&object.name)).map_err(|e| e.to_string())?;
         writeln!(out, "{}", columns.iter().map(PostgresColumn::definition).collect::<Vec<_>>().join(",\n")).map_err(|e| e.to_string())?;
         out.write_all(b");\n\n").map_err(|e| e.to_string())?;
+        if schema_only { if let Some(report) = progress.as_ref() { report(index + 1, total_tables, Some(&object.name)); } }
         dumped.push((object.name.clone(), columns));
     }
     let mut rows = 0u64;
-    for (name, columns) in &dumped { rows += postgres_write_table_data(&client, &mut out, name, columns).await?; }
+    if !schema_only {
+        for (index, (name, columns)) in dumped.iter().enumerate() {
+            rows += postgres_write_table_data(&client, &mut out, name, columns).await?;
+            if let Some(report) = progress.as_ref() { report(index + 1, total_tables, Some(name)); }
+        }
+    }
     if !dumped.is_empty() { out.write_all(b"\n").map_err(|e| e.to_string())?; }
     for (name, columns) in &dumped {
         for index in postgres_table_indexes(&client, name).await? { writeln!(out, "{index};").map_err(|e| e.to_string())?; }
         for (constraint, _, definition) in postgres_table_constraints(&client, name).await?.iter().filter(|(_, kind, _)| kind != "f") {
             writeln!(out, "ALTER TABLE {} ADD CONSTRAINT {} {definition};", postgres_quote_ident(name), postgres_quote_ident(constraint)).map_err(|e| e.to_string())?;
         }
-        for column in columns.iter().filter(|column| column.needs_sequence_reset()) { writeln!(out, "{}", postgres_sequence_reset(name, column)).map_err(|e| e.to_string())?; }
+        if !schema_only {
+            for column in columns.iter().filter(|column| column.needs_sequence_reset()) { writeln!(out, "{}", postgres_sequence_reset(name, column)).map_err(|e| e.to_string())?; }
+        }
     }
     // Foreign keys land after the data so a restore does not pay a per-row check, and so tables
     // can be created in any order.
@@ -1413,6 +1480,41 @@ mod tests {
     }
 
     #[test]
+    fn query_sql_file_reports_rows_and_actual_bytes() {
+        let path = temp_db().with_extension("query.sql");
+        let sql = "INSERT INTO \"items\" (\"id\") VALUES\n  (1);";
+        let summary = write_query_sql_file(&path, sql, 1).unwrap();
+        assert_eq!(summary.tables, 1);
+        assert_eq!(summary.rows, 1);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(text, format!("{sql}\n"));
+        assert_eq!(summary.bytes, std::fs::metadata(&path).unwrap().len());
+        assert!(write_query_sql_file(&path, "  \n", 0).is_err());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn exports_report_table_progress_and_query_progress() {
+        let manager = DatabaseRuntimeManager::new();
+        let (runtime, source_path) = sqlite_runtime(&manager);
+        manager.execute(&runtime.id, "create table first(id integer)", 10).unwrap();
+        manager.execute(&runtime.id, "create table second(id integer)", 10).unwrap();
+        let dump_path = temp_db().with_extension("progress.sql");
+        let dump_events = Arc::new(Mutex::new(Vec::<(usize, usize, Option<String>)>::new()));
+        let dump_capture = dump_events.clone();
+        let dump_sink: DatabaseExportProgressSink = Arc::new(move |current, total, table| dump_capture.lock().unwrap().push((current, total, table.map(str::to_owned))));
+        manager.export_sql_with_progress(&runtime.id, &dump_path, None, true, Some(dump_sink)).unwrap();
+        assert_eq!(dump_events.lock().unwrap().as_slice(), &[(0, 2, None), (1, 2, Some("first".into())), (2, 2, Some("second".into()))]);
+        let query_path = temp_db().with_extension("query-progress.sql");
+        let query_events = Arc::new(Mutex::new(Vec::<(usize, usize, Option<String>)>::new()));
+        let query_capture = query_events.clone();
+        let query_sink: DatabaseExportProgressSink = Arc::new(move |current, total, table| query_capture.lock().unwrap().push((current, total, table.map(str::to_owned))));
+        write_query_sql_file_with_progress(&query_path, "INSERT INTO first(id) VALUES (1);", 1, Some(query_sink)).unwrap();
+        assert_eq!(query_events.lock().unwrap().as_slice(), &[(0, 1, None), (1, 1, None)]);
+        let _ = std::fs::remove_file(source_path); let _ = std::fs::remove_file(dump_path); let _ = std::fs::remove_file(query_path);
+    }
+
+    #[test]
     fn sqlite_dump_round_trips_schema_and_values_into_a_new_database() {
         let manager = DatabaseRuntimeManager::new();
         let (source, source_path) = sqlite_runtime(&manager);
@@ -1466,6 +1568,36 @@ mod tests {
         // A name that is not in sqlite_master is a user error, not an empty dump.
         assert!(manager.export_sql(&runtime.id, &dump, Some("missing")).unwrap_err().contains("找不到"));
         for file in [path, dump] { let _ = std::fs::remove_file(file); }
+    }
+
+    #[test]
+    fn sqlite_schema_only_dump_omits_rows_for_database_and_table_exports() {
+        let manager = DatabaseRuntimeManager::new();
+        let (runtime, path) = sqlite_runtime(&manager);
+        manager.execute(&runtime.id, "create table items(id integer primary key, name text)", 10).unwrap();
+        manager.execute(&runtime.id, "create table other(id integer)", 10).unwrap();
+        manager.execute(&runtime.id, "create index items_name on items(name)", 10).unwrap();
+        manager.execute(&runtime.id, "insert into items values (1, 'a')", 10).unwrap();
+        manager.execute(&runtime.id, "insert into other values (2)", 10).unwrap();
+
+        let database_dump = temp_db().with_extension("schema.sql");
+        let summary = manager.export_sql_with_options(&runtime.id, &database_dump, None, true).unwrap();
+        assert_eq!((summary.tables, summary.rows), (2, 0));
+        let text = std::fs::read_to_string(&database_dump).unwrap();
+        assert!(text.contains("CREATE TABLE items"));
+        assert!(text.contains("CREATE TABLE other"));
+        assert!(text.contains("CREATE INDEX items_name"));
+        assert!(!text.contains("INSERT INTO"));
+
+        let table_dump = temp_db().with_extension("table-schema.sql");
+        let summary = manager.export_sql_with_options(&runtime.id, &table_dump, Some("items"), true).unwrap();
+        assert_eq!((summary.tables, summary.rows), (1, 0));
+        let text = std::fs::read_to_string(&table_dump).unwrap();
+        assert!(text.contains("CREATE TABLE items"));
+        assert!(text.contains("CREATE INDEX items_name"));
+        assert!(!text.contains("INSERT INTO"));
+        assert!(!text.contains("other"));
+        for file in [path, database_dump, table_dump] { let _ = std::fs::remove_file(file); }
     }
 
     #[test]
@@ -1635,7 +1767,7 @@ mod tests {
         let config = network_config(DatabaseDriver::Mysql, listener.local_addr().unwrap().port());
         let server = tokio::spawn(mysql_dump_server(listener));
         let path = dump_path("mysql");
-        let export = mysql_export_sql(config, &path, None).await.unwrap();
+        let export = mysql_export_sql(config, &path, None, false).await.unwrap();
         assert_eq!((export.tables, export.rows), (1, 2));
         let script = std::fs::read_to_string(&path).unwrap();
         assert!(script.starts_with("-- Luna Mux database dump"));
@@ -1652,12 +1784,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mysql_schema_only_dump_skips_data_queries_and_inserts() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let config = network_config(DatabaseDriver::Mysql, listener.local_addr().unwrap().port());
+        let server = tokio::spawn(mysql_dump_server(listener));
+        let path = dump_path("mysql-schema");
+        let export = mysql_export_sql(config, &path, None, true).await.unwrap();
+        assert_eq!((export.tables, export.rows), (1, 0));
+        let script = std::fs::read_to_string(&path).unwrap();
+        assert!(script.contains("CREATE TABLE `posts` ("));
+        assert!(!script.contains("INSERT INTO"));
+        let queries = server.await.unwrap();
+        assert!(!queries.iter().any(|sql| sql.starts_with("SELECT * FROM")));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
     async fn mysql_dump_of_one_table_filters_the_query_and_reports_missing_tables() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let config = network_config(DatabaseDriver::Mysql, listener.local_addr().unwrap().port());
         let server = tokio::spawn(mysql_dump_server(listener));
         let path = dump_path("mysql-table");
-        let export = mysql_export_sql(config, &path, Some("posts")).await.unwrap();
+        let export = mysql_export_sql(config, &path, Some("posts"), false).await.unwrap();
         assert_eq!((export.tables, export.rows), (1, 2));
         assert!(std::fs::read_to_string(&path).unwrap().starts_with("-- Luna Mux dump: posts"));
         // The driver probes session variables right after the handshake.
@@ -1669,7 +1817,7 @@ mod tests {
         let config = network_config(DatabaseDriver::Mysql, listener.local_addr().unwrap().port());
         let server = tokio::spawn(mysql_dump_server(listener));
         let path = dump_path("mysql-missing");
-        let error = mysql_export_sql(config, &path, Some("missing")).await.unwrap_err();
+        let error = mysql_export_sql(config, &path, Some("missing"), false).await.unwrap_err();
         assert!(error.contains("找不到该表或视图"));
         assert_eq!(server.await.unwrap().iter().filter(|sql| sql.contains("information_schema")).count(), 1);
         assert!(!path.exists());
@@ -1753,7 +1901,7 @@ mod tests {
         let config = network_config(DatabaseDriver::Postgres, listener.local_addr().unwrap().port());
         let server = tokio::spawn(postgres_dump_server(listener));
         let path = dump_path("postgres");
-        let export = postgres_export_sql(config, &path, None).await.unwrap();
+        let export = postgres_export_sql(config, &path, None, false).await.unwrap();
         assert_eq!((export.tables, export.rows), (1, 1));
         let script = std::fs::read_to_string(&path).unwrap();
         assert!(script.contains("CREATE TABLE \"posts\" (\n  \"id\" serial NOT NULL,\n  \"title\" character varying(50),\n  \"payload\" bytea\n);"));
@@ -1765,6 +1913,23 @@ mod tests {
         assert!(script.contains("SELECT setval(pg_get_serial_sequence('\"posts\"', 'id'), COALESCE(MAX(\"id\"), 1), COUNT(\"id\") > 0) FROM \"posts\";"));
         assert!(script.contains("ADD CONSTRAINT \"posts_user_fk\" FOREIGN KEY"));
         assert_eq!(export.bytes, std::fs::metadata(&path).unwrap().len());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn postgres_schema_only_dump_skips_data_queries_inserts_and_sequence_resets() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let config = network_config(DatabaseDriver::Postgres, listener.local_addr().unwrap().port());
+        let server = tokio::spawn(postgres_dump_server(listener));
+        let path = dump_path("postgres-schema");
+        let export = postgres_export_sql(config, &path, None, true).await.unwrap();
+        assert_eq!((export.tables, export.rows), (1, 0));
+        let script = std::fs::read_to_string(&path).unwrap();
+        assert!(script.contains("CREATE TABLE \"posts\" ("));
+        assert!(!script.contains("INSERT INTO"));
+        assert!(!script.contains("SELECT setval"));
+        let queries = server.await.unwrap();
+        assert!(!queries.iter().any(|sql| sql.starts_with("SELECT * FROM")));
         let _ = std::fs::remove_file(path);
     }
 

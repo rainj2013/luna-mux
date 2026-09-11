@@ -457,6 +457,7 @@ pub fn run() {
             database_runtime_list_tables,
             database_runtime_export_csv,
             database_runtime_export_json,
+            database_runtime_write_query_sql,
             database_runtime_describe_table,
             database_runtime_export_sql,
             database_runtime_import_sql_file,
