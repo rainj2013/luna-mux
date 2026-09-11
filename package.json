@@ -1,6 +1,6 @@
 {
   "name": "luna-mux",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "A local and remote terminal workspace for coding agents",
   "license": "MIT",
   "type": "module",
@@ -11,6 +11,9 @@
     "build:win": "tauri build --bundles nsis",
     "build:win:webview2": "tauri build --bundles nsis --config app/native/tauri.windows-offline.conf.json",
     "build:win:offline": "tauri build --bundles nsis --config app/native/tauri.windows-offline.conf.json",
+    "build:win:prepare": "tauri build --no-bundle",
+    "bundle:win": "tauri bundle --bundles nsis",
+    "bundle:win:webview2": "tauri bundle --bundles nsis --config app/native/tauri.windows-offline.conf.json",
     "web:dev": "vite --host 127.0.0.1",
     "web:build": "vite build",
     "icons:generate": "node scripts/generate-icons.mjs",

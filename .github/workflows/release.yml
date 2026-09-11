@@ -25,6 +25,7 @@ jobs:
             target: aarch64-apple-darwin
     env:
       APPLE_SIGNING_IDENTITY: "-"
+      CARGO_INCREMENTAL: "0"
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -40,13 +41,20 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Cache agent-browser sidecar
+        uses: actions/cache@v4
+        with:
+          path: app/native/binaries
+          key: agent-browser-${{ matrix.target }}-${{ hashFiles('scripts/sync-agent-browser-sidecar.mjs') }}
+
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: app/native -> target
+          shared-key: ${{ matrix.target }}
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --prefer-offline --no-audit --no-fund
 
       - name: Build DMG
         run: npm run build:mac -- --target "${{ matrix.target }}"
@@ -73,18 +81,10 @@ jobs:
           retention-days: 14
 
   build-windows:
-    name: Windows x64 ${{ matrix.variant }}
+    name: Windows x64 installers
     runs-on: windows-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - variant: standard
-            script: build:win
-            output_name: Luna-Mux_windows-x64-setup.exe
-          - variant: with-webview2
-            script: build:win:webview2
-            output_name: Luna-Mux_windows-x64-with-webview2-setup.exe
+    env:
+      CARGO_INCREMENTAL: "0"
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -98,18 +98,28 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Cache agent-browser sidecar
+        uses: actions/cache@v4
+        with:
+          path: app/native/binaries
+          key: agent-browser-x86_64-pc-windows-msvc-${{ hashFiles('scripts/sync-agent-browser-sidecar.mjs') }}
+
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: app/native -> target
+          shared-key: x86_64-pc-windows-msvc
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --prefer-offline --no-audit --no-fund
 
-      - name: Build NSIS installer
-        run: npm run ${{ matrix.script }}
+      - name: Build application once
+        run: npm run build:win:prepare
 
-      - name: Collect NSIS installer
+      - name: Build standard NSIS installer
+        run: npm run bundle:win
+
+      - name: Collect standard NSIS installer
         shell: pwsh
         run: |
           $files = @(Get-ChildItem "app/native/target/release/bundle/nsis/*-setup.exe" -File)
@@ -117,13 +127,34 @@ jobs:
             throw "Expected one NSIS installer, found $($files.Count)"
           }
           New-Item -ItemType Directory -Force "release-assets" | Out-Null
-          Copy-Item $files[0].FullName "release-assets/${{ matrix.output_name }}"
+          Copy-Item $files[0].FullName "release-assets/Luna-Mux_windows-x64-setup.exe"
 
-      - name: Upload Windows artifact
+      - name: Build WebView2 NSIS installer
+        run: npm run bundle:win:webview2
+
+      - name: Collect WebView2 NSIS installer
+        shell: pwsh
+        run: |
+          $files = @(Get-ChildItem "app/native/target/release/bundle/nsis/*-setup.exe" -File)
+          if ($files.Count -ne 1) {
+            throw "Expected one NSIS installer, found $($files.Count)"
+          }
+          Copy-Item $files[0].FullName "release-assets/Luna-Mux_windows-x64-with-webview2-setup.exe"
+
+      - name: Upload standard Windows artifact
         uses: actions/upload-artifact@v7
         with:
-          name: release-windows-x64-${{ matrix.variant }}
-          path: release-assets/*.exe
+          name: release-windows-x64-standard
+          path: release-assets/Luna-Mux_windows-x64-setup.exe
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+      - name: Upload WebView2 Windows artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-windows-x64-with-webview2
+          path: release-assets/Luna-Mux_windows-x64-with-webview2-setup.exe
           if-no-files-found: error
           compression-level: 0
           retention-days: 14

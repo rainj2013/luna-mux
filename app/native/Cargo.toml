@@ -1,13 +1,17 @@
 [package]
 name = "luna-mux"
-version = "0.4.1"
+version = "0.5.0"
 description = "Tauri desktop shell for Luna Mux"
 license = "MIT"
 edition = "2024"
 
 [lib]
 name = "luna_mux_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+crate-type = ["rlib"]
+
+[profile.release]
+# Keep local release rebuilds incremental; CI sets CARGO_INCREMENTAL=0.
+incremental = true
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
