@@ -943,4 +943,22 @@ mod exit_tests {
         heuristic.evidence = ManagedAgentEvidence::TerminalHeuristic;
         assert!(!should_send_agent_desktop_notification(&heuristic));
     }
+
+    #[test]
+    fn subagent_completion_notifies_only_where_it_means_task_completion() {
+        // Claude Code maps `SubagentStop` to Working (a delegated subagent
+        // finished mid-task), so it must stay silent; the main `Stop` event
+        // carries the completion notification instead.
+        let claude_subagent = agent_event("SubagentStop", ManagedAgentStatus::Working);
+        assert!(!should_send_agent_desktop_notification(&claude_subagent));
+
+        // Codex keeps its historical mapping where `SubagentStop` completes,
+        // and its notifications stay as accurate as they are today.
+        let codex_subagent = agent_event("SubagentStop", ManagedAgentStatus::Completed);
+        assert!(should_send_agent_desktop_notification(&codex_subagent));
+        assert_eq!(
+            agent_desktop_notification_body(&codex_subagent, "zh-CN"),
+            "Agent 已完成任务"
+        );
+    }
 }
