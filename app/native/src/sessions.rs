@@ -13,8 +13,9 @@ use anyhow::{Context, anyhow};
 use async_recursion::async_recursion;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use russh::{
-    ChannelMsg, Disconnect, client,
-    keys::{self, HashAlg, PrivateKeyWithHashAlg},
+    ChannelMsg, ChannelOpenFailure, Disconnect,
+    client::{self, ChannelOpenHandle},
+    keys::{self, HashAlg, PrivateKeyWithHashAlg, PublicKeyOrCertificate, agent::AgentIdentity},
 };
 use russh_sftp::{
     client::SftpSession,
@@ -211,11 +212,40 @@ struct ClientHandler {
 type ForwardedRoutes =
     Arc<StdMutex<HashMap<(String, u32), mpsc::UnboundedSender<russh::Channel<client::Msg>>>>>;
 
+fn host_identity_fingerprint(identity: &PublicKeyOrCertificate) -> String {
+    // Preserve the existing TOFU database format by pinning the actual host
+    // public key, whether the server presents it directly or in a certificate.
+    identity
+        .public_key()
+        .fingerprint(HashAlg::Sha256)
+        .to_string()
+}
+
+fn deliver_forwarded<T>(
+    routes: &StdMutex<HashMap<(String, u32), mpsc::UnboundedSender<T>>>,
+    session_id: &str,
+    port: u32,
+    value: T,
+) -> bool {
+    routes
+        .lock()
+        .ok()
+        .and_then(|routes| {
+            routes
+                .get(&(session_id.to_string(), port))
+                .map(|sender| sender.send(value).is_ok())
+        })
+        .unwrap_or(false)
+}
+
 impl client::Handler for ClientHandler {
     type Error = anyhow::Error;
 
-    async fn check_server_key(&mut self, key: &keys::PublicKey) -> Result<bool, Self::Error> {
-        let fingerprint = key.fingerprint(HashAlg::Sha256).to_string();
+    async fn check_server_key(
+        &mut self,
+        identity: &PublicKeyOrCertificate,
+    ) -> Result<bool, Self::Error> {
+        let fingerprint = host_identity_fingerprint(identity);
         let known = self
             .db
             .known_host(&self.bookmark.host, self.bookmark.port)
@@ -267,12 +297,19 @@ impl client::Handler for ClientHandler {
         connected_port: u32,
         _originator_address: &str,
         _originator_port: u32,
+        reply: ChannelOpenHandle,
         _session: &mut client::Session,
     ) -> Result<(), Self::Error> {
-        if let Ok(routes) = self.forwarded_routes.lock() {
-            if let Some(sender) = routes.get(&(self.session_id.clone(), connected_port)) {
-                let _ = sender.send(channel);
-            }
+        let routed = deliver_forwarded(
+            &self.forwarded_routes,
+            &self.session_id,
+            connected_port,
+            channel,
+        );
+        if routed {
+            reply.accept().await;
+        } else {
+            reply.reject(ChannelOpenFailure::ConnectFailed).await;
         }
         Ok(())
     }
@@ -656,15 +693,25 @@ impl SessionManager {
         let mut agent = keys::agent::client::AgentClient::connect_env()
             .await
             .map_err(|error| anyhow!(error.to_string()))?;
-        for key in agent
+        for identity in agent
             .request_identities()
             .await
             .map_err(|error| anyhow!(error.to_string()))?
         {
             let hash = handle.best_supported_rsa_hash().await?.flatten();
-            if handle
-                .authenticate_publickey_with(username, key, hash, &mut agent)
-                .await
+            let result = match identity {
+                AgentIdentity::PublicKey { key, .. } => {
+                    handle
+                        .authenticate_publickey_with(username, key, hash, &mut agent)
+                        .await
+                }
+                AgentIdentity::Certificate { certificate, .. } => {
+                    handle
+                        .authenticate_certificate_with(username, certificate, hash, &mut agent)
+                        .await
+                }
+            };
+            if result
                 .map_err(|error| anyhow!(error.to_string()))?
                 .success()
             {
@@ -684,15 +731,25 @@ impl SessionManager {
             keys::agent::client::AgentClient::connect_named_pipe(r"\\.\pipe\openssh-ssh-agent")
                 .await
                 .map_err(|error| anyhow!(error.to_string()))?;
-        for key in agent
+        for identity in agent
             .request_identities()
             .await
             .map_err(|error| anyhow!(error.to_string()))?
         {
             let hash = handle.best_supported_rsa_hash().await?.flatten();
-            if handle
-                .authenticate_publickey_with(username, key, hash, &mut agent)
-                .await
+            let result = match identity {
+                AgentIdentity::PublicKey { key, .. } => {
+                    handle
+                        .authenticate_publickey_with(username, key, hash, &mut agent)
+                        .await
+                }
+                AgentIdentity::Certificate { certificate, .. } => {
+                    handle
+                        .authenticate_certificate_with(username, certificate, hash, &mut agent)
+                        .await
+                }
+            };
+            if result
                 .map_err(|error| anyhow!(error.to_string()))?
                 .success()
             {
@@ -1821,11 +1878,384 @@ impl Utf8Decoder {
 }
 
 #[cfg(test)]
+mod ssh_compatibility_tests {
+    use std::{
+        collections::{HashMap, HashSet},
+        sync::Arc,
+        time::Duration,
+    };
+
+    use anyhow::Error;
+    use russh::{
+        Channel, ChannelId, ChannelMsg, Disconnect, client,
+        keys::{Algorithm, PrivateKey, PrivateKeyWithHashAlg, PublicKeyOrCertificate},
+        server,
+    };
+    use russh_sftp::{
+        client::SftpSession,
+        protocol::{Attrs, Data, FileAttributes, Handle, OpenFlags, Status, StatusCode, Version},
+    };
+    use tokio::io::AsyncWriteExt;
+
+    #[derive(Default)]
+    struct TestSshServer {
+        channels: HashMap<ChannelId, Channel<server::Msg>>,
+        sftp_channels: HashSet<ChannelId>,
+    }
+
+    impl server::Handler for TestSshServer {
+        type Error = Error;
+
+        async fn auth_password(
+            &mut self,
+            _user: &str,
+            _password: &str,
+        ) -> Result<server::Auth, Self::Error> {
+            Ok(server::Auth::Accept)
+        }
+
+        async fn auth_publickey(
+            &mut self,
+            _user: &str,
+            _public_key: &russh::keys::PublicKey,
+        ) -> Result<server::Auth, Self::Error> {
+            Ok(server::Auth::Accept)
+        }
+
+        async fn channel_open_session(
+            &mut self,
+            channel: Channel<server::Msg>,
+            reply: server::ChannelOpenHandle,
+            _session: &mut server::Session,
+        ) -> Result<(), Self::Error> {
+            self.channels.insert(channel.id(), channel);
+            reply.accept().await;
+            Ok(())
+        }
+
+        async fn data(
+            &mut self,
+            channel: ChannelId,
+            data: &[u8],
+            session: &mut server::Session,
+        ) -> Result<(), Self::Error> {
+            if !self.sftp_channels.contains(&channel) {
+                session.data(channel, data.to_vec())?;
+            }
+            Ok(())
+        }
+
+        async fn subsystem_request(
+            &mut self,
+            channel_id: ChannelId,
+            name: &str,
+            session: &mut server::Session,
+        ) -> Result<(), Self::Error> {
+            if name == "sftp"
+                && let Some(channel) = self.channels.remove(&channel_id)
+            {
+                self.sftp_channels.insert(channel_id);
+                session.channel_success(channel_id)?;
+                tokio::spawn(async move {
+                    russh_sftp::server::run(channel.into_stream(), TestSftpServer::default()).await;
+                });
+            } else {
+                session.channel_failure(channel_id)?;
+            }
+            Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct TestSftpServer {
+        files: HashMap<String, Vec<u8>>,
+    }
+
+    fn sftp_ok(id: u32) -> Status {
+        Status {
+            id,
+            status_code: StatusCode::Ok,
+            error_message: String::new(),
+            language_tag: String::new(),
+        }
+    }
+
+    impl russh_sftp::server::Handler for TestSftpServer {
+        type Error = StatusCode;
+
+        fn unimplemented(&self) -> Self::Error {
+            StatusCode::OpUnsupported
+        }
+
+        async fn init(
+            &mut self,
+            _version: u32,
+            _extensions: HashMap<String, String>,
+        ) -> Result<Version, Self::Error> {
+            Ok(Version::new())
+        }
+
+        async fn open(
+            &mut self,
+            id: u32,
+            filename: String,
+            flags: OpenFlags,
+            _attrs: FileAttributes,
+        ) -> Result<Handle, Self::Error> {
+            if flags.contains(OpenFlags::CREATE) {
+                self.files.entry(filename.clone()).or_default();
+            }
+            let file = self
+                .files
+                .get_mut(&filename)
+                .ok_or(StatusCode::NoSuchFile)?;
+            if flags.contains(OpenFlags::TRUNCATE) {
+                file.clear();
+            }
+            Ok(Handle {
+                id,
+                handle: filename,
+            })
+        }
+
+        async fn close(&mut self, id: u32, _handle: String) -> Result<Status, Self::Error> {
+            Ok(sftp_ok(id))
+        }
+
+        async fn read(
+            &mut self,
+            id: u32,
+            handle: String,
+            offset: u64,
+            len: u32,
+        ) -> Result<Data, Self::Error> {
+            let file = self.files.get(&handle).ok_or(StatusCode::NoSuchFile)?;
+            let start = usize::try_from(offset).map_err(|_| StatusCode::Failure)?;
+            if start >= file.len() {
+                return Err(StatusCode::Eof);
+            }
+            let end = start.saturating_add(len as usize).min(file.len());
+            Ok(Data {
+                id,
+                data: file[start..end].to_vec(),
+            })
+        }
+
+        async fn write(
+            &mut self,
+            id: u32,
+            handle: String,
+            offset: u64,
+            data: Vec<u8>,
+        ) -> Result<Status, Self::Error> {
+            let file = self.files.get_mut(&handle).ok_or(StatusCode::NoSuchFile)?;
+            let start = usize::try_from(offset).map_err(|_| StatusCode::Failure)?;
+            let end = start.checked_add(data.len()).ok_or(StatusCode::Failure)?;
+            file.resize(file.len().max(end), 0);
+            file[start..end].copy_from_slice(&data);
+            Ok(sftp_ok(id))
+        }
+
+        async fn stat(&mut self, id: u32, path: String) -> Result<Attrs, Self::Error> {
+            let file = self.files.get(&path).ok_or(StatusCode::NoSuchFile)?;
+            Ok(Attrs {
+                id,
+                attrs: FileAttributes {
+                    size: Some(file.len() as u64),
+                    ..FileAttributes::empty()
+                },
+            })
+        }
+
+        async fn rename(
+            &mut self,
+            id: u32,
+            oldpath: String,
+            newpath: String,
+        ) -> Result<Status, Self::Error> {
+            let file = self.files.remove(&oldpath).ok_or(StatusCode::NoSuchFile)?;
+            self.files.insert(newpath, file);
+            Ok(sftp_ok(id))
+        }
+
+        async fn remove(&mut self, id: u32, filename: String) -> Result<Status, Self::Error> {
+            self.files.remove(&filename).ok_or(StatusCode::NoSuchFile)?;
+            Ok(sftp_ok(id))
+        }
+    }
+
+    struct TestSshClient;
+
+    impl client::Handler for TestSshClient {
+        type Error = Error;
+
+        async fn check_server_key(
+            &mut self,
+            _identity: &PublicKeyOrCertificate,
+        ) -> Result<bool, Self::Error> {
+            Ok(true)
+        }
+    }
+
+    fn generate_private_key() -> PrivateKey {
+        PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).expect("generate test SSH key")
+    }
+
+    async fn connect_client(address: std::net::SocketAddr) -> client::Handle<TestSshClient> {
+        client::connect(
+            Arc::new(client::Config {
+                inactivity_timeout: Some(Duration::from_secs(5)),
+                ..Default::default()
+            }),
+            address,
+            TestSshClient,
+        )
+        .await
+        .expect("connect test SSH client")
+    }
+
+    #[tokio::test]
+    async fn upgraded_ssh_stack_supports_terminal_password_key_and_sftp_flows() {
+        tokio::time::timeout(Duration::from_secs(20), async {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server_config = Arc::new(server::Config {
+                auth_rejection_time: Duration::ZERO,
+                auth_rejection_time_initial: Some(Duration::ZERO),
+                keys: vec![generate_private_key()],
+                ..Default::default()
+            });
+            let server_task = tokio::spawn(async move {
+                for _ in 0..2 {
+                    let (stream, _) = listener.accept().await.unwrap();
+                    server::run_stream(server_config.clone(), stream, TestSshServer::default())
+                        .await
+                        .unwrap();
+                }
+            });
+
+            let mut password_client = connect_client(address).await;
+            assert!(
+                password_client
+                    .authenticate_password("fixture-user", uuid::Uuid::new_v4().to_string())
+                    .await
+                    .unwrap()
+                    .success()
+            );
+            let mut terminal = password_client.channel_open_session().await.unwrap();
+            terminal
+                .data_bytes(b"terminal-echo".to_vec())
+                .await
+                .unwrap();
+            let echoed = loop {
+                if let Some(ChannelMsg::Data { data }) = terminal.wait().await {
+                    break data;
+                }
+            };
+            assert_eq!(echoed.as_ref(), b"terminal-echo");
+
+            let sftp_channel = password_client.channel_open_session().await.unwrap();
+            sftp_channel.request_subsystem(true, "sftp").await.unwrap();
+            let sftp = SftpSession::new(sftp_channel.into_stream()).await.unwrap();
+            let mut remote = sftp.create("/upload.part").await.unwrap();
+            remote.write_all(b"sftp-v3").await.unwrap();
+            remote.close().await.unwrap();
+            assert_eq!(sftp.read("/upload.part").await.unwrap(), b"sftp-v3");
+            sftp.rename("/upload.part", "/upload.txt").await.unwrap();
+            assert!(!sftp.try_exists("/upload.part").await.unwrap());
+            assert!(sftp.try_exists("/upload.txt").await.unwrap());
+            sftp.remove_file("/upload.txt").await.unwrap();
+            sftp.close().await.unwrap();
+            password_client
+                .disconnect(Disconnect::ByApplication, "", "")
+                .await
+                .unwrap();
+
+            let mut key_client = connect_client(address).await;
+            assert!(
+                key_client
+                    .authenticate_publickey(
+                        "fixture-user",
+                        PrivateKeyWithHashAlg::new(Arc::new(generate_private_key()), None),
+                    )
+                    .await
+                    .unwrap()
+                    .success()
+            );
+            key_client
+                .disconnect(Disconnect::ByApplication, "", "")
+                .await
+                .unwrap();
+            server_task.await.unwrap();
+        })
+        .await
+        .expect("local SSH compatibility test timed out");
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::{
-        EntryKind, REMOTE_LIST_MARKER, REMOTE_LIST_SCRIPT, Utf8Decoder, parse_remote_entries,
-        remote_interactive_shell_fallback, remote_list_command, shell_quote,
+        EntryKind, REMOTE_LIST_MARKER, REMOTE_LIST_SCRIPT, Utf8Decoder, deliver_forwarded,
+        host_identity_fingerprint, parse_remote_entries, remote_interactive_shell_fallback,
+        remote_list_command, shell_quote,
     };
+    use russh::keys::{HashAlg, PrivateKey, PublicKey, PublicKeyOrCertificate, ssh_key};
+    use std::{collections::HashMap, sync::Mutex};
+    use tokio::sync::mpsc;
+
+    #[test]
+    fn host_identity_keeps_the_existing_sha256_public_key_fingerprint() {
+        let key = PublicKey::from(ssh_key::public::Ed25519PublicKey([7; 32]));
+        let expected = key.fingerprint(HashAlg::Sha256).to_string();
+        let identity = PublicKeyOrCertificate::from(key);
+
+        assert_eq!(host_identity_fingerprint(&identity), expected);
+        assert!(expected.starts_with("SHA256:"));
+
+        let ca = PrivateKey::random(&mut rand::rng(), ssh_key::Algorithm::Ed25519).unwrap();
+        let certified_key =
+            PrivateKey::random(&mut rand::rng(), ssh_key::Algorithm::Ed25519).unwrap();
+        let mut certificate = ssh_key::certificate::Builder::new_with_random_nonce(
+            &mut rand::rng(),
+            certified_key.public_key(),
+            0,
+            u64::MAX,
+        )
+        .unwrap();
+        certificate.serial(1).unwrap();
+        certificate.key_id("test-host").unwrap();
+        certificate
+            .cert_type(ssh_key::certificate::CertType::Host)
+            .unwrap();
+        certificate.valid_principal("test-host").unwrap();
+        let certificate = certificate.sign(&ca).unwrap();
+        let expected = certified_key
+            .public_key()
+            .fingerprint(HashAlg::Sha256)
+            .to_string();
+
+        assert_eq!(
+            host_identity_fingerprint(&PublicKeyOrCertificate::from(certificate)),
+            expected
+        );
+    }
+
+    #[test]
+    fn forwarded_channels_are_delivered_only_to_the_matching_live_route() {
+        let routes = Mutex::new(HashMap::new());
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        routes
+            .lock()
+            .unwrap()
+            .insert(("session-1".to_string(), 43129), sender);
+
+        assert!(!deliver_forwarded(&routes, "session-2", 43129, 1));
+        assert!(deliver_forwarded(&routes, "session-1", 43129, 2));
+        assert_eq!(receiver.try_recv(), Ok(2));
+        drop(receiver);
+        assert!(!deliver_forwarded(&routes, "session-1", 43129, 3));
+    }
 
     #[test]
     fn quotes_remote_command_arguments() {
