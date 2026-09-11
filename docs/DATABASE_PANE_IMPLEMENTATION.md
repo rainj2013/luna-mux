@@ -535,7 +535,7 @@ L2：新增 Tauri command 与原生的 SQL dump 生成器，替换 `invoke_handl
 
 - 左侧栏顶部（搜索框下方，仅连接后显示）一个「导入 / 导出」按钮，打开整库菜单：`导入整库 SQL 文件…` / `导出整库为 SQL 文件…`。
 - 左侧栏表列表单项右键（`onContextMenu`，与连接列表右键同一套 `openMenu` + `DatabaseMenu`）只有一项：`导出该表为 SQL 文件…`。
-- 查询页动作栏的「导出结果」导出的是刚执行那条 SQL 的结果快照：`导出 CSV` / `导出 JSON`（前端生成，不重新执行 SQL），以及 `导出 INSERT SQL`（需要先在左侧选择目标表，因为结果集本身不知道写回哪张表）。
+- 查询页动作栏的「导出结果」导出刚执行那条 SQL 的结果快照为 INSERT SQL，不依赖左侧表选择；简单 `FROM` 查询使用来源表作为目标，无法推断时使用 `query_result`。
 - 数据页工具栏不再有导入 / 导出（保留刷新与分页）；隐藏的 `<input type="file">`、CSV / JSON 解析（`importData`）已删除，导入改由原生按路径读取，导出默认文件名取连接名或表名并过滤文件系统非法字符。
 - 结果提示复用悬浮提示条（5 秒自动消失、可手动关闭）：整库导出显示张数 / 行数 / 大小 / 路径，单表导出显示表名 / 行数 / 大小 / 路径，导入显示文件路径。
 - `controls.current` 里的 `exportCsv` / `exportJson` 移除：新的导入导出需要用户先选文件路径，零参数的 UI bridge 控件表达不了，故不注册替代项。
@@ -544,13 +544,13 @@ L2：新增 Tauri command 与原生的 SQL dump 生成器，替换 `invoke_handl
 
 测试：`app/native/src/database_runtime.rs` 新增 4 项——`sqlite_dump_round_trips_schema_and_values_into_a_new_database`（多表 / 索引 / 引号与换行 / 非法 UTF-8 TEXT / REAL / BLOB / NULL，校验 `bytes` 等于文件大小、dump 文本含表名与 `CAST(X'FF41' AS TEXT)`，再导入到另一个库逐行比对）、`sqlite_table_dump_keeps_only_the_requested_table_and_its_indexes`（只含目标表与其索引，其他表不出现，找不到表报错）、`sqlite_dump_of_an_empty_database_restores_without_error`、`sqlite_import_from_file_is_all_or_nothing`（中途出错整批回滚、自带 BEGIN/COMMIT 的提示、路径不存在的提示）。
 
-- [x] 左侧栏顶部整库「导入 / 导出」按钮；单表右键导出该表；查询页保留结果导出（CSV / JSON / INSERT SQL）。
+- [x] 左侧栏顶部整库「导入 / 导出」按钮；单表右键导出该表；查询页保留 INSERT SQL 结果导出。
 - [x] 生成的 SQL 自带表名，导入不需要选择表。
 - [x] 导出走原生流式写入单事务快照，IPC 不承载数据，内存占用与库大小无关。
 - [x] 只保留 SQL 通道，CSV / JSON 导出与「导入到所选表」已从导入导出界面移除（Rust 侧的 `export_csv` / `export_json` / `import_rows` 命令此前就不被窗格使用，本次未改动其注册状态）。
 - [x] `npm run typecheck`、`npm run i18n:check`（864 keys）、`npm run web:build`、`node --experimental-strip-types --test tests/*.mts`（42 项）通过；`cargo test database` 4 项新增用例通过。
 
-已知限制：MySQL / MariaDB / PostgreSQL 的整库与单表导入导出尚未实现（原因见上），菜单项禁用并给出明确文案；导入要把整份文件读成字符串，内存占用与文件大小同阶（导出侧是平坦的），超大脚本的流式导入未做；dump 不包含 `sqlite_sequence` 等内部表与没有 DDL 的自动索引；恢复顺序按 `sqlite_master.rowid`，不按外键拓扑排序（当前连接不强制外键，若将来开启 `PRAGMA foreign_keys`，父子表的插入顺序可能失败）；REAL 的 NaN / ±Inf 会退化成 `NULL`；BLOB 在结果表格里只显示字节数，导出文件里才是真实内容；查询结果的 `INSERT SQL` 导出用左侧当前选中的表作为目标表，聚合 / 联表结果需要先选对表。
+已知限制：MySQL / MariaDB / PostgreSQL 的整库与单表导入导出尚未实现（原因见上），菜单项禁用并给出明确文案；导入要把整份文件读成字符串，内存占用与文件大小同阶（导出侧是平坦的），超大脚本的流式导入未做；dump 不包含 `sqlite_sequence` 等内部表与没有 DDL 的自动索引；恢复顺序按 `sqlite_master.rowid`，不按外键拓扑排序（当前连接不强制外键，若将来开启 `PRAGMA foreign_keys`，父子表的插入顺序可能失败）；REAL 的 NaN / ±Inf 会退化成 `NULL`；BLOB 在结果表格里只显示字节数，导出文件里才是真实内容；无法从查询推断来源表时，查询结果 INSERT 使用 `query_result` 作为目标表，导入前可在文件中替换目标表名。
 
 ## 表列表折叠按钮移到主区域工具条（2026-09-10）
 
