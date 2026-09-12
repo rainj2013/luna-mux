@@ -56,6 +56,7 @@ Luna Mux 是一个面向 Coding Agent 的终端工作台。它以项目目录为
 - Luna Mux MCP 向 Agent 开放会话、窗格、终端、Agent、连接、设置、诊断、传输和隧道等控制能力。
 - Agent 可以发现会话、窗格、Terminal Runtime 和其他受管 Agent。
 - Agent 可以创建窗格、修改布局、读取有界终端输出、写入终端输入。
+- Agent 也可以通过 Luna Mux MCP 控制数据库管理窗格，自主读写数据库。
 - Agent 可以查询 Agent 状态、投递任务、发送中断。
 - Agent 可以读取安全的连接摘要、修改主题和终端外观、运行内置诊断。
 - 关闭 Runtime、启动传输或隧道等重要副作用，需要先在桌面端确认。

@@ -56,6 +56,7 @@ Launch a supported agent (currently including Codex and Claude Code) in any pane
 - The Luna Mux MCP exposes Sessions, Panes, terminals, agents, connections, settings, diagnostics, transfers, and tunnels to agents.
 - Agents can discover Sessions, Panes, Terminal Runtimes, and other managed agents.
 - Agents can create Panes, update layouts, read bounded terminal output, and write terminal input.
+- Agents can also control database management panes through the Luna Mux MCP to read and write databases autonomously.
 - Agents can inspect agent state, send tasks, and interrupt managed agents.
 - Agents can read safe connection summaries, update themes and terminal appearance, and run built-in diagnostics.
 - Closing Runtimes or starting transfers and tunnels requires desktop confirmation first.
