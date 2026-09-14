@@ -19,6 +19,7 @@ mod database_pane_ui;
 mod database_runtime;
 mod desktop;
 mod doctor;
+mod grok_build_adapter;
 mod legacy_agent_hook_cleanup;
 mod local_pty_backend;
 #[cfg(test)]

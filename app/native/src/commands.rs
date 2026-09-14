@@ -741,7 +741,22 @@ pub async fn terminal_runtime_create(
                                 return Err(error);
                             }
                         };
-                    Some(format!("{codex_bootstrap}; {claude_bootstrap}"))
+                    let grok_bootstrap =
+                        match crate::grok_build_adapter::install_wsl_manual_bootstrap(
+                            &context,
+                            &request.target_id,
+                            &endpoint,
+                            &mcp_endpoint,
+                            environment_path.as_path().to_str(),
+                        ) {
+                            Ok(command) => command,
+                            Err(error) => {
+                                state.agent_hooks.revoke_token(&token);
+                                state.luna_mcp.revoke_token(&mcp_token);
+                                return Err(error);
+                            }
+                        };
+                    Some(format!("{codex_bootstrap}; {claude_bootstrap}; {grok_bootstrap}"))
                 } else {
                     None
                 };
@@ -814,7 +829,7 @@ pub async fn terminal_runtime_create(
             request
                 .launch_environment
                 .insert("LUNA_MUX_MCP_ENDPOINT".into(), mcp_endpoint.clone());
-            // Native local shells load a runtime-scoped codex/claude shim below.
+            // Native local shells load runtime-scoped Agent shims below.
             // Keep the PTY's initial input short: injecting the full configuration
             // command through a canonical TTY can exceed MAX_CANON, truncate a
             // quoted argument, and leave zsh at its `quote>` continuation prompt.
@@ -873,7 +888,7 @@ pub async fn terminal_runtime_create(
                         state.sessions.verify_remote_agent_requirements(
                             &runtime.runtime_id,
                             &profile.command,
-                            profile.adapter == "codex",
+                            agent_adapters::requires_remote_hook_helper(&profile.adapter),
                         )
                     })
                     .await?;
@@ -923,7 +938,7 @@ pub async fn terminal_runtime_create(
                         )
                     })
                     .await?;
-                    let remote_hook_command = if profile.adapter == "codex" {
+                    let remote_hook_command = if agent_adapters::requires_remote_hook_helper(&profile.adapter) {
                         Some(format!("{} hook", posix_shell_quote(&remote_helper)))
                     } else {
                         None
@@ -1118,28 +1133,28 @@ async fn setup_remote_manual_agent_shims(
     // The remote helper is POSIX shell and uses curl/wget plus a TCP utility;
     // Python is not required.  The managed path performs the same capability
     // check after the runtime is ready.
-    let (codex, claude) = tokio::join!(
-        remote_setup_optional(|| state
+    let mut remote_agents = Vec::new();
+    for profile in agent_adapters::profiles() {
+        if let Some(command) = remote_setup_optional(|| state
             .sessions
-            .remote_command_path(&runtime.runtime_id, "codex")),
-        remote_setup_optional(|| state
-            .sessions
-            .remote_command_path(&runtime.runtime_id, "claude"))
-    );
-    if codex.is_none() && claude.is_none() {
-        return Err("远端没有可用的 codex 或 claude 命令，已跳过 Agent 注入".into());
+            .remote_command_path(&runtime.runtime_id, &profile.command))
+        .await
+        {
+            remote_agents.push((profile, command));
+        }
     }
+    let Some((verification_profile, verification_command)) = remote_agents.first() else {
+        return Err("远端没有可用的内置 Agent 命令，已跳过 Agent 注入".into());
+    };
     state
         .sessions
         .verify_remote_agent_requirements(
             &runtime.runtime_id,
-            codex.as_deref().or(claude.as_deref()).unwrap_or("codex"),
-            true,
+            verification_command,
+            agent_adapters::requires_remote_hook_helper(&verification_profile.adapter),
         )
         .await?;
-    let has_codex = codex.is_some();
-    let has_claude = claude.is_some();
-    let existing_developer_instructions = if codex.is_some() {
+    let existing_developer_instructions = if remote_agents.iter().any(|(profile, _)| profile.adapter == agent_adapters::CODEX_ADAPTER_ID) {
         remote_setup_optional(|| {
             state
                 .sessions
@@ -1225,18 +1240,17 @@ async fn setup_remote_manual_agent_shims(
             launch_profile_id: "manual.remote".into(),
         };
         let mut shim_bin = None;
-        for (adapter, real_command, profile_id, label) in [
-            ("codex", codex, "codex.default", "Codex"),
-            ("claude-code", claude, "claude-code.default", "Claude Code"),
-        ] {
-            let Some(real_command) = real_command else {
-                continue;
-            };
+        let enabled_commands = remote_agents
+            .iter()
+            .map(|(profile, _)| profile.command.clone())
+            .collect::<Vec<_>>();
+        for (base_profile, real_command) in &remote_agents {
+            let adapter = base_profile.adapter.as_str();
             let profile = AgentLaunchProfile {
-                id: profile_id.into(),
-                label: label.into(),
-                adapter: adapter.into(),
-                command: posix_shell_quote(&real_command),
+                id: base_profile.id.clone(),
+                label: base_profile.label.clone(),
+                adapter: base_profile.adapter.clone(),
+                command: posix_shell_quote(real_command),
                 built_in: true,
             };
             let launch = agent_adapters::managed_command(&ManagedAgentLaunch {
@@ -1253,16 +1267,11 @@ async fn setup_remote_manual_agent_shims(
             })?;
             let script =
                 remote_manual_agent_script(adapter, &hook_command, &launch, &environment_file);
-            let name = if adapter == "codex" {
-                "codex"
-            } else {
-                "claude"
-            };
             let (bin, _) = retry_remote_setup("remote setup", || {
                 state.sessions.install_remote_runtime_shim(
                     &runtime.runtime_id,
                     &runtime.runtime_id,
-                    name,
+                    &base_profile.command,
                     &script,
                 )
             })
@@ -1274,8 +1283,7 @@ async fn setup_remote_manual_agent_shims(
             context,
             &environment_file,
             &shim_bin,
-            has_codex,
-            has_claude,
+            &enabled_commands,
         );
         let write_result = tokio::time::timeout(
             std::time::Duration::from_secs(10),
@@ -1311,11 +1319,7 @@ fn remote_manual_agent_script(
     launch: &str,
     environment_file: &str,
 ) -> String {
-    let payload_adapter = if adapter_id == "claude-code" {
-        "claude-code"
-    } else {
-        "codex"
-    };
+    let payload_adapter = adapter_id;
     format!(
         "#!/bin/sh\n\
 luna_mux_env_file={}\n\
@@ -1346,8 +1350,7 @@ fn remote_manual_shell_bootstrap(
     context: &TerminalRuntimeContext,
     environment_file: &str,
     shim_bin: &str,
-    has_codex: bool,
-    has_claude: bool,
+    enabled_commands: &[String],
 ) -> String {
     let mut command = format!(
         "set -a; . {}; set +a; LUNA_MUX_SESSION_ID={}; LUNA_MUX_PANE_ID={}; LUNA_MUX_RUNTIME_ID={}; export LUNA_MUX_SESSION_ID LUNA_MUX_PANE_ID LUNA_MUX_RUNTIME_ID; PATH={}:\"$PATH\"; export PATH; hash -r 2>/dev/null || true",
@@ -1357,13 +1360,11 @@ fn remote_manual_shell_bootstrap(
         posix_shell_quote(&context.runtime_id),
         posix_shell_quote(shim_bin),
     );
-    for (name, enabled) in [("codex", has_codex), ("claude", has_claude)] {
-        if enabled {
-            command.push_str(&format!(
-                "; unalias {name} 2>/dev/null || true; {name}() {{ {} \"$@\"; }}",
-                posix_shell_quote(&format!("{shim_bin}/{name}"))
-            ));
-        }
+    for name in enabled_commands {
+        command.push_str(&format!(
+            "; unalias {name} 2>/dev/null || true; {name}() {{ {} \"$@\"; }}",
+            posix_shell_quote(&format!("{shim_bin}/{name}"))
+        ));
     }
     command
 }
@@ -1652,8 +1653,7 @@ mod managed_agent_launch_tests {
             &context,
             "/home/user/.luna-mux/runtime/agent.env",
             "/home/user/.luna-mux/runtime/runtime-1/bin",
-            true,
-            true,
+            &["codex".into(), "claude".into(), "grok".into()],
         );
         assert!(command.contains(". '/home/user/.luna-mux/runtime/agent.env'"));
         assert!(!command.contains("rm -f --"));
@@ -1666,6 +1666,11 @@ mod managed_agent_launch_tests {
         assert!(
             command.contains(
                 "claude() { '/home/user/.luna-mux/runtime/runtime-1/bin/claude' \"$@\"; }"
+            )
+        );
+        assert!(
+            command.contains(
+                "grok() { '/home/user/.luna-mux/runtime/runtime-1/bin/grok' \"$@\"; }"
             )
         );
         assert!(!command.contains("lmxbm_"));

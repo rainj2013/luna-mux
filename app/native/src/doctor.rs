@@ -588,7 +588,9 @@ fn check_local_agents() -> AgentCheck {
     let mut warnings = Vec::new();
     let targets = crate::agent_command::default_local_target_ids();
     for target_id in &targets {
-        let discovery = crate::agent_command::discover(&["codex", "claude"], target_id);
+        let commands = crate::agent_adapters::command_names();
+        let command_refs = commands.iter().map(String::as_str).collect::<Vec<_>>();
+        let discovery = crate::agent_command::discover(&command_refs, target_id);
         for (command, path) in discovery.paths {
             available.push(format!("{command}[{target_id}]={}", path.to_string_lossy()));
         }

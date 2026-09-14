@@ -1070,15 +1070,15 @@ fn status_for_hook(
             ManagedAgentStatus::Waiting,
             Some(ManagedAgentWaitingReason::Permission),
         ),
-        // Claude Code's official hooks documentation defines `Stop` as "when
-        // Claude finishes responding" (the main agent's turn) and
-        // `SubagentStop` as "when a subagent finishes" — which fires once per
-        // delegated Task subagent, many times mid-task. Treating subagent
-        // completion as task completion spams false "completed" desktop
-        // notifications, so for Claude Code a subagent finishing means the
-        // main session is still working. Codex keeps its historical mapping
-        // because its completion notifications are already accurate.
-        "SubagentStop" if adapter_id == agent_adapters::CLAUDE_CODE_ADAPTER_ID => {
+        // Claude Code and Grok Build emit `SubagentStop` for delegated work;
+        // that event can fire many times before the main turn finishes.
+        // Treating it as task completion would spam false notifications.
+        "SubagentStop"
+            if matches!(
+                adapter_id,
+                agent_adapters::CLAUDE_CODE_ADAPTER_ID | agent_adapters::GROK_BUILD_ADAPTER_ID
+            ) =>
+        {
             (ManagedAgentStatus::Working, None)
         }
         "Stop" | "SessionEnd" | "SubagentStop" | "RuntimeExit" | "AgentProcessExit" => {
@@ -1111,6 +1111,7 @@ pub fn try_run_hook_forwarder(args: &[String]) -> Option<i32> {
         Some(Ok(payload)) => payload,
         _ => return Some(2),
     };
+    normalize_hook_payload(&mut payload);
     let process_id = std::env::var("LUNA_MUX_AGENT_PROCESS_ID")
         .ok()
         .filter(|value| !value.trim().is_empty())
@@ -1154,6 +1155,7 @@ pub fn try_run_hook_forwarder(args: &[String]) -> Option<i32> {
         .enable_all()
         .build()
         .ok()?;
+    let response_adapter_id = adapter_id.clone();
     let result = runtime.block_on(async move {
         let response = forward_hook_request(
             &client,
@@ -1171,12 +1173,56 @@ pub fn try_run_hook_forwarder(args: &[String]) -> Option<i32> {
     });
     Some(match result {
         Ok(Some(response)) => {
+            let response = if response_adapter_id == agent_adapters::GROK_BUILD_ADAPTER_ID {
+                grok_hook_response(response)
+            } else {
+                response
+            };
             println!("{}", serde_json::to_string(&response).unwrap_or_default());
             0
         }
         // Fail open: Luna Mux tracking/browser routing must never block the
         // agent when the local hook service is unreachable or restarts.
         Ok(None) | Err(_) => 0,
+    })
+}
+
+fn normalize_hook_payload(payload: &mut Value) {
+    let Some(object) = payload.as_object_mut() else {
+        return;
+    };
+    for (from, to) in [
+        ("hookEventName", "hook_event_name"),
+        ("sessionId", "session_id"),
+        ("turnId", "turn_id"),
+        ("toolName", "tool_name"),
+        ("toolInput", "tool_input"),
+        ("agentSessionId", "session_id"),
+    ] {
+        if !object.contains_key(to) {
+            if let Some(value) = object.remove(from) {
+                object.insert(to.into(), value);
+            }
+        }
+    }
+}
+
+fn grok_hook_response(response: Value) -> Value {
+    if response.get("decision").is_some() {
+        return response;
+    }
+    let Some(output) = response.get("hookSpecificOutput") else {
+        return Value::Null;
+    };
+    if output.get("permissionDecision").and_then(Value::as_str) != Some("deny") {
+        return Value::Null;
+    }
+    json!({
+        "decision": "deny",
+        "reason": output
+            .get("permissionDecisionReason")
+            .and_then(Value::as_str)
+            .unwrap_or("Luna Mux denied this tool call")
     })
 }
 
@@ -1399,6 +1445,28 @@ mod tests {
     }
 
     #[test]
+    fn grok_hook_payload_and_denial_response_are_translated() {
+        let mut payload = json!({
+            "hookEventName": "PreToolUse",
+            "sessionId": "session-1",
+            "toolName": "Bash",
+            "toolInput": {"command": "open chrome"}
+        });
+        normalize_hook_payload(&mut payload);
+        assert_eq!(payload["hook_event_name"], "PreToolUse");
+        assert_eq!(payload["session_id"], "session-1");
+        assert_eq!(payload["tool_name"], "Bash");
+        let translated = grok_hook_response(json!({
+            "hookSpecificOutput": {
+                "permissionDecision": "deny",
+                "permissionDecisionReason": "blocked"
+            }
+        }));
+        assert_eq!(translated["decision"], "deny");
+        assert_eq!(translated["reason"], "blocked");
+    }
+
+    #[test]
     fn claude_task_completion_is_signaled_only_by_the_main_agent_stop() {
         // Claude Code: `Stop` fires when the main agent finishes responding;
         // `SubagentStop` fires per delegated subagent mid-task and must not
@@ -1413,6 +1481,10 @@ mod tests {
         );
         assert_eq!(
             status_for_hook("SubagentStart", agent_adapters::CLAUDE_CODE_ADAPTER_ID),
+            (ManagedAgentStatus::Working, None)
+        );
+        assert_eq!(
+            status_for_hook("SubagentStop", agent_adapters::GROK_BUILD_ADAPTER_ID),
             (ManagedAgentStatus::Working, None)
         );
 

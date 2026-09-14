@@ -75,7 +75,7 @@ export function createChineseHelpSections(commandKey: string): HelpSection[] {
           <li>选择普通“终端”或一个 Coding Agent 启动配置。</li>
           <li>选择运行目标：Windows 提供 PowerShell 7 和已安装的 WSL 发行版；macOS 使用登录 Shell；远程目标来自 SSH 目标资源库。</li>
         </ol>
-        <p>普通终端里也可以手动运行 <code>codex</code> 或 <code>claude</code>，Luna Mux 会在检测到活动后把它识别为 Agent。</p>
+        <p>普通终端里也可以手动运行已安装的 Agent（例如 <code>codex</code>、<code>claude</code> 或 <code>grok</code>），Luna Mux 会在检测到活动后把它识别为 Agent。</p>
         <h3>拆分和布局</h3>
         <ul>
           <li>窗格标题栏的左右拆分和上下拆分按钮会复制当前目标定义，创建一个新的同类窗格。</li>
@@ -112,7 +112,7 @@ export function createChineseHelpSections(commandKey: string): HelpSection[] {
         <h3>启动方式</h3>
         <ol>
           <li>创建终端窗格，或在添加窗格时选择 Coding Agent 启动配置。</li>
-          <li>在窗格中运行 <code>codex</code> 或 <code>claude</code>；受管启动会直接进入对应 Agent，普通终端也会在活动出现后识别。</li>
+          <li>在窗格中运行已安装的 Agent；受管启动会直接进入对应 Agent，普通终端也会在活动出现后识别。</li>
           <li>Agent 退出后，重新启动会建立新的运行时身份，状态和授权会重新绑定到当前窗格。</li>
         </ol>
         <h3>提醒如何工作</h3>
@@ -412,7 +412,7 @@ export function createEnglishHelpSections(commandKey: string): HelpSection[] {
           <li>Choose ordinary Terminal or a Coding Agent launch profile.</li>
           <li>Choose a target. Windows offers PowerShell 7 and installed WSL distributions; macOS uses the login shell; remote targets come from the SSH target library.</li>
         </ol>
-        <p>You can also run <code>codex</code> or <code>claude</code> manually in an ordinary terminal. Luna Mux recognizes the Agent after activity is detected.</p>
+        <p>You can also run an installed Agent such as <code>codex</code>, <code>claude</code>, or <code>grok</code> manually in an ordinary terminal. Luna Mux recognizes the Agent after activity is detected.</p>
         <h3>Splits and layout</h3>
         <ul>
           <li>The split-right and split-down buttons duplicate the current target definition into a new matching Pane.</li>
@@ -449,7 +449,7 @@ export function createEnglishHelpSections(commandKey: string): HelpSection[] {
         <h3>Launching an Agent</h3>
         <ol>
           <li>Create a terminal Pane or choose a Coding Agent launch profile while adding a Pane.</li>
-          <li>Run <code>codex</code> or <code>claude</code> in the Pane. Managed launch starts the selected Agent directly, and ordinary terminals are recognized after activity appears.</li>
+          <li>Run an installed Agent in the Pane. Managed launch starts the selected Agent directly, and ordinary terminals are recognized after activity appears.</li>
           <li>After an Agent exits, starting it again creates a new runtime identity and binds state and authorization to the current Pane.</li>
         </ol>
         <h3>Attention behavior</h3>

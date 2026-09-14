@@ -3,12 +3,14 @@ use std::path::{Path, PathBuf};
 use crate::{
     agent_profiles::{
         AgentLaunchProfile, DEFAULT_CLAUDE_CODE_PROFILE_ID, DEFAULT_CODEX_PROFILE_ID,
+        DEFAULT_GROK_BUILD_PROFILE_ID,
     },
     terminal_runtime_contract::{TerminalManagedAgentContext, TerminalRuntimeContext},
 };
 
 pub const CODEX_ADAPTER_ID: &str = "codex";
 pub const CLAUDE_CODE_ADAPTER_ID: &str = "claude-code";
+pub const GROK_BUILD_ADAPTER_ID: &str = "grok-build";
 
 pub struct ManagedAgentLaunch<'a> {
     pub profile: &'a AgentLaunchProfile,
@@ -35,10 +37,14 @@ trait AgentAdapter: Sync {
         resolved_command: Option<&Path>,
     ) -> Result<Option<PathBuf>, String>;
     fn managed_command(&self, launch: &ManagedAgentLaunch<'_>) -> Result<String, String>;
+    fn requires_remote_hook_helper(&self) -> bool {
+        false
+    }
 }
 
 struct CodexAdapter;
 struct ClaudeCodeAdapter;
+struct GrokBuildAdapter;
 
 impl AgentAdapter for CodexAdapter {
     fn id(&self) -> &'static str {
@@ -118,11 +124,63 @@ impl AgentAdapter for ClaudeCodeAdapter {
     }
 }
 
+impl AgentAdapter for GrokBuildAdapter {
+    fn id(&self) -> &'static str {
+        GROK_BUILD_ADAPTER_ID
+    }
+
+    fn profile(&self) -> AgentLaunchProfile {
+        AgentLaunchProfile {
+            id: DEFAULT_GROK_BUILD_PROFILE_ID.into(),
+            label: "Grok Build".into(),
+            adapter: self.id().into(),
+            command: "grok".into(),
+            built_in: true,
+        }
+    }
+
+    fn automatic_profile_id(&self) -> &'static str {
+        "grok-build.auto"
+    }
+
+    fn install_manual_shim(
+        &self,
+        context: &TerminalRuntimeContext,
+        hook_endpoint: Option<&str>,
+        mcp_endpoint: Option<&str>,
+        resolved_command: Option<&Path>,
+    ) -> Result<Option<PathBuf>, String> {
+        crate::grok_build_adapter::install(context, hook_endpoint, mcp_endpoint, resolved_command)
+    }
+
+    fn managed_command(&self, launch: &ManagedAgentLaunch<'_>) -> Result<String, String> {
+        crate::grok_build_adapter::managed_command(launch)
+    }
+
+    fn requires_remote_hook_helper(&self) -> bool {
+        crate::grok_build_adapter::requires_remote_hook_helper()
+    }
+}
+
 static CODEX_ADAPTER: CodexAdapter = CodexAdapter;
 static CLAUDE_CODE_ADAPTER: ClaudeCodeAdapter = ClaudeCodeAdapter;
+static GROK_BUILD_ADAPTER: GrokBuildAdapter = GrokBuildAdapter;
 
-fn adapters() -> [&'static dyn AgentAdapter; 2] {
-    [&CODEX_ADAPTER, &CLAUDE_CODE_ADAPTER]
+fn adapters() -> [&'static dyn AgentAdapter; 3] {
+    [&CODEX_ADAPTER, &CLAUDE_CODE_ADAPTER, &GROK_BUILD_ADAPTER]
+}
+
+pub fn command_names() -> Vec<String> {
+    adapters()
+        .into_iter()
+        .map(|adapter| adapter.profile().command)
+        .collect()
+}
+
+pub fn requires_remote_hook_helper(adapter_id: &str) -> bool {
+    resolve(adapter_id)
+        .map(|adapter| adapter.requires_remote_hook_helper())
+        .unwrap_or(false)
 }
 
 fn resolve(adapter_id: &str) -> Result<&'static dyn AgentAdapter, String> {
@@ -163,7 +221,9 @@ pub fn install_runtime_shims(
     hook_endpoint: Option<&str>,
     mcp_endpoint: Option<&str>,
 ) -> Result<Option<PathBuf>, String> {
-    let discovery = crate::agent_command::discover(&["codex", "claude"], target_id);
+    let commands = command_names();
+    let command_refs = commands.iter().map(String::as_str).collect::<Vec<_>>();
+    let discovery = crate::agent_command::discover(&command_refs, target_id);
     if let Some(warning) = discovery.warning.as_deref() {
         eprintln!("Unable to inspect Agent commands for {target_id}: {warning}");
     }
@@ -202,12 +262,16 @@ mod tests {
             .iter()
             .map(|profile| profile.id.as_str())
             .collect::<std::collections::HashSet<_>>();
-        assert_eq!(profiles.len(), 2);
+        assert_eq!(profiles.len(), 3);
         assert_eq!(ids.len(), profiles.len());
         assert_eq!(automatic_profile_id(CODEX_ADAPTER_ID), "codex.auto");
         assert_eq!(
             automatic_profile_id(CLAUDE_CODE_ADAPTER_ID),
             "claude-code.auto"
+        );
+        assert_eq!(
+            automatic_profile_id(GROK_BUILD_ADAPTER_ID),
+            "grok-build.auto"
         );
     }
 
@@ -234,9 +298,14 @@ mod tests {
                 existing_developer_instructions: Some("Keep the remote user rule."),
             })
             .unwrap();
-            assert!(command.contains("remote-agent"), "{command}");
-            assert!(!command.contains("browser-bridge.json"), "{command}");
-            assert!(command.contains("127.0.0.1:43128"), "{command}");
+            if profile.adapter == GROK_BUILD_ADAPTER_ID {
+                assert!(command.contains("GROK_HOME"), "{command}");
+                assert!(command.contains("base64"), "{command}");
+            } else {
+                assert!(command.contains("remote-agent"), "{command}");
+                assert!(!command.contains("browser-bridge.json"), "{command}");
+                assert!(command.contains("127.0.0.1:43128"), "{command}");
+            }
             assert!(!command.contains("lmxbm_"), "{command}");
             assert!(!command.contains("LUNA_MUX_BROWSER_CDP_PORT=43129"));
             if profile.adapter == CODEX_ADAPTER_ID {

@@ -310,7 +310,7 @@ unset LUNA_MUX_USER_ZDOTDIR\n",
     );
     let mut bootstrap = String::new();
     let mut posix_bootstrap = String::new();
-    for name in ["codex", "claude"] {
+    for name in crate::agent_adapters::command_names() {
         let shim = root.join(name);
         if shim.is_file() {
             bootstrap.push_str(&format!(

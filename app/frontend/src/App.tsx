@@ -139,6 +139,7 @@ function isSshAuthenticationFailure(error?: string): boolean {
 function agentAdapterLabel(adapterId: string): string {
   if (adapterId === 'codex') return 'Codex'
   if (adapterId === 'claude-code') return 'Claude Code'
+  if (adapterId === 'grok-build') return 'Grok Build'
   return adapterId
 }
 
@@ -2580,6 +2581,7 @@ function parseRuntimeEnvironmentDetail(detail: string): DiagnosticsRuntimeEnviro
 function agentTypeLabel(adapter: string): string {
   if (adapter === 'claude-code') return 'Claude Code'
   if (adapter === 'codex') return 'Codex'
+  if (adapter === 'grok-build') return 'Grok Build'
   return adapter || 'Agent'
 }
 
@@ -2610,7 +2612,7 @@ function readableDiagnosticDetail(name: string, detail: string): string {
       const agentName = match[1] ?? ''
       const targetName = match[2] ?? ''
       const result = match[3] ?? ''
-      const agent = agentName === 'codex' ? 'Codex' : agentName === 'claude' ? 'Claude Code' : agentName
+      const agent = agentName === 'codex' ? 'Codex' : agentName === 'claude' ? 'Claude Code' : agentName === 'grok' ? 'Grok Build' : agentName
       const target = targetName.replace(/^local:/, '').replace(/^powershell5?$/, 'Windows PowerShell')
       return `已找到 ${agent}（${target}）：${result}`
     })
