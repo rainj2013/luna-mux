@@ -8,7 +8,7 @@ import { ChevronDown, ChevronUp, ClipboardPaste, Copy, KeyRound, Palette, Play, 
 import type { TerminalRuntimeEvent, TerminalSettings } from '../types'
 import { colorWithOpacity } from '../terminal-style'
 import { createTerminalOutputWriter, type TerminalOutputWriter } from '../terminal-output-writer'
-import { handleCodexMultilinePasteEvent, routeTerminalPaste } from '../terminal-input'
+import { agentImagePasteInput, handleCodexMultilinePasteEvent, routeTerminalPaste } from '../terminal-input'
 import { useI18n } from '../i18n'
 
 const terminalHighWaterMark = 1024 * 1024
@@ -303,7 +303,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
         if (content.type === 'text') {
           pasteTerminalText(content.text)
         } else if (content.type === 'image' && targetIdRef.current.startsWith('local:')) {
-          writeTerminalInput('\x16')
+          writeTerminalInput(agentImagePasteInput(activeAgentAdapterIdRef.current, window.api.platform))
         }
       } catch (error) {
         console.warn('Failed to paste into terminal', error)

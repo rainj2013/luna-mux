@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { agentAdapterId, codexMultilinePastePayload, handleCodexMultilinePasteEvent, routeTerminalPaste } from '../app/frontend/src/terminal-input.ts'
+import { agentAdapterId, agentImagePasteInput, codexMultilinePastePayload, handleCodexMultilinePasteEvent, routeTerminalPaste } from '../app/frontend/src/terminal-input.ts'
+
+test('image paste uses each Agent adapter\'s native shortcut', () => {
+  assert.equal(agentImagePasteInput('codex', 'win32'), '\x16')
+  assert.equal(agentImagePasteInput('grok-build', 'win32'), '\x16')
+  assert.equal(agentImagePasteInput('claude-code', 'win32'), '\x1bv')
+  assert.equal(agentImagePasteInput('claude-code', 'darwin'), '\x16')
+  assert.equal(agentImagePasteInput(undefined, 'linux'), '\x16')
+})
 
 test('Codex multiline paste normalizes LF, CRLF, and CR before bracketing', () => {
   assert.equal(
@@ -21,7 +29,9 @@ test('single-line text keeps using xterm paste handling', () => {
 test('managed Codex is known from its launch profile before the first hook event', () => {
   assert.equal(agentAdapterId(undefined, 'codex.default'), 'codex')
   assert.equal(agentAdapterId('claude-code', 'codex.default'), 'claude-code')
-  assert.equal(agentAdapterId(undefined, 'claude-code.default'), undefined)
+  assert.equal(agentAdapterId(undefined, 'claude-code.default'), 'claude-code')
+  assert.equal(agentAdapterId(undefined, 'grok-build.default'), 'grok-build')
+  assert.equal(agentAdapterId(undefined, 'claude-code.auto'), 'claude-code')
 })
 
 test('clipboard shortcut routes Codex multiline text to one direct write', () => {
