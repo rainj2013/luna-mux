@@ -3,11 +3,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use serde_json::json;
 
 use crate::{
-    agent_adapters::{ManagedAgentLaunch, GROK_BUILD_ADAPTER_ID},
+    agent_adapters::{GROK_BUILD_ADAPTER_ID, ManagedAgentLaunch, runtime_root, runtime_shim_root},
     luna_mcp::MCP_AUTHORIZATION_ENV,
     shell_quoting::{posix_shell_quote, shell_argument_quote, shell_quote},
     terminal_runtime_contract::TerminalRuntimeContext,
@@ -39,8 +39,8 @@ pub fn install(
         return Ok(None);
     };
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
-    let root = runtime_root(context);
-    let home = root.join("grok");
+    let root = runtime_shim_root(context);
+    let home = runtime_root(context).join("grok");
     crate::runtime_env::write_runtime_owner(&context.runtime_id)?;
     #[cfg(windows)]
     let hook_command = format!(
@@ -204,12 +204,6 @@ pub fn install_wsl_manual_bootstrap(
     fs::write(&path, script).map_err(|error| error.to_string())?;
     let wsl_path = executable_for_target(&path, target_id)?;
     Ok(format!(". {}", shell_quote(&wsl_path.to_string_lossy())))
-}
-
-fn runtime_root(context: &TerminalRuntimeContext) -> PathBuf {
-    std::env::temp_dir()
-        .join("luna-mux")
-        .join(&context.runtime_id)
 }
 
 fn write_config_files(

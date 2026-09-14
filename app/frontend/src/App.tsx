@@ -662,11 +662,19 @@ export function App(): React.JSX.Element {
     const tone = agentAttentionTone(agent)
     return tone ? [[agent.paneId, tone] as const] : []
   })), [allAgents])
-  const activeAgentAdapterByPane = useMemo(() => new Map(allAgents.flatMap((agent) => {
-    const pane = tabs.find((item) => item.id === agent.paneId)
-    const adapterId = agentAdapterId(agent.latest?.adapterId, pane?.launchProfileId ?? '')
-    return adapterId ? [[agent.paneId, adapterId] as const] : []
-  })), [allAgents, tabs])
+  const activeAgentAdapterByPane = useMemo(() => {
+    const adapters = new Map<string, string>()
+    for (const pane of tabs) {
+      const adapterId = agentAdapterId(undefined, pane.launchProfileId ?? '')
+      if (adapterId) adapters.set(pane.id, adapterId)
+    }
+    for (const agent of allAgents) {
+      const pane = tabs.find((item) => item.id === agent.paneId)
+      const adapterId = agentAdapterId(agent.latest?.adapterId, pane?.launchProfileId ?? '')
+      if (adapterId) adapters.set(agent.paneId, adapterId)
+    }
+    return adapters
+  }, [allAgents, tabs])
   const selectedBookmark = bookmarkMap.get(selectedBookmarkId) ?? activeBookmark
   const filteredBookmarks = bookmarks.filter((item) => `${item.name} ${item.host} ${item.username} ${item.groupName} ${item.note}`.toLowerCase().includes(query.toLowerCase()))
   const bookmarkGroups = useMemo(() => {

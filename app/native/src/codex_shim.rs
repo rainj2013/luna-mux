@@ -115,10 +115,7 @@ fn install_with_paths(
     let Some(real) = resolved_command.map(resolve_codex_command) else {
         return Ok(None);
     };
-    let root = std::env::temp_dir()
-        .join("luna-mux")
-        .join(&context.runtime_id)
-        .join("bin");
+    let root = crate::agent_adapters::runtime_shim_root(context);
     crate::runtime_env::write_runtime_owner(&context.runtime_id)?;
     fs::create_dir_all(&root).map_err(|error| error.to_string())?;
     let hook = format!("{} hook", quote_path(&executable));
@@ -470,10 +467,7 @@ pub fn install_wsl_manual_bootstrap(
     if !target_id.starts_with("local:wsl:") {
         return Err("WSL Codex 启动脚本只能安装到 WSL 终端".into());
     }
-    let root = std::env::temp_dir()
-        .join("luna-mux")
-        .join(&context.runtime_id)
-        .join("bin");
+    let root = crate::agent_adapters::runtime_shim_root(context);
     crate::runtime_env::write_runtime_owner(&context.runtime_id)?;
     fs::create_dir_all(&root).map_err(|error| error.to_string())?;
     let env_source = environment_file

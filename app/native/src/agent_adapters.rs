@@ -215,6 +215,16 @@ pub fn normalize_adapter_id(value: Option<&str>) -> &'static str {
         .unwrap_or(CODEX_ADAPTER_ID)
 }
 
+pub(crate) fn runtime_root(context: &TerminalRuntimeContext) -> PathBuf {
+    std::env::temp_dir()
+        .join("luna-mux")
+        .join(&context.runtime_id)
+}
+
+pub(crate) fn runtime_shim_root(context: &TerminalRuntimeContext) -> PathBuf {
+    runtime_root(context).join("bin")
+}
+
 pub fn install_runtime_shims(
     context: &TerminalRuntimeContext,
     target_id: &str,
@@ -227,7 +237,8 @@ pub fn install_runtime_shims(
     if let Some(warning) = discovery.warning.as_deref() {
         eprintln!("Unable to inspect Agent commands for {target_id}: {warning}");
     }
-    let mut installed_root = None;
+    let expected_root = runtime_shim_root(context);
+    let mut installed = false;
     for adapter in adapters() {
         let profile = adapter.profile();
         if let Some(root) = adapter.install_manual_shim(
@@ -236,10 +247,17 @@ pub fn install_runtime_shims(
             mcp_endpoint,
             discovery.paths.get(&profile.command).map(PathBuf::as_path),
         )? {
-            installed_root = Some(root);
+            if root != expected_root {
+                return Err(format!(
+                    "Agent Adapter {} installed its shim outside the shared runtime bin: {}",
+                    adapter.id(),
+                    root.display()
+                ));
+            }
+            installed = true;
         }
     }
-    Ok(installed_root)
+    Ok(installed.then_some(expected_root))
 }
 
 pub fn managed_command(launch: &ManagedAgentLaunch<'_>) -> Result<String, String> {
@@ -273,6 +291,49 @@ mod tests {
             automatic_profile_id(GROK_BUILD_ADAPTER_ID),
             "grok-build.auto"
         );
+    }
+
+    #[test]
+    fn local_adapters_share_one_runtime_shim_directory() {
+        let context = TerminalRuntimeContext {
+            mux_session_id: "session".into(),
+            pane_id: "pane".into(),
+            runtime_id: format!("adapter-shims-{}", uuid::Uuid::new_v4()),
+        };
+        let executable = std::env::current_exe().expect("current test executable");
+        let expected_root = runtime_shim_root(&context);
+
+        for adapter in adapters() {
+            let root = adapter
+                .install_manual_shim(
+                    &context,
+                    Some("http://127.0.0.1:43127/v1/hooks"),
+                    Some("http://127.0.0.1:43128/mcp"),
+                    Some(&executable),
+                )
+                .unwrap_or_else(|error| panic!("{} shim failed: {error}", adapter.id()))
+                .unwrap_or_else(|| panic!("{} shim was not installed", adapter.id()));
+            assert_eq!(
+                root,
+                expected_root,
+                "{} returned the wrong root",
+                adapter.id()
+            );
+        }
+
+        #[cfg(windows)]
+        {
+            let bootstrap = std::fs::read_to_string(expected_root.join("bootstrap.ps1"))
+                .expect("shared PowerShell bootstrap");
+            for command in ["codex", "claude", "grok"] {
+                assert!(
+                    bootstrap.contains(&format!("function global:{command}")),
+                    "shared bootstrap did not route {command}: {bootstrap}"
+                );
+            }
+        }
+
+        cleanup(&context.runtime_id);
     }
 
     #[test]
