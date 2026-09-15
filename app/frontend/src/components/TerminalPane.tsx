@@ -520,6 +520,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
       if (container.current?.offsetParent) requestAnimationFrame(() => {
         fit.fit()
         if (runtimeIdRef.current) void window.api.terminalRuntimes.resize(runtimeIdRef.current, term.cols, term.rows)
+        if (visible) term.focus()
       })
     })
     const scroll = term.onScroll((position) => {
@@ -688,7 +689,10 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
   </div>
 
   if (!shouldRenderTerminal) return <div className="terminal-empty">{stoppedContent}</div>
-  return <div className="terminal-shell" onMouseDownCapture={(event) => { if (event.button === 2) event.stopPropagation() }} onContextMenu={(event) => { event.preventDefault(); setContextMenu({ x: Math.max(4, Math.min(event.clientX, window.innerWidth - 210)), y: Math.max(4, Math.min(event.clientY, window.innerHeight - 210)), hasSelection: Boolean(terminal.current?.hasSelection()) }) }}>
+  return <div className="terminal-shell" onPointerDownCapture={(event) => {
+    if (event.button === 0 && visible) terminal.current?.focus()
+    if (event.button === 2) event.stopPropagation()
+  }} onContextMenu={(event) => { event.preventDefault(); setContextMenu({ x: Math.max(4, Math.min(event.clientX, window.innerWidth - 210)), y: Math.max(4, Math.min(event.clientY, window.innerHeight - 210)), hasSelection: Boolean(terminal.current?.hasSelection()) }) }}>
     {searchOpen && <form className="terminal-search" onSubmit={(event) => { event.preventDefault(); search() }}>
       <Search size={14} /><input ref={searchInput} value={query} aria-label={t('terminal.searchTerminal')} onChange={(event) => { setQuery(event.target.value); search(event.target.value, false, true) }} onKeyDown={(event) => { if (event.key === 'Escape') setSearchOpen(false) }} />
       <output className={query && !searchResult.count ? 'no-results' : ''}>{query ? searchResult.count ? `${Math.max(0, searchResult.index) + 1}/${searchResult.count}` : t('terminal.noResults') : ''}</output>
