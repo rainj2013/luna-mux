@@ -5,7 +5,7 @@ import { SerializeAddon } from '@xterm/addon-serialize'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { ChevronDown, ChevronUp, ClipboardPaste, Copy, KeyRound, Palette, Play, RefreshCw, Search, ShieldAlert, X } from 'lucide-react'
-import type { TerminalRuntimeEvent, TerminalSettings } from '../types'
+import type { TerminalRuntimeEvent, TerminalSettings, TerminalUiDiagnosticEvent, TerminalUiKeyCategory } from '../types'
 import { colorWithOpacity } from '../terminal-style'
 import { createTerminalOutputWriter, type TerminalOutputWriter } from '../terminal-output-writer'
 import { agentImagePasteInput, handleCodexMultilinePasteEvent, routeTerminalPaste } from '../terminal-input'
@@ -55,6 +55,15 @@ function shiftEnterInput(platform: string, targetId: string, codexTui: boolean):
   // In ConPTY Win32 input mode LF becomes Ctrl+Enter, which Codex does not
   // bind. ESC+CR becomes Alt+Enter, one of Codex's newline bindings.
   return nativeWindowsPowershell && codexTui ? '\x1b\r' : '\n'
+}
+
+function terminalKeyCategory(event: KeyboardEvent): TerminalUiKeyCategory {
+  if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) return 'printable'
+  if (event.key === 'Enter') return 'enter'
+  if (event.key === 'Escape') return 'escape'
+  if (event.ctrlKey || event.metaKey || event.altKey) return 'control'
+  if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown'].includes(event.key)) return 'navigation'
+  return 'other'
 }
 
 function stringOffsetToBufferColumn(line: IBufferLine, offset: number): number {
@@ -155,6 +164,8 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
   const reportedInputErrorRuntimeId = useRef('')
   const connectedRef = useRef(connected)
   const connectingRef = useRef(connecting)
+  const visibleRef = useRef(visible)
+  visibleRef.current = visible
   const pendingRuntimeInput = useRef(new Map<string, string[]>())
   const boundRuntimeId = useRef<string | undefined>(undefined)
   const outputCursor = useRef(0)
@@ -262,6 +273,38 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     let scrollAnchor = 0
     let lastTerminalInput = { data: '', timestamp: 0, runtimeId: '' }
     const pendingImePunctuation = new Set<PendingImePunctuation>()
+    const lastUiDiagnosticAt = new Map<string, number>()
+
+    const createUiDiagnostic = (kind: TerminalUiDiagnosticEvent['kind'], keyCategory?: TerminalUiKeyCategory, throttleMs = 0): TerminalUiDiagnosticEvent | undefined => {
+      const activeRuntimeId = runtimeIdRef.current
+      if (!activeRuntimeId) return undefined
+      const now = performance.now()
+      const throttleKey = `${kind}:${keyCategory ?? ''}`
+      const previous = lastUiDiagnosticAt.get(throttleKey) ?? Number.NEGATIVE_INFINITY
+      if (throttleMs > 0 && now - previous < throttleMs) return undefined
+      lastUiDiagnosticAt.set(throttleKey, now)
+      const buffer = term.buffer.active
+      return {
+        kind,
+        connected: connectedRef.current,
+        visible: visibleRef.current,
+        documentVisible: document.visibilityState === 'visible',
+        focused: document.activeElement === term.textarea,
+        alternateBuffer: buffer.type === 'alternate',
+        pendingOutput,
+        outputCursor: outputCursor.current,
+        viewportY: buffer.viewportY,
+        baseY: buffer.baseY,
+        ...(keyCategory ? { keyCategory } : {})
+      }
+    }
+
+    const recordUiDiagnostic = (kind: TerminalUiDiagnosticEvent['kind'], keyCategory?: TerminalUiKeyCategory, throttleMs = 0): void => {
+      const activeRuntimeId = runtimeIdRef.current
+      const event = createUiDiagnostic(kind, keyCategory, throttleMs)
+      if (!activeRuntimeId || !event) return
+      void window.api.terminalRuntimes.recordDiagnostic(activeRuntimeId, event).catch(() => undefined)
+    }
 
     const writeTerminalInput = (data: string): void => {
       const now = performance.now()
@@ -276,6 +319,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
         return
       }
       lastTerminalInput = { data, timestamp: now, runtimeId: activeRuntimeId }
+      const inputDiagnostic = createUiDiagnostic('input', undefined, 250)
       for (const pending of pendingImePunctuation) {
         if (!data.includes(pending.text)) continue
         window.clearTimeout(pending.timer)
@@ -283,7 +327,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
         break
       }
       if (connectedRef.current && activeRuntimeId) {
-        void window.api.terminalRuntimes.write(activeRuntimeId, data).catch((error) => reportRuntimeInputError(activeRuntimeId, error))
+        void window.api.terminalRuntimes.write(activeRuntimeId, data, inputDiagnostic).catch((error) => reportRuntimeInputError(activeRuntimeId, error))
       } else if (connectingRef.current && activeRuntimeId) {
         const pending = pendingRuntimeInput.current.get(activeRuntimeId) ?? []
         pending.push(data)
@@ -328,6 +372,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     term.element?.addEventListener('paste', captureCodexMultilinePaste, true)
 
     term.attachCustomKeyEventHandler((event) => {
+      if (event.type === 'keydown') recordUiDiagnostic('keydown', terminalKeyCategory(event), 250)
       if (event.key === 'Enter' && event.shiftKey) {
         if (event.type === 'keydown') {
           event.preventDefault()
@@ -439,6 +484,17 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     textarea?.addEventListener('compositionend', recoverDroppedImePunctuationFromComposition, true)
     textarea?.addEventListener('compositionend', finishImeComposition)
     textarea?.addEventListener('blur', cancelImeComposition)
+    const recordFocus = (): void => recordUiDiagnostic('focus')
+    const recordBlur = (): void => recordUiDiagnostic('blur')
+    const recordPointerDown = (): void => recordUiDiagnostic('pointerDown', undefined, 250)
+    const recordWheel = (): void => recordUiDiagnostic('wheel', undefined, 250)
+    textarea?.addEventListener('focus', recordFocus)
+    textarea?.addEventListener('blur', recordBlur)
+    term.element?.addEventListener('pointerdown', recordPointerDown)
+    term.element?.addEventListener('wheel', recordWheel, { passive: true })
+    const diagnosticHeartbeat = window.setInterval(() => {
+      if (visibleRef.current) recordUiDiagnostic('heartbeat')
+    }, 10_000)
     const resize = term.onResize(({ cols, rows }) => { if (runtimeIdRef.current) void window.api.terminalRuntimes.resize(runtimeIdRef.current, cols, rows) })
     let catchingUp = true
     const queuedOutput: Array<Extract<TerminalRuntimeEvent, { type: 'output' }>['payload']> = []
@@ -473,6 +529,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
       pendingOutput += length
       if (!paused && pendingOutput >= terminalHighWaterMark) {
         paused = true
+        recordUiDiagnostic('flowPause')
         void window.api.terminalRuntimes.flow(payload.runtimeId, true)
       }
       writer.write(payload.data, () => {
@@ -481,6 +538,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
         pendingOutput = Math.max(0, pendingOutput - length)
         if (paused && pendingOutput <= terminalLowWaterMark && runtimeIdRef.current) {
           paused = false
+          recordUiDiagnostic('flowResume')
           void window.api.terminalRuntimes.flow(runtimeIdRef.current, false)
         }
       })
@@ -530,10 +588,12 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
       const baseY = term.buffer.active.baseY
       userScrolled = position < baseY
       scrollAnchor = position
+      recordUiDiagnostic('scroll', undefined, 250)
     })
     observer.observe(container.current)
     if (visible) term.focus()
     return () => {
+      recordUiDiagnostic('dispose')
       disposed = true
       if (pasteClipboardRef.current === pasteClipboard) pasteClipboardRef.current = async () => undefined
       mountedTerminalPanes.delete(paneId)
@@ -561,8 +621,13 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
       textarea?.removeEventListener('compositionend', recoverDroppedImePunctuationFromComposition, true)
       textarea?.removeEventListener('compositionend', finishImeComposition)
       textarea?.removeEventListener('blur', cancelImeComposition)
+      textarea?.removeEventListener('focus', recordFocus)
+      textarea?.removeEventListener('blur', recordBlur)
+      term.element?.removeEventListener('pointerdown', recordPointerDown)
+      term.element?.removeEventListener('wheel', recordWheel)
       term.element?.removeEventListener('paste', captureCodexMultilinePaste, true)
       cancelImeComposition()
+      window.clearInterval(diagnosticHeartbeat)
       stop(); observer.disconnect(); input.dispose(); resize.dispose(); scroll.dispose(); writer.dispose(); webglAddon.current?.dispose(); term.dispose()
       void catchUp
       webglAddon.current = null; outputWriter.current = null; terminal.current = null; fitAddon.current = null

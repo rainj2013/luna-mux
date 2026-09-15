@@ -182,8 +182,29 @@ fn cleanup_stale_runtime_dirs_at(root: &Path, is_process_alive: impl Fn(u32) -> 
     }
 }
 
-#[cfg(windows)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ProcessLiveness {
+    Alive,
+    Exited,
+    Unknown,
+}
+
+impl ProcessLiveness {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Alive => "alive",
+            Self::Exited => "exited",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
 fn process_is_alive(pid: u32) -> bool {
+    !matches!(process_liveness(pid), ProcessLiveness::Exited)
+}
+
+#[cfg(windows)]
+pub(crate) fn process_liveness(pid: u32) -> ProcessLiveness {
     use windows::Win32::{
         Foundation::{CloseHandle, ERROR_INVALID_PARAMETER, STILL_ACTIVE},
         System::Threading::{GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION},
@@ -191,7 +212,7 @@ fn process_is_alive(pid: u32) -> bool {
     use windows::core::HRESULT;
 
     if pid == 0 {
-        return false;
+        return ProcessLiveness::Exited;
     }
     // A process handle can still be opened after a process exits, so inspect
     // its exit code instead of treating OpenProcess success as liveness.
@@ -200,32 +221,43 @@ fn process_is_alive(pid: u32) -> bool {
         Err(error) => {
             // Access denied or another inconclusive error must not make one
             // Luna Mux instance delete files owned by another instance.
-            return error.code() != HRESULT::from_win32(ERROR_INVALID_PARAMETER.0);
+            return if error.code() == HRESULT::from_win32(ERROR_INVALID_PARAMETER.0) {
+                ProcessLiveness::Exited
+            } else {
+                ProcessLiveness::Unknown
+            };
         }
     };
     let mut exit_code = 1_u32;
-    let alive = unsafe { GetExitCodeProcess(handle, &mut exit_code).is_ok() }
-        && exit_code == STILL_ACTIVE.0 as u32;
+    let status = match unsafe { GetExitCodeProcess(handle, &mut exit_code) } {
+        Ok(()) if exit_code == STILL_ACTIVE.0 as u32 => ProcessLiveness::Alive,
+        Ok(()) => ProcessLiveness::Exited,
+        Err(_) => ProcessLiveness::Unknown,
+    };
     let _ = unsafe { CloseHandle(handle) };
-    alive
+    status
 }
 
 #[cfg(unix)]
-fn process_is_alive(pid: u32) -> bool {
+pub(crate) fn process_liveness(pid: u32) -> ProcessLiveness {
     if pid == 0 {
-        return false;
+        return ProcessLiveness::Exited;
     }
     // The desktop process and the cleanup process run as the same user, so a
     // successful zero-signal probe is sufficient and avoids spawning a shell.
     if unsafe { libc::kill(pid as libc::pid_t, 0) } == 0 {
-        return true;
+        return ProcessLiveness::Alive;
     }
-    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    match std::io::Error::last_os_error().raw_os_error() {
+        Some(libc::ESRCH) => ProcessLiveness::Exited,
+        Some(libc::EPERM) => ProcessLiveness::Alive,
+        _ => ProcessLiveness::Unknown,
+    }
 }
 
 #[cfg(not(any(unix, windows)))]
-fn process_is_alive(_pid: u32) -> bool {
-    false
+pub(crate) fn process_liveness(_pid: u32) -> ProcessLiveness {
+    ProcessLiveness::Unknown
 }
 
 fn write_file(path: &Path, contents: &[u8]) -> Result<(), String> {
@@ -249,6 +281,11 @@ fn is_valid_runtime_id(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn current_process_is_reported_alive() {
+        assert_eq!(process_liveness(std::process::id()), ProcessLiveness::Alive);
+    }
 
     fn test_root(name: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!("luna-mux-runtime-env-{name}"));

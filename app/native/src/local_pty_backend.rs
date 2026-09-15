@@ -14,6 +14,7 @@ use std::{
 
 use async_trait::async_trait;
 use portable_pty::{Child, ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
+use serde_json::json;
 use uuid::Uuid;
 
 use crate::{
@@ -58,7 +59,6 @@ struct RuntimeRecord {
     writer: Mutex<Option<Box<dyn Write + Send>>>,
     master: Mutex<Option<Box<dyn MasterPty + Send>>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
-    #[cfg(windows)]
     process_id: Option<u32>,
     #[cfg(target_os = "macos")]
     process_group_id: Option<i32>,
@@ -87,6 +87,13 @@ impl InProcessLocalPtyTerminalBackend {
         if let Ok(mut slot) = self.input_diagnostics.write() {
             *slot = Some(diagnostics);
         }
+    }
+
+    fn diagnostics(&self) -> Option<Arc<TerminalInputDiagnostics>> {
+        self.input_diagnostics
+            .read()
+            .ok()
+            .and_then(|slot| slot.clone())
     }
 
     pub fn is_local_target(target_id: &str) -> bool {
@@ -222,10 +229,13 @@ impl InProcessLocalPtyTerminalBackend {
         mut reader: Box<dyn Read + Send>,
         mut child: Box<dyn Child + Send + Sync>,
         reader_drain_timeout: Option<std::time::Duration>,
+        diagnostics: Option<Arc<TerminalInputDiagnostics>>,
+        shell_process_id: Option<u32>,
     ) {
         let reader_record = record.clone();
         let reader_sink = sink.clone();
         let reader_runtime_id = runtime_id.clone();
+        let reader_diagnostics = diagnostics.clone();
         thread::spawn(move || {
             let mut decoder = Utf8Decoder::default();
             let mut bytes = [0_u8; 8192];
@@ -234,10 +244,26 @@ impl InProcessLocalPtyTerminalBackend {
                     thread::sleep(std::time::Duration::from_millis(5));
                 }
                 if reader_record.reader_abandoned.load(Ordering::Acquire) {
+                    if let Some(diagnostics) = &reader_diagnostics {
+                        diagnostics.record_runtime_event(
+                            &reader_runtime_id,
+                            "pty_reader_abandoned",
+                            json!({}),
+                        );
+                    }
                     break;
                 }
                 match reader.read(&mut bytes) {
-                    Ok(0) => break,
+                    Ok(0) => {
+                        if let Some(diagnostics) = &reader_diagnostics {
+                            diagnostics.record_runtime_event(
+                                &reader_runtime_id,
+                                "pty_reader_eof",
+                                json!({}),
+                            );
+                        }
+                        break;
+                    }
                     Ok(size) => {
                         if reader_record.reader_abandoned.load(Ordering::Acquire) {
                             break;
@@ -258,9 +284,16 @@ impl InProcessLocalPtyTerminalBackend {
                             }
                         }
                     }
-                    Err(_error) => {
+                    Err(error) => {
                         if reader_record.reader_abandoned.load(Ordering::Acquire) {
                             break;
+                        }
+                        if let Some(diagnostics) = &reader_diagnostics {
+                            diagnostics.record_runtime_event(
+                                &reader_runtime_id,
+                                "pty_reader_error",
+                                json!({ "errorKind": format!("{:?}", error.kind()) }),
+                            );
                         }
                         let text = decoder.finish();
                         if !text.is_empty() {
@@ -284,20 +317,54 @@ impl InProcessLocalPtyTerminalBackend {
                 Self::emit_to_sink(&reader_sink, TerminalRuntimeEvent::Output(event));
             }
             reader_record.reader_done.store(true, Ordering::Release);
+            if let Some(diagnostics) = &reader_diagnostics {
+                diagnostics.record_runtime_event(
+                    &reader_runtime_id,
+                    "pty_reader_finished",
+                    json!({}),
+                );
+            }
         });
         thread::spawn(move || {
             let status = child.wait().ok();
+            if let Some(diagnostics) = &diagnostics {
+                diagnostics.record_runtime_event(
+                    &runtime_id,
+                    "shell_exited",
+                    json!({
+                        "closeRequested": record.close_requested.load(Ordering::Acquire),
+                        "exitCode": status.as_ref().map(|value| value.exit_code()),
+                        "readerDone": record.reader_done.load(Ordering::Acquire),
+                        "shellPid": shell_process_id,
+                        "signal": status.as_ref().and_then(|value| value.signal()),
+                        "waitStatus": if status.is_some() { "ok" } else { "error" },
+                    }),
+                );
+            }
             record.paused.store(false, Ordering::Release);
-            let _ = record
+            let writer_present = record
                 .writer
                 .lock()
                 .ok()
-                .and_then(|mut writer| writer.take());
-            let _ = record
+                .and_then(|mut writer| writer.take())
+                .is_some();
+            let master_present = record
                 .master
                 .lock()
                 .ok()
-                .and_then(|mut master| master.take());
+                .and_then(|mut master| master.take())
+                .is_some();
+            if let Some(diagnostics) = &diagnostics {
+                diagnostics.record_runtime_event(
+                    &runtime_id,
+                    "pty_reader_drain_started",
+                    json!({
+                        "masterPresent": master_present,
+                        "timeoutMs": reader_drain_timeout.map(|value| value.as_millis()),
+                        "writerPresent": writer_present,
+                    }),
+                );
+            }
             match reader_drain_timeout {
                 Some(timeout) => {
                     let drain_deadline = std::time::Instant::now() + timeout;
@@ -317,6 +384,18 @@ impl InProcessLocalPtyTerminalBackend {
             record
                 .reader_abandoned
                 .store(reader_abandoned, Ordering::Release);
+            if reader_abandoned
+                && let Some(diagnostics) = &diagnostics
+            {
+                diagnostics.record_runtime_event(
+                    &runtime_id,
+                    "pty_reader_drain_timeout",
+                    json!({
+                        "shellPid": shell_process_id,
+                        "timeoutMs": reader_drain_timeout.map(|value| value.as_millis()),
+                    }),
+                );
+            }
             let signal = status
                 .as_ref()
                 .and_then(|value| value.signal().map(str::to_owned));
@@ -327,6 +406,13 @@ impl InProcessLocalPtyTerminalBackend {
                 status.map(|value| value.exit_code() as i32),
                 signal,
             );
+            if let Some(diagnostics) = &diagnostics {
+                diagnostics.record_runtime_event(
+                    &runtime_id,
+                    "runtime_finished",
+                    json!({ "readerAbandoned": reader_abandoned }),
+                );
+            }
         });
     }
 
@@ -743,8 +829,8 @@ impl TerminalBackend for InProcessLocalPtyTerminalBackend {
             .slave
             .spawn_command(command)
             .map_err(|error| error.to_string())?;
-        #[cfg(windows)]
-        let process_id = child.process_id();
+        let shell_process_id = child.process_id();
+        let process_id = shell_process_id;
         #[cfg(target_os = "macos")]
         let process_group_id = pair.master.process_group_leader();
         let killer = child.clone_killer();
@@ -775,7 +861,6 @@ impl TerminalBackend for InProcessLocalPtyTerminalBackend {
             writer: Mutex::new(Some(writer)),
             master: Mutex::new(Some(pair.master)),
             killer: Mutex::new(killer),
-            #[cfg(windows)]
             process_id,
             #[cfg(target_os = "macos")]
             process_group_id,
@@ -791,6 +876,20 @@ impl TerminalBackend for InProcessLocalPtyTerminalBackend {
         self.emit(TerminalRuntimeEvent::Status(TerminalRuntimeStatusEvent {
             runtime: runtime.clone(),
         }));
+        let diagnostics = self.diagnostics();
+        if let Some(diagnostics) = &diagnostics {
+            diagnostics.record_runtime_event(
+                &runtime.runtime_id,
+                "runtime_spawned",
+                json!({
+                    "cols": request.cols,
+                    "managedAgent": request.managed_agent.is_some(),
+                    "rows": request.rows,
+                    "shellPid": shell_process_id,
+                    "targetId": &request.target_id,
+                }),
+            );
+        }
         let record = self
             .runtimes
             .read()
@@ -813,6 +912,8 @@ impl TerminalBackend for InProcessLocalPtyTerminalBackend {
             reader,
             child,
             reader_drain_timeout,
+            diagnostics,
+            shell_process_id,
         );
         if let Some(input) = Self::initial_input(&request) {
             let _ = self.write(&runtime.runtime_id, &input).await;
@@ -821,11 +922,15 @@ impl TerminalBackend for InProcessLocalPtyTerminalBackend {
     }
 
     async fn write(&self, runtime_id: &str, data: &str) -> TerminalBackendResult<()> {
-        let diagnostics = self
-            .input_diagnostics
-            .read()
-            .ok()
-            .and_then(|slot| slot.clone());
+        let diagnostics = self.diagnostics();
+        let write_id = Uuid::new_v4().simple().to_string();
+        if let Some(diagnostics) = &diagnostics {
+            diagnostics.record_runtime_event(
+                runtime_id,
+                "pty_write_started",
+                json!({ "byteLen": data.len(), "writeId": &write_id }),
+            );
+        }
         let record = self
             .runtimes
             .read()
@@ -834,15 +939,33 @@ impl TerminalBackend for InProcessLocalPtyTerminalBackend {
             .cloned()
             .ok_or_else(|| "终端 Runtime 不存在".to_string())?;
         let input = data.as_bytes().to_vec();
+        let write_runtime_id = runtime_id.to_string();
+        let write_diagnostics = diagnostics.clone();
+        let write_started = std::time::Instant::now();
         // PTY backpressure can block write_all. Keep blocking I/O and the writer
         // mutex off async workers, and never hold the Runtime registry while writing.
         let result = tokio::task::spawn_blocking(move || {
             let mut writer_guard = record.writer.lock().map_err(|_| "本地 PTY writer 锁已损坏".to_string())?;
             let writer = writer_guard.as_mut().ok_or_else(|| "本地 PTY 已退出".to_string())?;
-            writer.write_all(&input).and_then(|_| writer.flush()).map_err(|error| error.to_string())
+            let result = writer
+                .write_all(&input)
+                .and_then(|_| writer.flush())
+                .map_err(|error| error.to_string());
+            if let Some(diagnostics) = &write_diagnostics {
+                diagnostics.record_runtime_event(
+                    &write_runtime_id,
+                    "pty_write_completed",
+                    json!({
+                        "elapsedMs": write_started.elapsed().as_millis(),
+                        "status": if result.is_ok() { "ok" } else { "error" },
+                        "writeId": write_id,
+                    }),
+                );
+            }
+            result
         }).await.map_err(|error| error.to_string())?;
         if result.is_ok()
-            && let Some(diagnostics) = diagnostics
+            && let Some(diagnostics) = &diagnostics
             && let Some(observation) =
                 diagnostics.observe("local_pty_write", runtime_id, data, None)
         {
@@ -889,6 +1012,13 @@ impl TerminalBackend for InProcessLocalPtyTerminalBackend {
             .cloned()
             .ok_or_else(|| "终端 Runtime 不存在".to_string())?;
         record.paused.store(paused, Ordering::Release);
+        if let Some(diagnostics) = self.diagnostics() {
+            diagnostics.record_runtime_event(
+                runtime_id,
+                "backend_flow_set",
+                json!({ "paused": paused }),
+            );
+        }
         Ok(())
     }
 
@@ -897,6 +1027,7 @@ impl TerminalBackend for InProcessLocalPtyTerminalBackend {
     }
 
     async fn close(&self, runtime_id: &str) -> TerminalBackendResult<()> {
+        let diagnostics = self.diagnostics();
         let record = self
             .runtimes
             .read()
@@ -912,18 +1043,52 @@ impl TerminalBackend for InProcessLocalPtyTerminalBackend {
                 .status,
             TerminalRuntimeStatus::Exited | TerminalRuntimeStatus::Error
         ) {
+            if let Some(diagnostics) = &diagnostics {
+                diagnostics.record_runtime_event(
+                    runtime_id,
+                    "close_ignored",
+                    json!({ "reason": "alreadyExited" }),
+                );
+            }
             return Ok(());
+        }
+        let shell_process_id = record.process_id;
+        let process_state_at_close = shell_process_id
+            .map(crate::runtime_env::process_liveness)
+            .map(crate::runtime_env::ProcessLiveness::as_str)
+            .unwrap_or("unknown");
+        if let Some(diagnostics) = &diagnostics {
+            diagnostics.record_runtime_event(
+                runtime_id,
+                "close_requested",
+                json!({
+                    "readerDone": record.reader_done.load(Ordering::Acquire),
+                    "shellPid": shell_process_id,
+                    "processStateAtClose": process_state_at_close,
+                }),
+            );
         }
         record.close_requested.store(true, Ordering::Release);
         record.paused.store(false, Ordering::Release);
         #[cfg(windows)]
         if let Some(process_id) = record.process_id {
-            let _ = windows_no_window_command("taskkill")
+            let status = windows_no_window_command("taskkill")
                 .args(["/PID", &process_id.to_string(), "/T", "/F"])
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .status();
+            if let Some(diagnostics) = &diagnostics {
+                diagnostics.record_runtime_event(
+                    runtime_id,
+                    "taskkill_completed",
+                    json!({
+                        "shellPid": process_id,
+                        "status": if status.as_ref().is_ok_and(|value| value.success()) { "ok" } else { "error" },
+                        "taskkillExitCode": status.ok().and_then(|value| value.code()),
+                    }),
+                );
+            }
         }
         #[cfg(target_os = "macos")]
         if let Some(process_group_id) = record.process_group_id {
@@ -1257,7 +1422,12 @@ mod tests {
     async fn assert_powershell_runtime_preserves_unicode_sets_terminal_type_and_exits(
         target_id: &str,
     ) {
+        let log_dir = std::env::temp_dir().join(format!(
+            "luna-mux-pty-natural-exit-{}",
+            Uuid::new_v4()
+        ));
         let backend = InProcessLocalPtyTerminalBackend::new();
+        backend.set_input_diagnostics(Arc::new(TerminalInputDiagnostics::new(log_dir.clone())));
         let mut request = request_for_target(
             target_id,
             Some("Write-Output \"LunaMux local ✓ TERM=$env:TERM\"; exit 0"),
@@ -1307,11 +1477,24 @@ mod tests {
                 .status,
             TerminalRuntimeStatus::Exited
         );
+        let log = wait_for_diagnostic_events(&log_dir, &["shell_exited", "runtime_finished"]);
+        let shell_exit = log
+            .lines()
+            .find(|line| line.contains("\"event\":\"shell_exited\""))
+            .expect("shell exit diagnostic");
+        assert!(shell_exit.contains("\"closeRequested\":false"), "{log}");
+        assert!(!log.contains("\"event\":\"close_requested\""), "{log}");
+        let _ = std::fs::remove_dir_all(log_dir);
     }
 
     #[tokio::test]
     async fn close_kills_powershell_runtime() {
+        let log_dir = std::env::temp_dir().join(format!(
+            "luna-mux-pty-lifecycle-{}",
+            Uuid::new_v4()
+        ));
         let backend = InProcessLocalPtyTerminalBackend::new();
+        backend.set_input_diagnostics(Arc::new(TerminalInputDiagnostics::new(log_dir.clone())));
         let runtime = backend
             .create(request(None))
             .await
@@ -1320,6 +1503,7 @@ mod tests {
             .close(&runtime.runtime_id)
             .await
             .expect("close runtime");
+        let mut exited = false;
         for _ in 0..100 {
             if backend
                 .list()
@@ -1328,11 +1512,48 @@ mod tests {
                 .find(|item| item.runtime_id == runtime.runtime_id)
                 .is_some_and(|item| item.status == TerminalRuntimeStatus::Exited)
             {
-                return;
+                exited = true;
+                break;
             }
             std::thread::sleep(Duration::from_millis(50));
         }
-        panic!("PowerShell runtime did not exit after close");
+        assert!(exited, "PowerShell runtime did not exit after close");
+        let expected_events = [
+            "runtime_spawned",
+            "close_requested",
+            "taskkill_completed",
+            "shell_exited",
+            "runtime_finished",
+        ];
+        let log = wait_for_diagnostic_events(&log_dir, &expected_events);
+        let close_request = log
+            .lines()
+            .find(|line| line.contains("\"event\":\"close_requested\""))
+            .expect("close request diagnostic");
+        assert!(close_request.contains("\"processStateAtClose\":\"alive\""), "{log}");
+        let event_position = |event: &str| {
+            log.find(&format!("\"event\":\"{event}\""))
+                .unwrap_or_else(|| panic!("missing {event}: {log}"))
+        };
+        assert!(event_position("runtime_spawned") < event_position("close_requested"), "{log}");
+        assert!(event_position("close_requested") < event_position("shell_exited"), "{log}");
+        assert!(event_position("shell_exited") < event_position("runtime_finished"), "{log}");
+        let _ = std::fs::remove_dir_all(log_dir);
+    }
+
+    fn wait_for_diagnostic_events(log_dir: &std::path::Path, events: &[&str]) -> String {
+        let log_path = log_dir.join(crate::terminal_input_diagnostics::LOG_FILE_NAME);
+        for _ in 0..100 {
+            let log = std::fs::read_to_string(&log_path).unwrap_or_default();
+            if events
+                .iter()
+                .all(|event| log.contains(&format!("\"event\":\"{event}\"")))
+            {
+                return log;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("diagnostic events did not arrive: {}", log_path.display());
     }
 
     #[test]

@@ -188,10 +188,18 @@ export async function createTauriApi(): Promise<AppApi> {
       list: () => call('terminal_runtimes_list'),
       create: (request) => call('terminal_runtime_create', { request }),
       readOutput: (runtimeId, fromCursor, maxBytes) => call('terminal_runtime_read_output', { runtimeId, fromCursor, maxBytes }),
-      write: (runtimeId, data) => {
+      write: (runtimeId, data, uiDiagnostic) => {
         terminalInputSequence += 1
-        return call('terminal_runtime_write', { runtimeId, data, clientInputId: terminalInputSequence })
+        const clientInputId = terminalInputSequence
+        if (uiDiagnostic) {
+          void call('terminal_runtime_record_ui_diagnostic', {
+            runtimeId,
+            event: { ...uiDiagnostic, clientInputId }
+          }).catch(() => undefined)
+        }
+        return call('terminal_runtime_write', { runtimeId, data, clientInputId })
       },
+      recordDiagnostic: (runtimeId, event) => call('terminal_runtime_record_ui_diagnostic', { runtimeId, event }),
       resize: (runtimeId, cols, rows) => call('terminal_runtime_resize', { runtimeId, cols, rows }),
       flow: (runtimeId, paused) => call('terminal_runtime_flow', { runtimeId, paused }),
       interrupt: (runtimeId) => call('terminal_runtime_interrupt', { runtimeId }),

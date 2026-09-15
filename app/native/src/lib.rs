@@ -514,6 +514,7 @@ pub fn run() {
             terminal_runtimes_list,
             terminal_runtime_read_output,
             terminal_runtime_write,
+            terminal_runtime_record_ui_diagnostic,
             terminal_runtime_resize,
             terminal_runtime_flow,
             terminal_runtime_interrupt,
