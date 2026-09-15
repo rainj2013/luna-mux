@@ -331,7 +331,13 @@ mod tests {
                     "shared bootstrap did not route {command}: {bootstrap}"
                 );
             }
+            let grok = std::fs::read_to_string(expected_root.join("grok.ps1"))
+                .expect("generated Grok shim");
+            assert!(!grok.contains("GROK_HOME"), "{grok}");
+            assert!(!grok.contains("Copy-Item"), "{grok}");
         }
+
+        assert!(!runtime_root(&context).join("grok/config.toml").exists());
 
         cleanup(&context.runtime_id);
     }
@@ -360,8 +366,9 @@ mod tests {
             })
             .unwrap();
             if profile.adapter == GROK_BUILD_ADAPTER_ID {
-                assert!(command.contains("GROK_HOME"), "{command}");
-                assert!(command.contains("base64"), "{command}");
+                assert_eq!(command, "grok");
+                assert!(!command.contains("GROK_HOME"), "{command}");
+                assert!(!command.contains("base64"), "{command}");
             } else {
                 assert!(command.contains("remote-agent"), "{command}");
                 assert!(!command.contains("browser-bridge.json"), "{command}");

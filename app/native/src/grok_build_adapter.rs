@@ -3,68 +3,43 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
-use serde_json::json;
-
 use crate::{
     agent_adapters::{GROK_BUILD_ADAPTER_ID, ManagedAgentLaunch, runtime_root, runtime_shim_root},
-    luna_mcp::MCP_AUTHORIZATION_ENV,
-    shell_quoting::{posix_shell_quote, shell_argument_quote, shell_quote},
+    shell_quoting::shell_quote,
     terminal_runtime_contract::TerminalRuntimeContext,
 };
-
-const HOOK_EVENTS: [&str; 13] = [
-    "SessionStart",
-    "SessionEnd",
-    "UserPromptSubmit",
-    "PreToolUse",
-    "PermissionDenied",
-    "PostToolUse",
-    "PostToolUseFailure",
-    "SubagentStart",
-    "SubagentStop",
-    "Stop",
-    "StopFailure",
-    "Notification",
-    "PreCompact",
-];
 
 pub fn install(
     context: &TerminalRuntimeContext,
     _hook_endpoint: Option<&str>,
-    mcp_endpoint: Option<&str>,
+    _mcp_endpoint: Option<&str>,
     resolved_command: Option<&Path>,
+) -> Result<Option<PathBuf>, String> {
+    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+    install_with_executable(context, resolved_command, &executable)
+}
+
+fn install_with_executable(
+    context: &TerminalRuntimeContext,
+    resolved_command: Option<&Path>,
+    executable: &Path,
 ) -> Result<Option<PathBuf>, String> {
     let Some(real) = resolved_command else {
         return Ok(None);
     };
-    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     let root = runtime_shim_root(context);
-    let home = runtime_root(context).join("grok");
     crate::runtime_env::write_runtime_owner(&context.runtime_id)?;
-    #[cfg(windows)]
-    let hook_command = format!(
-        "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -Command \"& '{}' hook\"",
-        powershell_literal(&executable.to_string_lossy())
-    );
-    #[cfg(not(windows))]
-    let hook_command = format!("{} hook", shell_quote(&executable.to_string_lossy()));
-    write_config_files(
-        &home,
-        mcp_endpoint.unwrap_or("http://127.0.0.1:0/mcp"),
-        &hook_command,
-        Some(&executable.to_string_lossy()),
-        None,
-        context,
-    )?;
+    fs::create_dir_all(&root).map_err(|error| error.to_string())?;
 
     #[cfg(windows)]
     {
         let script = format!(
-            "$lunaMuxGrokHome='{}'\r\n$originalGrokHome=if ($env:GROK_HOME) {{ $env:GROK_HOME }} else {{ Join-Path $HOME '.grok' }}\r\nNew-Item -ItemType Directory -Force -Path $lunaMuxGrokHome | Out-Null\r\nforeach ($file in @('auth.json','mcp_credentials.json')) {{ $source=Join-Path $originalGrokHome $file; $target=Join-Path $lunaMuxGrokHome $file; if ((Test-Path $source) -and -not (Test-Path $target)) {{ Copy-Item $source $target -Force }} }}\r\n$env:GROK_HOME=$lunaMuxGrokHome\r\n$env:LUNA_MUX_AGENT_ADAPTER='{}'\r\n$env:LUNA_MUX_AGENT_PROCESS_ID=[guid]::NewGuid().ToString('N')\r\n$forwarder='{}'\r\ntry {{ '{{\"hook_event_name\":\"AgentProcessStart\",\"agent_adapter\":\"{}\"}}' | & $forwarder hook | Out-Null; & '{}' @args; $code=$LASTEXITCODE }} finally {{ '{{\"hook_event_name\":\"AgentProcessExit\",\"agent_adapter\":\"{}\"}}' | & $forwarder hook | Out-Null }}\r\nexit $code\r\n",
-            powershell_literal(&home.to_string_lossy()), GROK_BUILD_ADAPTER_ID,
-            powershell_literal(&executable.to_string_lossy()), GROK_BUILD_ADAPTER_ID,
-            powershell_literal(&real.to_string_lossy()), GROK_BUILD_ADAPTER_ID,
+            "$env:LUNA_MUX_AGENT_ADAPTER='{}'\r\n$env:LUNA_MUX_AGENT_PROCESS_ID=[guid]::NewGuid().ToString('N')\r\n$forwarder='{}'\r\ntry {{ '{{\"hook_event_name\":\"AgentProcessStart\",\"agent_adapter\":\"{}\"}}' | & $forwarder hook | Out-Null; & '{}' @args; $code=$LASTEXITCODE }} finally {{ '{{\"hook_event_name\":\"AgentProcessExit\",\"agent_adapter\":\"{}\"}}' | & $forwarder hook | Out-Null }}\r\nexit $code\r\n",
+            GROK_BUILD_ADAPTER_ID,
+            powershell_literal(&executable.to_string_lossy()),
+            GROK_BUILD_ADAPTER_ID,
+            powershell_literal(&real.to_string_lossy()),
+            GROK_BUILD_ADAPTER_ID,
         );
         fs::write(root.join("grok.ps1"), script).map_err(|error| error.to_string())?;
         let bootstrap_path = root.join("bootstrap.ps1");
@@ -81,10 +56,13 @@ pub fn install(
     #[cfg(not(windows))]
     {
         let script = format!(
-            "#!/bin/sh\nluna_mux_user_grok_home=\"${{GROK_HOME:-$HOME/.grok}}\"\nexport GROK_HOME={}\nfor file in auth.json mcp_credentials.json; do if [ -r \"$luna_mux_user_grok_home/$file\" ] && [ ! -r \"$GROK_HOME/$file\" ]; then cp \"$luna_mux_user_grok_home/$file\" \"$GROK_HOME/$file\" 2>/dev/null || true; fi; done\nexport LUNA_MUX_AGENT_ADAPTER={}\nexport LUNA_MUX_AGENT_PROCESS_ID=\"$$-$(date +%s)\"\nprintf '%s' '{{\"hook_event_name\":\"AgentProcessStart\",\"agent_adapter\":\"{}\"}}' | {} hook >/dev/null 2>&1 || true\n{} \"$@\"\ncode=$?\nprintf '%s' '{{\"hook_event_name\":\"AgentProcessExit\",\"agent_adapter\":\"{}\"}}' | {} hook >/dev/null 2>&1 || true\nexit $code\n",
-            shell_quote(&home.to_string_lossy()), shell_quote(GROK_BUILD_ADAPTER_ID),
-            GROK_BUILD_ADAPTER_ID, shell_quote(&executable.to_string_lossy()), shell_quote(&real.to_string_lossy()),
-            GROK_BUILD_ADAPTER_ID, shell_quote(&executable.to_string_lossy()),
+            "#!/bin/sh\nexport LUNA_MUX_AGENT_ADAPTER={}\nexport LUNA_MUX_AGENT_PROCESS_ID=\"$$-$(date +%s)\"\nprintf '%s' '{{\"hook_event_name\":\"AgentProcessStart\",\"agent_adapter\":\"{}\"}}' | {} hook >/dev/null 2>&1 || true\n{} \"$@\"\ncode=$?\nprintf '%s' '{{\"hook_event_name\":\"AgentProcessExit\",\"agent_adapter\":\"{}\"}}' | {} hook >/dev/null 2>&1 || true\nexit $code\n",
+            shell_quote(GROK_BUILD_ADAPTER_ID),
+            GROK_BUILD_ADAPTER_ID,
+            shell_quote(&executable.to_string_lossy()),
+            shell_quote(&real.to_string_lossy()),
+            GROK_BUILD_ADAPTER_ID,
+            shell_quote(&executable.to_string_lossy()),
         );
         let path = root.join("grok");
         fs::write(&path, script).map_err(|error| error.to_string())?;
@@ -98,53 +76,7 @@ pub fn install(
 }
 
 pub fn managed_command(launch: &ManagedAgentLaunch<'_>) -> Result<String, String> {
-    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
-    let browser_command = launch.browser_command.map(str::to_string).or_else(|| {
-        executable_for_target(&executable, launch.target_id)
-            .ok()
-            .map(|path| path.to_string_lossy().into_owned())
-    });
-    let hook_command = launch.hook_command.map(str::to_string).or_else(|| {
-        executable_for_target(&executable, launch.target_id)
-            .ok()
-            .map(|path| format!("{} hook", shell_quote(&path.to_string_lossy())))
-    });
-    let context = TerminalRuntimeContext {
-        mux_session_id: launch.context.mux_session_id.clone(),
-        pane_id: launch.context.pane_id.clone(),
-        runtime_id: launch.context.runtime_id.clone(),
-    };
-    let (config, hooks) = config_contents(
-        launch.mcp_endpoint,
-        hook_command.as_deref().unwrap_or("true"),
-        browser_command.as_deref(),
-        launch.browser_credentials_file,
-        &context,
-    )?;
-    if launch.target_id.starts_with("ssh-bookmark:") {
-        let root = format!(
-            "${{TMPDIR:-/tmp}}/luna-mux-{}/grok",
-            posix_shell_quote(&launch.context.runtime_id)
-        );
-        return Ok(format!("luna_mux_user_grok_home=\"${{GROK_HOME:-$HOME/.grok}}\"; GROK_HOME=\"{root}\"; export GROK_HOME; mkdir -p \"$GROK_HOME/hooks\"; for file in auth.json mcp_credentials.json; do if [ -r \"$luna_mux_user_grok_home/$file\" ]; then cp \"$luna_mux_user_grok_home/$file\" \"$GROK_HOME/$file\" 2>/dev/null || true; fi; done; printf %s {} | (base64 -d 2>/dev/null || base64 -D) > \"$GROK_HOME/config.toml\"; printf %s {} | (base64 -d 2>/dev/null || base64 -D) > \"$GROK_HOME/hooks/luna-mux.json\"; {}", posix_shell_quote(&BASE64.encode(config)), posix_shell_quote(&BASE64.encode(hooks)), launch.profile.command.trim(), root = root));
-    }
-    let home = runtime_root(&context).join("grok");
-    write_config_files(
-        &home,
-        launch.mcp_endpoint,
-        hook_command.as_deref().unwrap_or("true"),
-        browser_command.as_deref(),
-        launch.browser_credentials_file,
-        &context,
-    )?;
-    let home = executable_for_target(&home, launch.target_id)?;
-    let home = shell_argument_quote(&home.to_string_lossy(), launch.target_id);
-    let command = shell_argument_quote(launch.profile.command.trim(), launch.target_id);
-    if crate::local_pty_backend::is_powershell_target(launch.target_id) {
-        Ok(format!("$env:GROK_HOME={home}; {command}"))
-    } else {
-        Ok(format!("GROK_HOME={home} {command}"))
-    }
+    Ok(launch.profile.command.trim().to_string())
 }
 
 pub fn requires_remote_hook_helper() -> bool {
@@ -156,7 +88,7 @@ pub fn install_wsl_manual_bootstrap(
     context: &TerminalRuntimeContext,
     target_id: &str,
     _hook_endpoint: &str,
-    mcp_endpoint: &str,
+    _mcp_endpoint: &str,
     environment_file: Option<&str>,
 ) -> Result<String, String> {
     if !target_id.starts_with("local:wsl:") {
@@ -165,17 +97,7 @@ pub fn install_wsl_manual_bootstrap(
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     let browser = executable_for_target(&executable, target_id)?;
     let root = runtime_root(context);
-    let home = root.join("grok");
-    let hook = format!("{} hook", shell_quote(&browser.to_string_lossy()));
-    write_config_files(
-        &home,
-        mcp_endpoint,
-        &hook,
-        Some(&browser.to_string_lossy()),
-        None,
-        context,
-    )?;
-    let wsl_home = executable_for_target(&home, target_id)?;
+    fs::create_dir_all(&root).map_err(|error| error.to_string())?;
     let wsl_env = environment_file
         .map(Path::new)
         .map(|path| executable_for_target(path, target_id))
@@ -191,9 +113,8 @@ pub fn install_wsl_manual_bootstrap(
         })
         .unwrap_or_default();
     let script = format!(
-        "grok() (\n{}luna_mux_user_grok_home=\"${{GROK_HOME:-$HOME/.grok}}\"\nexport GROK_HOME={}\nfor file in auth.json mcp_credentials.json; do if [ -r \"$luna_mux_user_grok_home/$file\" ]; then cp \"$luna_mux_user_grok_home/$file\" \"$GROK_HOME/$file\" 2>/dev/null || true; fi; done\nexport LUNA_MUX_AGENT_ADAPTER={}\nexport LUNA_MUX_AGENT_PROCESS_ID=\"$$-$(date +%s)\"\nprintf '%s' '{{\"hook_event_name\":\"AgentProcessStart\",\"agent_adapter\":\"{}\"}}' | {} hook >/dev/null 2>&1 || true\ncommand grok \"$@\"\ncode=$?\nprintf '%s' '{{\"hook_event_name\":\"AgentProcessExit\",\"agent_adapter\":\"{}\"}}' | {} hook >/dev/null 2>&1 || true\nexit $code\n)\n",
+        "grok() (\n{}export LUNA_MUX_AGENT_ADAPTER={}\nexport LUNA_MUX_AGENT_PROCESS_ID=\"$$-$(date +%s)\"\nprintf '%s' '{{\"hook_event_name\":\"AgentProcessStart\",\"agent_adapter\":\"{}\"}}' | {} hook >/dev/null 2>&1 || true\ncommand grok \"$@\"\ncode=$?\nprintf '%s' '{{\"hook_event_name\":\"AgentProcessExit\",\"agent_adapter\":\"{}\"}}' | {} hook >/dev/null 2>&1 || true\nexit $code\n)\n",
         env_source,
-        shell_quote(&wsl_home.to_string_lossy()),
         shell_quote(GROK_BUILD_ADAPTER_ID),
         GROK_BUILD_ADAPTER_ID,
         shell_quote(&browser.to_string_lossy()),
@@ -204,58 +125,6 @@ pub fn install_wsl_manual_bootstrap(
     fs::write(&path, script).map_err(|error| error.to_string())?;
     let wsl_path = executable_for_target(&path, target_id)?;
     Ok(format!(". {}", shell_quote(&wsl_path.to_string_lossy())))
-}
-
-fn write_config_files(
-    home: &Path,
-    mcp_endpoint: &str,
-    hook_command: &str,
-    browser_command: Option<&str>,
-    browser_credentials_file: Option<&str>,
-    context: &TerminalRuntimeContext,
-) -> Result<(), String> {
-    fs::create_dir_all(home.join("hooks")).map_err(|error| error.to_string())?;
-    let (config, hooks) = config_contents(
-        mcp_endpoint,
-        hook_command,
-        browser_command,
-        browser_credentials_file,
-        context,
-    )?;
-    fs::write(home.join("config.toml"), config).map_err(|error| error.to_string())?;
-    fs::write(home.join("hooks/luna-mux.json"), hooks).map_err(|error| error.to_string())?;
-    Ok(())
-}
-
-fn config_contents(
-    mcp_endpoint: &str,
-    hook_command: &str,
-    browser_command: Option<&str>,
-    browser_credentials_file: Option<&str>,
-    context: &TerminalRuntimeContext,
-) -> Result<(String, String), String> {
-    let mut config = format!("[mcp_servers.luna_mux]\nurl = {}\nheaders = {{ Authorization = \"Bearer ${{{}}}\" }}\nstartup_timeout_sec = 30\n\n", toml_string(mcp_endpoint), MCP_AUTHORIZATION_ENV);
-    if let Some(command) = browser_command {
-        let mut env = format!(
-            "LUNA_MUX_SESSION_ID = {}",
-            toml_string(&context.mux_session_id)
-        );
-        if let Some(path) = browser_credentials_file {
-            env.push_str(&format!(
-                ", LUNA_MUX_BROWSER_BRIDGE_CREDENTIALS = {}",
-                toml_string(path)
-            ));
-        }
-        config.push_str(&format!("[mcp_servers.agent_browser]\ncommand = {}\nargs = [\"mcp\", \"browser\"]\nenv = {{ {} }}\nstartup_timeout_sec = 30\n\n", toml_string(command), env));
-    }
-    let hooks = HOOK_EVENTS.iter().map(|event| (event.to_string(), json!([{"hooks":[{"type":"command","command":hook_command,"timeout":if *event == "PreToolUse" {25} else {5}}]}]))).collect::<serde_json::Map<_, _>>();
-    let hooks =
-        serde_json::to_string(&json!({"hooks": hooks})).map_err(|error| error.to_string())?;
-    Ok((config, hooks))
-}
-
-fn toml_string(value: &str) -> String {
-    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
 fn executable_for_target(executable: &Path, target_id: &str) -> Result<PathBuf, String> {
@@ -282,24 +151,118 @@ fn powershell_literal(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
-    fn grok_config_contains_mcp_and_hooks() {
-        let context = TerminalRuntimeContext {
+    fn managed_command_preserves_the_user_grok_home() {
+        let context = crate::terminal_runtime_contract::TerminalManagedAgentContext {
             mux_session_id: "session".into(),
             pane_id: "pane".into(),
             runtime_id: "runtime".into(),
+            agent_id: "agent".into(),
+            launch_profile_id: "grok-build.default".into(),
         };
-        let (config, hooks) = config_contents(
-            "http://127.0.0.1:2/mcp",
-            "/tmp/luna-mux hook",
-            None,
-            None,
-            &context,
-        )
+        let profile = crate::agent_profiles::AgentLaunchProfile {
+            id: "grok-build.default".into(),
+            label: "Grok Build".into(),
+            adapter: GROK_BUILD_ADAPTER_ID.into(),
+            command: "grok".into(),
+            built_in: true,
+        };
+        let command = managed_command(&ManagedAgentLaunch {
+            profile: &profile,
+            target_id: "ssh-bookmark:test",
+            hook_endpoint: "http://127.0.0.1:43127/v1/hooks",
+            mcp_endpoint: "http://127.0.0.1:43128/mcp",
+            context: &context,
+            inject_inline_hooks: true,
+            hook_command: Some("remote-agent hook"),
+            browser_command: Some("remote-agent"),
+            browser_credentials_file: Some("/tmp/browser-credentials"),
+            existing_developer_instructions: None,
+        })
         .unwrap();
-        assert!(config.contains("[mcp_servers.luna_mux]"));
-        assert!(config.contains(MCP_AUTHORIZATION_ENV));
-        assert!(hooks.contains("PermissionDenied"));
-        assert!(hooks.contains("StopFailure"));
+
+        assert_eq!(command, "grok");
+        assert!(!command.contains("GROK_HOME"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn wsl_bootstrap_preserves_the_user_grok_home() {
+        let context = TerminalRuntimeContext {
+            mux_session_id: "session".into(),
+            pane_id: "pane".into(),
+            runtime_id: format!("grok-wsl-bootstrap-{}", uuid::Uuid::new_v4()),
+        };
+        install_wsl_manual_bootstrap(
+            &context,
+            "local:wsl:Ubuntu",
+            "http://127.0.0.1:43127/v1/hooks",
+            "http://127.0.0.1:43128/mcp",
+            Some(r"C:\Temp\luna-mux\agent.env"),
+        )
+        .expect("install WSL Grok bootstrap");
+        let script = fs::read_to_string(runtime_root(&context).join("grok-wsl-bootstrap.sh"))
+            .expect("read WSL Grok bootstrap");
+
+        assert!(!script.contains("GROK_HOME"), "{script}");
+        assert!(!script.contains("config.toml"), "{script}");
+        assert!(script.contains("command grok \"$@\""), "{script}");
+
+        crate::codex_shim::cleanup(&context.runtime_id);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn powershell_shim_preserves_the_user_grok_home() {
+        use std::process::Command;
+
+        let fixture = std::env::temp_dir().join(format!(
+            "luna-mux-grok-home-fixture-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&fixture).expect("create Grok shim fixture");
+        let real = fixture.join("grok.cmd");
+        let forwarder = fixture.join("luna-mux.cmd");
+        fs::write(&real, "@echo off\r\necho %GROK_HOME%\r\n").expect("write fake Grok command");
+        fs::write(&forwarder, "@echo off\r\nexit /b 0\r\n").expect("write fake hook forwarder");
+        let context = TerminalRuntimeContext {
+            mux_session_id: "session".into(),
+            pane_id: "pane".into(),
+            runtime_id: format!("grok-powershell-shim-{}", uuid::Uuid::new_v4()),
+        };
+        let root = install_with_executable(&context, Some(&real), &forwarder)
+            .expect("install PowerShell Grok shim")
+            .expect("fake Grok command is available");
+        let expected_home = fixture.join("user-grok-home");
+        let shells = [
+            crate::local_pty_backend::windows_powershell5_executable(),
+            crate::local_pty_backend::windows_powershell7_executable(),
+        ];
+
+        for shell in shells.into_iter().flatten() {
+            let output = Command::new(&shell)
+                .args([
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                ])
+                .arg(root.join("grok.ps1"))
+                .env("GROK_HOME", &expected_home)
+                .output()
+                .expect("run generated Grok shim");
+            let stdout = crate::local_pty_backend::decode_windows_command_output(&output.stdout);
+            assert!(output.status.success(), "{shell} failed");
+            assert!(
+                stdout.contains(&expected_home.to_string_lossy().to_string()),
+                "{} changed GROK_HOME: {stdout:?}",
+                shell
+            );
+        }
+
+        crate::codex_shim::cleanup(&context.runtime_id);
+        fs::remove_dir_all(fixture).expect("remove Grok shim fixture");
     }
 }
