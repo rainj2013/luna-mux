@@ -852,29 +852,32 @@ impl TerminalBackend for InProcessLocalPtyTerminalBackend {
     }
 
     async fn resize(&self, runtime_id: &str, cols: u32, rows: u32) -> TerminalBackendResult<()> {
-        let runtimes = self
+        let record = self
             .runtimes
             .read()
-            .map_err(|_| "本地 Runtime 状态锁已损坏")?;
-        let record = runtimes
+            .map_err(|_| "本地 Runtime 状态锁已损坏")?
             .get(runtime_id)
+            .cloned()
             .ok_or_else(|| "终端 Runtime 不存在".to_string())?;
-        let mut output = record.output.lock().map_err(|_| "本地 output 锁已损坏")?;
-        record
-            .master
-            .lock()
-            .map_err(|_| "本地 PTY master 锁已损坏")?
-            .as_ref()
-            .ok_or_else(|| "本地 PTY 已退出".to_string())?
-            .resize(PtySize {
-                rows: rows.clamp(1, u16::MAX as u32) as u16,
-                cols: cols.clamp(1, u16::MAX as u32) as u16,
+        let cols = cols.clamp(1, u16::MAX as u32);
+        let rows = rows.clamp(1, u16::MAX as u32);
+        // ConPTY resize can wait for its output pipe to drain. Neither the
+        // output lock (needed by the reader) nor an async worker (needed to
+        // resume flow control) may be held while waiting for the OS call.
+        tokio::task::spawn_blocking(move || {
+            let master = record.master.lock().map_err(|_| "本地 PTY master 锁已损坏")?;
+            master.as_ref().ok_or_else(|| "本地 PTY 已退出".to_string())?.resize(PtySize {
+                rows: rows as u16,
+                cols: cols as u16,
                 pixel_width: 0,
                 pixel_height: 0,
             })
             .map_err(|error| error.to_string())?;
-        output.resize_screen(rows, cols);
-        Ok(())
+            // Keep the master guard until the screen catches up so concurrent
+            // resizes cannot leave the screen at an older size than the PTY.
+            record.output.lock().map_err(|_| "本地 output 锁已损坏")?.resize_screen(rows, cols);
+            Ok(())
+        }).await.map_err(|error| error.to_string())?
     }
 
     fn set_output_paused(&self, runtime_id: &str, paused: bool) -> TerminalBackendResult<()> {
