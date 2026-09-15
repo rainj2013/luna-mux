@@ -520,7 +520,10 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
       if (container.current?.offsetParent) requestAnimationFrame(() => {
         fit.fit()
         if (runtimeIdRef.current) void window.api.terminalRuntimes.resize(runtimeIdRef.current, term.cols, term.rows)
-        if (visible) term.focus()
+        if (visible) {
+          term.refresh(0, Math.max(0, term.rows - 1))
+          term.focus()
+        }
       })
     })
     const scroll = term.onScroll((position) => {
@@ -604,7 +607,20 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
         element.dataset.renderer = 'dom'
       }
     }
-    requestAnimationFrame(() => { fitAddon.current?.fit(); term.focus() })
+    requestAnimationFrame(() => {
+      fitAddon.current?.fit()
+      term.refresh(0, Math.max(0, term.rows - 1))
+      term.focus()
+      // The WebGL addon can finish attaching after the first frame when a
+      // session was hidden for a while. Refresh again once its cell metrics
+      // have been committed by the browser.
+      requestAnimationFrame(() => {
+        if (!terminal.current || !visible) return
+        fitAddon.current?.fit()
+        term.refresh(0, Math.max(0, term.rows - 1))
+        term.focus()
+      })
+    })
   }, [visible, shouldRenderTerminal])
 
   useEffect(() => {
