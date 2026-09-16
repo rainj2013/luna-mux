@@ -150,6 +150,8 @@ function recentTerminalText(term: Terminal, maxLines: number, maxChars: number):
 }
 
 interface PrivateRenderer {
+  /** Only the DOM renderer keeps row elements; the WebGL renderer draws to a canvas. */
+  _rowContainer?: HTMLElement
   /** Only the DOM renderer derives its advance from layout; WebGL has no such method. */
   _setDefaultSpacing?: () => void
 }
@@ -172,21 +174,32 @@ interface TerminalInternals { _core?: { _renderService?: PrivateRenderService } 
  * re-derives the default - the measurement has to be taken again once the pane
  * is laid out. The WebGL renderer is immune (it measures glyphs through
  * CharSizeService and adds only the letterSpacing option, which this app never
- * sets), so the row container's presence is what tells the two apart.
+ * sets), so which renderer is active is what tells the two apart.
+ *
+ * Nothing inside xterm repairs it later, so the repair has to be called again:
+ * the character size service rejects non-positive measurements, which leaves a
+ * hidden pane holding its last valid size, and both `Terminal.resize()` and the
+ * renderer's intersection observer skip re-measuring while that size is still
+ * valid. A pane that comes back at the size it had is therefore never
+ * re-measured by xterm itself.
  */
 function resyncRendererDefaultSpacing(term: Terminal, element: HTMLElement): void {
-  if (!element.querySelector('.xterm-rows')) return
+  const renderer = (term as unknown as TerminalInternals)._core?._renderService?._renderer?.value
+  // Ask the active renderer rather than the DOM: the DOM renderer `open()` builds is
+  // never disposed when the WebGL addon takes over, so its row container outlives it
+  // and a `.xterm-rows` lookup answers for a renderer that is no longer drawing.
+  // WebGL needs no repair, and this is what keeps it out of the fallback below when
+  // the pane is resized.
+  if (!renderer?._rowContainer) return
   // Never measure an element that has no layout box: that measurement is exactly
   // what corrupts the value, so running here would plant the damage it repairs.
   if (element.getClientRects().length === 0) return
-  const renderer = (term as unknown as TerminalInternals)._core?._renderService?._renderer?.value
-  if (renderer?._setDefaultSpacing) {
+  if (renderer._setDefaultSpacing) {
     renderer._setDefaultSpacing()
     return
   }
-  // The layout-derived advance only exists on the DOM renderer, so this is the
-  // path for a version that renamed the private method above. A fresh theme
-  // object is the app's existing idiom for forcing a renderer option change;
+  // Reached only by a DOM renderer whose private method a release renamed. A fresh
+  // theme object is the app's existing idiom for forcing a renderer option change;
   // object identity is what makes the write observable to xterm.
   term.options.theme = { ...term.options.theme }
 }
@@ -723,10 +736,21 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
       }
     })()
     const observer = new ResizeObserver(() => {
-      if (container.current?.offsetParent) requestAnimationFrame(() => {
+      const element = container.current
+      if (element?.offsetParent) requestAnimationFrame(() => {
         if (disposed || terminal.current !== term) return
         fit.fit()
         resizeRuntimeIfVisible(term)
+        // The pane's layout box coming back is the signal the repair has to hang
+        // off, not its visibility: a workspace that is not the shown session is
+        // rendered with `hidden` and gives its panes an empty active key, so all
+        // of them lose WebGL and re-measure while laid out nowhere, but only the
+        // one that becomes active passes through the effect below. A pane whose
+        // box returns at the size it had before is no help to `fit()` either -
+        // that resize is a no-op, so it never re-measures the character size and
+        // nothing else re-derives the advance. Taken after fit(), so the
+        // measurement describes the layout the pane has now.
+        resyncRendererDefaultSpacing(term, element)
         if (visibleRef.current) {
           term.refresh(0, Math.max(0, term.rows - 1))
           focusTerminalIfVisible(term)
