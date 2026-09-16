@@ -386,16 +386,27 @@ ${contract.capabilities.map((capability) => `            ${capability.replace(/[
     #[test]
     fn screen_snapshot_uses_camel_case_and_round_trips() {
         let screen = TerminalScreenSnapshot {
-            runtime_id: "r".into(), output_cursor: 10, rows: 24, cols: 80,
-            cursor_row: 0, cursor_col: 7, cursor_visible: true,
-            cursor_line: "mysql>".into(), cursor_line_cursor: 9,
-            modes: TerminalScreenModes::default(), lines: vec!["mysql>".into()],
-            truncated: false, size_limited: false,
+            runtime_id: "r".into(),
+            output_cursor: 10,
+            rows: 24,
+            cols: 80,
+            cursor_row: 0,
+            cursor_col: 7,
+            cursor_visible: true,
+            cursor_line: "mysql>".into(),
+            cursor_line_cursor: 9,
+            modes: TerminalScreenModes::default(),
+            lines: vec!["mysql>".into()],
+            truncated: false,
+            size_limited: false,
         };
         let value = serde_json::to_value(&screen).unwrap();
         assert_eq!(value["cursorLineCursor"], 9);
         assert_eq!(value["modes"]["applicationCursor"], false);
-        assert_eq!(serde_json::from_value::<TerminalScreenSnapshot>(value).unwrap(), screen);
+        assert_eq!(
+            serde_json::from_value::<TerminalScreenSnapshot>(value).unwrap(),
+            screen
+        );
     }
 
     #[test]
