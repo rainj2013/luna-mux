@@ -23,6 +23,24 @@ const MAX_LOG_BYTES: u64 = 1024 * 1024;
 const MAX_ROTATED_FILES: u8 = 3;
 const DUPLICATE_WINDOW: Duration = Duration::from_millis(250);
 const DIAGNOSTIC_QUEUE_CAPACITY: usize = 2048;
+const MAX_PANIC_MESSAGE_CHARS: usize = 512;
+
+/// Records every panic and then defers to the previously installed hook.
+///
+/// The panics that matter here are the ones taken while a runtime's output mutex
+/// is held: that poisons the mutex, so every later lock fails and the PTY reader
+/// thread dies on its next chunk, leaving one pane permanently silent. The
+/// default hook writes the payload and source location to stderr, which a
+/// Windows GUI build discards, so without this hook such a freeze leaves no
+/// trace beyond "the pane stopped updating" — and the location is the one thing
+/// that cannot be recovered afterwards.
+pub fn install_panic_hook(diagnostics: Arc<TerminalInputDiagnostics>) {
+    let previous_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        diagnostics.record_panic(panic_info);
+        previous_hook(panic_info);
+    }));
+}
 
 #[derive(Clone)]
 pub struct TerminalInputDiagnostics {
@@ -77,9 +95,18 @@ pub struct DuplicateObservation {
 pub struct TerminalUiDiagnosticEvent {
     pub kind: TerminalUiDiagnosticEventKind,
     pub connected: bool,
+    /// A pane can be neither connected nor connecting, which silently discards
+    /// input; without this field that state is indistinguishable from a slow
+    /// connect in the recorded timeline.
+    pub connecting: bool,
     pub visible: bool,
     pub document_visible: bool,
     pub focused: bool,
+    /// What actually holds DOM focus, and how many xterm helper textareas exist
+    /// in the document. A blinking cursor with unusable input means some
+    /// textarea is focused; if it is not this pane's, the pane is fine and the
+    /// focus is on a leftover instance.
+    pub focus_owner: Option<String>,
     pub alternate_buffer: bool,
     pub pending_output: usize,
     pub output_cursor: u64,
@@ -87,6 +114,12 @@ pub struct TerminalUiDiagnosticEvent {
     pub base_y: u64,
     pub key_category: Option<TerminalUiKeyCategory>,
     pub client_input_id: Option<u64>,
+    /// Correlates events across the runtime rebinding a pane can undergo, and
+    /// identifies which pane emitted an event recorded under the unbound id.
+    pub pane_id: Option<String>,
+    pub input_path: Option<TerminalUiInputPath>,
+    /// Free-form provenance for flow, mount and skipped-output events.
+    pub reason: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -103,6 +136,18 @@ pub enum TerminalUiDiagnosticEventKind {
     FlowPause,
     FlowResume,
     Dispose,
+    Mount,
+    OutputSkipped,
+}
+
+/// Which branch the frontend took for a keystroke. Only `write` reaches the
+/// PTY; the other two are the silent-discard paths.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TerminalUiInputPath {
+    Write,
+    Buffered,
+    Dropped,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -251,6 +296,25 @@ impl TerminalInputDiagnostics {
         }));
     }
 
+    /// Deliberately minimal: a panic hook must not acquire a lock, block, or
+    /// panic on its own account. The record goes through the same queue as every
+    /// other event, so a full queue drops it rather than delaying the panic.
+    fn record_panic(&self, panic_info: &std::panic::PanicHookInfo<'_>) {
+        let location = panic_info.location();
+        let thread = std::thread::current();
+        self.append_json(json!({
+            "ts": Utc::now().to_rfc3339(),
+            "event": "rust_panic",
+            "threadName": thread.name().unwrap_or("unnamed"),
+            "message": panic_message(panic_info),
+            // The file and line identify the panicking statement; threadName
+            // ties it back to a runtime when it is a named PTY reader.
+            "file": location.map(|value| value.file()),
+            "line": location.map(|value| value.line()),
+            "column": location.map(|value| value.column()),
+        }));
+    }
+
     pub fn record_runtime_event(
         &self,
         runtime_id: &str,
@@ -384,6 +448,21 @@ fn open_log_file(state: &mut DiagnosticFileState) -> bool {
     true
 }
 
+/// A payload is a `&'static str` for `panic!` and a `String` for a formatted
+/// `panic!`; anything else is reported as such instead of being dropped. The
+/// message is truncated because a payload can carry an unbounded `Debug` dump.
+fn panic_message(panic_info: &std::panic::PanicHookInfo<'_>) -> String {
+    let payload = panic_info.payload();
+    let message = if let Some(message) = payload.downcast_ref::<&str>() {
+        (*message).to_owned()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "<non-string panic payload>".to_owned()
+    };
+    message.chars().take(MAX_PANIC_MESSAGE_CHARS).collect()
+}
+
 fn fingerprint(salt: &[u8; 16], data: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(salt);
@@ -504,9 +583,11 @@ mod tests {
             TerminalUiDiagnosticEvent {
                 kind: TerminalUiDiagnosticEventKind::Keydown,
                 connected: true,
+                connecting: false,
                 visible: true,
                 document_visible: true,
                 focused: true,
+                focus_owner: Some("own-helper-textarea[1/1]".into()),
                 alternate_buffer: true,
                 pending_output: 0,
                 output_cursor: 42,
@@ -514,6 +595,9 @@ mod tests {
                 base_y: 3,
                 key_category: Some(TerminalUiKeyCategory::Printable),
                 client_input_id: None,
+                pane_id: Some("pane-1".into()),
+                input_path: None,
+                reason: None,
             },
         );
         diagnostics.flush();
@@ -522,7 +606,72 @@ mod tests {
         assert!(contents.contains("\"event\":\"pty_write_completed\""));
         assert!(contents.contains("\"kind\":\"keydown\""));
         assert!(contents.contains("\"keyCategory\":\"printable\""));
+        assert!(contents.contains("\"paneId\":\"pane-1\""));
+        assert!(contents.contains("\"focusOwner\":\"own-helper-textarea[1/1]\""));
         assert!(!contents.contains("terminal text"));
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn optional_diagnostic_fields_may_be_omitted() {
+        // The frontend drops undefined fields when serializing, so every
+        // optional field must deserialize from an absent key.
+        let event = serde_json::from_value::<TerminalUiDiagnosticEvent>(json!({
+            "kind": "input",
+            "connected": false,
+            "connecting": false,
+            "visible": true,
+            "documentVisible": true,
+            "focused": false,
+            "alternateBuffer": false,
+            "pendingOutput": 0,
+            "outputCursor": 0,
+            "viewportY": 0,
+            "baseY": 0
+        }))
+        .expect("event without optional fields");
+
+        assert!(event.pane_id.is_none());
+        assert!(event.focus_owner.is_none());
+        assert!(event.input_path.is_none());
+        assert!(event.reason.is_none());
+        assert!(event.key_category.is_none());
+    }
+
+    #[test]
+    fn records_the_silent_discard_input_paths() {
+        let directory = test_log_dir();
+        let diagnostics = TerminalInputDiagnostics::new(directory.clone());
+        for path in [TerminalUiInputPath::Buffered, TerminalUiInputPath::Dropped] {
+            diagnostics.record_ui_event(
+                "unbound",
+                TerminalUiDiagnosticEvent {
+                    kind: TerminalUiDiagnosticEventKind::Input,
+                    connected: false,
+                    connecting: false,
+                    visible: true,
+                    document_visible: true,
+                    focused: true,
+                    focus_owner: Some("other-helper-textarea[1/2]".into()),
+                    alternate_buffer: true,
+                    pending_output: 0,
+                    output_cursor: 0,
+                    viewport_y: 0,
+                    base_y: 0,
+                    key_category: None,
+                    client_input_id: None,
+                    pane_id: Some("pane-1".into()),
+                    input_path: Some(path),
+                    reason: Some("no-runtime-id".into()),
+                },
+            );
+        }
+        diagnostics.flush();
+
+        let contents = fs::read_to_string(directory.join(LOG_FILE_NAME)).expect("log file");
+        assert!(contents.contains("\"inputPath\":\"buffered\""));
+        assert!(contents.contains("\"inputPath\":\"dropped\""));
+        assert!(contents.contains("\"runtimeId\":\"unbound\""));
         let _ = fs::remove_dir_all(directory);
     }
 
@@ -543,6 +692,34 @@ mod tests {
         }));
 
         assert!(event.is_err());
+    }
+
+    #[test]
+    fn records_a_panic_with_its_thread_and_location() {
+        let directory = test_log_dir();
+        let diagnostics = std::sync::Arc::new(TerminalInputDiagnostics::new(directory.clone()));
+        install_panic_hook(diagnostics.clone());
+
+        // The panic is expected, so its payload is discarded; what matters is
+        // that the hook wrote the location the panic would otherwise lose.
+        let panicked = std::thread::Builder::new()
+            .name("pty-reader-test".into())
+            .spawn(|| panic!("local output lock"))
+            .expect("panicking thread")
+            .join();
+        diagnostics.flush();
+        // Restore the harness hook so an unrelated failure elsewhere in this
+        // binary is not reported through this test's temporary log.
+        let _ = std::panic::take_hook();
+
+        assert!(panicked.is_err());
+        let contents = fs::read_to_string(directory.join(LOG_FILE_NAME)).expect("log file");
+        assert!(contents.contains("\"event\":\"rust_panic\""));
+        assert!(contents.contains("\"threadName\":\"pty-reader-test\""));
+        assert!(contents.contains("\"message\":\"local output lock\""));
+        assert!(contents.contains("\"line\":"));
+        assert!(contents.contains("terminal_input_diagnostics.rs"));
+        let _ = fs::remove_dir_all(directory);
     }
 
     #[test]

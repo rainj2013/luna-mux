@@ -46,6 +46,80 @@ const TRUECOLOR: &str = "truecolor";
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+/// A poisoned output mutex means some thread panicked while holding it. Every
+/// later lock fails, and the PTY reader thread dies on its next chunk, so the
+/// runtime stops producing output for the rest of the process.
+const OUTPUT_LOCK_POISONED: &str = "本地 output 锁已损坏";
+
+/// Locks a runtime's output buffer, or reports the poison once per runtime.
+///
+/// The condition has to be recorded explicitly: an unlocked failure looks
+/// exactly like a runtime that simply has nothing to say, and it is the one
+/// state the frontend cannot distinguish on its own.
+fn try_lock_output<'a>(
+    record: &'a RuntimeRecord,
+    runtime_id: &str,
+    site: &'static str,
+    diagnostics: Option<&TerminalInputDiagnostics>,
+) -> Option<std::sync::MutexGuard<'a, OutputBuffer>> {
+    match record.output.lock() {
+        Ok(output) => Some(output),
+        Err(_) => {
+            if let Some(diagnostics) = diagnostics
+                && !record.output_poison_reported.swap(true, Ordering::AcqRel)
+            {
+                diagnostics.record_runtime_event(
+                    runtime_id,
+                    "output_lock_poisoned",
+                    json!({ "site": site }),
+                );
+            }
+            None
+        }
+    }
+}
+
+fn lock_output<'a>(
+    record: &'a RuntimeRecord,
+    runtime_id: &str,
+    site: &'static str,
+    diagnostics: Option<&TerminalInputDiagnostics>,
+) -> TerminalBackendResult<std::sync::MutexGuard<'a, OutputBuffer>> {
+    try_lock_output(record, runtime_id, site, diagnostics)
+        .ok_or_else(|| OUTPUT_LOCK_POISONED.to_string())
+}
+
+/// Records a screen rebuild on the runtime that needed it.
+///
+/// The panic itself is already logged by the global hook, which has no runtime
+/// context. This adds the runtime, the call site and whether the screen contents
+/// could be restored — the difference between a recoverable parse bug and the
+/// frozen pane it used to cause.
+fn record_screen_recovery(
+    output: &OutputBuffer,
+    runtime_id: &str,
+    site: &'static str,
+    diagnostics: Option<&TerminalInputDiagnostics>,
+    before: u64,
+) {
+    let Some(diagnostics) = diagnostics else {
+        return;
+    };
+    let recoveries = output.screen_recoveries();
+    if recoveries == before {
+        return;
+    }
+    diagnostics.record_runtime_event(
+        runtime_id,
+        "screen_recovered",
+        json!({
+            "site": site,
+            "recoveries": recoveries,
+            "degraded": output.degraded_screen_recoveries(),
+        }),
+    );
+}
+
 #[cfg(windows)]
 fn local_pty_reader_drain_timeout() -> Option<std::time::Duration> {
     Some(std::time::Duration::from_millis(
@@ -66,6 +140,9 @@ struct RuntimeRecord {
     close_requested: AtomicBool,
     reader_abandoned: AtomicBool,
     reader_done: AtomicBool,
+    /// Set once when a poisoned output mutex is first seen, so the failure is
+    /// recorded without one line per failed read.
+    output_poison_reported: AtomicBool,
 }
 
 pub struct InProcessLocalPtyTerminalBackend {
@@ -236,95 +313,157 @@ impl InProcessLocalPtyTerminalBackend {
         let reader_sink = sink.clone();
         let reader_runtime_id = runtime_id.clone();
         let reader_diagnostics = diagnostics.clone();
-        thread::spawn(move || {
-            let mut decoder = Utf8Decoder::default();
-            let mut bytes = [0_u8; 8192];
-            loop {
-                while reader_record.paused.load(Ordering::Acquire) {
-                    thread::sleep(std::time::Duration::from_millis(5));
-                }
-                if reader_record.reader_abandoned.load(Ordering::Acquire) {
-                    if let Some(diagnostics) = &reader_diagnostics {
-                        diagnostics.record_runtime_event(
-                            &reader_runtime_id,
-                            "pty_reader_abandoned",
-                            json!({}),
-                        );
+        // Named so that a panic inside this thread, which the panic hook records
+        // globally without runtime context, still identifies its runtime.
+        let reader_thread = thread::Builder::new()
+            .name(format!("pty-reader-{runtime_id}"))
+            .spawn(move || {
+                let mut decoder = Utf8Decoder::default();
+                let mut bytes = [0_u8; 8192];
+                loop {
+                    while reader_record.paused.load(Ordering::Acquire) {
+                        thread::sleep(std::time::Duration::from_millis(5));
                     }
-                    break;
-                }
-                match reader.read(&mut bytes) {
-                    Ok(0) => {
+                    if reader_record.reader_abandoned.load(Ordering::Acquire) {
                         if let Some(diagnostics) = &reader_diagnostics {
                             diagnostics.record_runtime_event(
                                 &reader_runtime_id,
-                                "pty_reader_eof",
+                                "pty_reader_abandoned",
                                 json!({}),
                             );
                         }
                         break;
                     }
-                    Ok(size) => {
-                        if reader_record.reader_abandoned.load(Ordering::Acquire) {
+                    match reader.read(&mut bytes) {
+                        Ok(0) => {
+                            if let Some(diagnostics) = &reader_diagnostics {
+                                diagnostics.record_runtime_event(
+                                    &reader_runtime_id,
+                                    "pty_reader_eof",
+                                    json!({}),
+                                );
+                            }
                             break;
                         }
-                        let text = decoder.push(&bytes[..size]);
-                        if !text.is_empty() {
-                            let event = {
-                                let mut output =
-                                    reader_record.output.lock().expect("local output lock");
+                        Ok(size) => {
+                            if reader_record.reader_abandoned.load(Ordering::Acquire) {
+                                break;
+                            }
+                            let text = decoder.push(&bytes[..size]);
+                            if !text.is_empty() {
+                                // A poisoned lock must end this loop with a record
+                                // rather than a second panic: the panic that poisoned
+                                // it is already logged, and a panicking reader would
+                                // take the reason for the silence with it.
+                                let Some(mut output) = try_lock_output(
+                                    &reader_record,
+                                    &reader_runtime_id,
+                                    "reader",
+                                    reader_diagnostics.as_deref(),
+                                ) else {
+                                    break;
+                                };
+                                let before = output.screen_recoveries();
                                 let event = output.push(&reader_runtime_id, text.clone());
-                                Some(event)
-                            };
-                            if let Some(event) = event {
+                                record_screen_recovery(
+                                    &output,
+                                    &reader_runtime_id,
+                                    "reader",
+                                    reader_diagnostics.as_deref(),
+                                    before,
+                                );
+                                drop(output);
                                 Self::emit_to_sink(
                                     &reader_sink,
                                     TerminalRuntimeEvent::Output(event),
                                 );
                             }
                         }
-                    }
-                    Err(error) => {
-                        if reader_record.reader_abandoned.load(Ordering::Acquire) {
-                            break;
+                        Err(error) => {
+                            if reader_record.reader_abandoned.load(Ordering::Acquire) {
+                                break;
+                            }
+                            if let Some(diagnostics) = &reader_diagnostics {
+                                diagnostics.record_runtime_event(
+                                    &reader_runtime_id,
+                                    "pty_reader_error",
+                                    json!({ "errorKind": format!("{:?}", error.kind()) }),
+                                );
+                            }
+                            let text = decoder.finish();
+                            if !text.is_empty()
+                                && let Some(mut output) = try_lock_output(
+                                    &reader_record,
+                                    &reader_runtime_id,
+                                    "reader-error",
+                                    reader_diagnostics.as_deref(),
+                                )
+                            {
+                                let before = output.screen_recoveries();
+                                let event = output.push(&reader_runtime_id, text);
+                                record_screen_recovery(
+                                    &output,
+                                    &reader_runtime_id,
+                                    "reader-error",
+                                    reader_diagnostics.as_deref(),
+                                    before,
+                                );
+                                drop(output);
+                                Self::emit_to_sink(
+                                    &reader_sink,
+                                    TerminalRuntimeEvent::Output(event),
+                                );
+                            }
+                            reader_record.reader_done.store(true, Ordering::Release);
+                            return;
                         }
-                        if let Some(diagnostics) = &reader_diagnostics {
-                            diagnostics.record_runtime_event(
-                                &reader_runtime_id,
-                                "pty_reader_error",
-                                json!({ "errorKind": format!("{:?}", error.kind()) }),
-                            );
-                        }
-                        let text = decoder.finish();
-                        if !text.is_empty() {
-                            let mut output =
-                                reader_record.output.lock().expect("local output lock");
-                            let event = output.push(&reader_runtime_id, text);
-                            Self::emit_to_sink(&reader_sink, TerminalRuntimeEvent::Output(event));
-                        }
-                        reader_record.reader_done.store(true, Ordering::Release);
-                        return;
                     }
                 }
-            }
-            if reader_record.reader_abandoned.load(Ordering::Acquire) {
-                return;
-            }
-            let tail = decoder.finish();
-            if !tail.is_empty() {
-                let mut output = reader_record.output.lock().expect("local output lock");
-                let event = output.push(&reader_runtime_id, tail);
-                Self::emit_to_sink(&reader_sink, TerminalRuntimeEvent::Output(event));
-            }
-            reader_record.reader_done.store(true, Ordering::Release);
-            if let Some(diagnostics) = &reader_diagnostics {
+                if reader_record.reader_abandoned.load(Ordering::Acquire) {
+                    return;
+                }
+                let tail = decoder.finish();
+                if !tail.is_empty()
+                    && let Some(mut output) = try_lock_output(
+                        &reader_record,
+                        &reader_runtime_id,
+                        "reader-tail",
+                        reader_diagnostics.as_deref(),
+                    )
+                {
+                    let before = output.screen_recoveries();
+                    let event = output.push(&reader_runtime_id, tail);
+                    record_screen_recovery(
+                        &output,
+                        &reader_runtime_id,
+                        "reader-tail",
+                        reader_diagnostics.as_deref(),
+                        before,
+                    );
+                    drop(output);
+                    Self::emit_to_sink(&reader_sink, TerminalRuntimeEvent::Output(event));
+                }
+                reader_record.reader_done.store(true, Ordering::Release);
+                if let Some(diagnostics) = &reader_diagnostics {
+                    diagnostics.record_runtime_event(
+                        &reader_runtime_id,
+                        "pty_reader_finished",
+                        json!({}),
+                    );
+                }
+            });
+        if let Err(error) = reader_thread {
+            // Same outcome as the panic `thread::spawn` would have produced, but
+            // recorded instead of vanishing into a discarded stderr.
+            if let Some(diagnostics) = &diagnostics {
                 diagnostics.record_runtime_event(
-                    &reader_runtime_id,
-                    "pty_reader_finished",
-                    json!({}),
+                    &runtime_id,
+                    "pty_reader_spawn_failed",
+                    json!({ "error": error.to_string() }),
                 );
             }
-        });
+            record.reader_done.store(true, Ordering::Release);
+        }
         thread::spawn(move || {
             let status = child.wait().ok();
             if let Some(diagnostics) = &diagnostics {
@@ -870,6 +1009,7 @@ impl TerminalBackend for InProcessLocalPtyTerminalBackend {
             close_requested: AtomicBool::new(false),
             reader_abandoned: AtomicBool::new(false),
             reader_done: AtomicBool::new(false),
+            output_poison_reported: AtomicBool::new(false),
         });
         self.runtimes
             .write()
@@ -993,6 +1133,8 @@ impl TerminalBackend for InProcessLocalPtyTerminalBackend {
             .ok_or_else(|| "终端 Runtime 不存在".to_string())?;
         let cols = cols.clamp(1, u16::MAX as u32);
         let rows = rows.clamp(1, u16::MAX as u32);
+        let diagnostics = self.diagnostics();
+        let runtime_id = runtime_id.to_owned();
         // ConPTY resize can wait for its output pipe to drain. Neither the
         // output lock (needed by the reader) nor an async worker (needed to
         // resume flow control) may be held while waiting for the OS call.
@@ -1013,11 +1155,16 @@ impl TerminalBackend for InProcessLocalPtyTerminalBackend {
                 .map_err(|error| error.to_string())?;
             // Keep the master guard until the screen catches up so concurrent
             // resizes cannot leave the screen at an older size than the PTY.
-            record
-                .output
-                .lock()
-                .map_err(|_| "本地 output 锁已损坏")?
-                .resize_screen(rows, cols);
+            let mut output = lock_output(&record, &runtime_id, "resize", diagnostics.as_deref())?;
+            let before = output.screen_recoveries();
+            output.resize_screen(rows, cols);
+            record_screen_recovery(
+                &output,
+                &runtime_id,
+                "resize",
+                diagnostics.as_deref(),
+                before,
+            );
             Ok(())
         })
         .await
@@ -1138,6 +1285,7 @@ impl TerminalBackend for InProcessLocalPtyTerminalBackend {
         runtime_id: &str,
         max_bytes: usize,
     ) -> TerminalBackendResult<crate::terminal_runtime_contract::TerminalScreenSnapshot> {
+        let diagnostics = self.diagnostics();
         let record = self
             .runtimes
             .read()
@@ -1145,11 +1293,13 @@ impl TerminalBackend for InProcessLocalPtyTerminalBackend {
             .get(runtime_id)
             .cloned()
             .ok_or_else(|| "终端 Runtime 不存在".to_string())?;
-        Ok(record
-            .output
-            .lock()
-            .map_err(|_| "本地 output 锁已损坏")?
-            .screen_snapshot(runtime_id, max_bytes))
+        Ok(lock_output(
+            &record,
+            runtime_id,
+            "screen-snapshot",
+            diagnostics.as_deref(),
+        )?
+        .screen_snapshot(runtime_id, max_bytes))
     }
 
     fn read_output(
@@ -1158,6 +1308,7 @@ impl TerminalBackend for InProcessLocalPtyTerminalBackend {
         from_cursor: u64,
         max_bytes: usize,
     ) -> TerminalBackendResult<TerminalRuntimeOutputReadResult> {
+        let diagnostics = self.diagnostics();
         let record = self
             .runtimes
             .read()
@@ -1165,11 +1316,11 @@ impl TerminalBackend for InProcessLocalPtyTerminalBackend {
             .get(runtime_id)
             .cloned()
             .ok_or_else(|| "终端 Runtime 不存在".to_string())?;
-        record
-            .output
-            .lock()
-            .map_err(|_| "本地 output 锁已损坏")?
-            .read(runtime_id, from_cursor, max_bytes)
+        lock_output(&record, runtime_id, "read-output", diagnostics.as_deref())?.read(
+            runtime_id,
+            from_cursor,
+            max_bytes,
+        )
     }
 }
 
