@@ -402,7 +402,9 @@ impl AgentHookService {
             .map(|agents| {
                 agents
                     .iter()
-                    .filter(|(key, _)| key.as_str() == token || key.starts_with(&format!("{token}:")))
+                    .filter(|(key, _)| {
+                        key.as_str() == token || key.starts_with(&format!("{token}:"))
+                    })
                     .map(|(_, context)| context.clone())
                     .collect::<Vec<_>>()
             })

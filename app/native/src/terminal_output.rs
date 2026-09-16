@@ -41,8 +41,13 @@ impl OutputBuffer {
         self.screen.resize(rows, cols);
     }
 
-    pub fn screen_snapshot(&self, runtime_id: &str, max_bytes: usize) -> crate::terminal_runtime_contract::TerminalScreenSnapshot {
-        self.screen.snapshot(runtime_id, self.next_cursor, max_bytes)
+    pub fn screen_snapshot(
+        &self,
+        runtime_id: &str,
+        max_bytes: usize,
+    ) -> crate::terminal_runtime_contract::TerminalScreenSnapshot {
+        self.screen
+            .snapshot(runtime_id, self.next_cursor, max_bytes)
     }
 
     pub fn next_cursor(&self) -> u64 {

@@ -34,12 +34,12 @@ mod shell_quoting;
 mod ssh_config;
 mod ssh_terminal_backend;
 mod terminal_backend;
-mod terminal_input_diagnostics;
-mod terminal_output;
-mod terminal_screen;
 mod terminal_cli;
+mod terminal_input_diagnostics;
 mod terminal_interaction;
+mod terminal_output;
 mod terminal_runtime_contract;
+mod terminal_screen;
 mod transfers;
 mod tunnels;
 #[cfg(target_os = "windows")]

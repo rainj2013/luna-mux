@@ -384,9 +384,7 @@ impl InProcessLocalPtyTerminalBackend {
             record
                 .reader_abandoned
                 .store(reader_abandoned, Ordering::Release);
-            if reader_abandoned
-                && let Some(diagnostics) = &diagnostics
-            {
+            if reader_abandoned && let Some(diagnostics) = &diagnostics {
                 diagnostics.record_runtime_event(
                     &runtime_id,
                     "pty_reader_drain_timeout",
@@ -857,7 +855,11 @@ impl TerminalBackend for InProcessLocalPtyTerminalBackend {
         };
         let record = Arc::new(RuntimeRecord {
             runtime: Mutex::new(runtime.clone()),
-            output: Mutex::new(OutputBuffer::with_size(OUTPUT_CAPACITY_BYTES, request.rows, request.cols)),
+            output: Mutex::new(OutputBuffer::with_size(
+                OUTPUT_CAPACITY_BYTES,
+                request.rows,
+                request.cols,
+            )),
             writer: Mutex::new(Some(writer)),
             master: Mutex::new(Some(pair.master)),
             killer: Mutex::new(killer),
@@ -945,8 +947,13 @@ impl TerminalBackend for InProcessLocalPtyTerminalBackend {
         // PTY backpressure can block write_all. Keep blocking I/O and the writer
         // mutex off async workers, and never hold the Runtime registry while writing.
         let result = tokio::task::spawn_blocking(move || {
-            let mut writer_guard = record.writer.lock().map_err(|_| "本地 PTY writer 锁已损坏".to_string())?;
-            let writer = writer_guard.as_mut().ok_or_else(|| "本地 PTY 已退出".to_string())?;
+            let mut writer_guard = record
+                .writer
+                .lock()
+                .map_err(|_| "本地 PTY writer 锁已损坏".to_string())?;
+            let writer = writer_guard
+                .as_mut()
+                .ok_or_else(|| "本地 PTY 已退出".to_string())?;
             let result = writer
                 .write_all(&input)
                 .and_then(|_| writer.flush())
@@ -963,7 +970,9 @@ impl TerminalBackend for InProcessLocalPtyTerminalBackend {
                 );
             }
             result
-        }).await.map_err(|error| error.to_string())?;
+        })
+        .await
+        .map_err(|error| error.to_string())?;
         if result.is_ok()
             && let Some(diagnostics) = &diagnostics
             && let Some(observation) =
@@ -988,19 +997,31 @@ impl TerminalBackend for InProcessLocalPtyTerminalBackend {
         // output lock (needed by the reader) nor an async worker (needed to
         // resume flow control) may be held while waiting for the OS call.
         tokio::task::spawn_blocking(move || {
-            let master = record.master.lock().map_err(|_| "本地 PTY master 锁已损坏")?;
-            master.as_ref().ok_or_else(|| "本地 PTY 已退出".to_string())?.resize(PtySize {
-                rows: rows as u16,
-                cols: cols as u16,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .map_err(|error| error.to_string())?;
+            let master = record
+                .master
+                .lock()
+                .map_err(|_| "本地 PTY master 锁已损坏")?;
+            master
+                .as_ref()
+                .ok_or_else(|| "本地 PTY 已退出".to_string())?
+                .resize(PtySize {
+                    rows: rows as u16,
+                    cols: cols as u16,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                })
+                .map_err(|error| error.to_string())?;
             // Keep the master guard until the screen catches up so concurrent
             // resizes cannot leave the screen at an older size than the PTY.
-            record.output.lock().map_err(|_| "本地 output 锁已损坏")?.resize_screen(rows, cols);
+            record
+                .output
+                .lock()
+                .map_err(|_| "本地 output 锁已损坏")?
+                .resize_screen(rows, cols);
             Ok(())
-        }).await.map_err(|error| error.to_string())?
+        })
+        .await
+        .map_err(|error| error.to_string())?
     }
 
     fn set_output_paused(&self, runtime_id: &str, paused: bool) -> TerminalBackendResult<()> {
@@ -1112,10 +1133,23 @@ impl TerminalBackend for InProcessLocalPtyTerminalBackend {
         kill_result.map_err(|error| error.to_string())
     }
 
-    fn screen_snapshot(&self, runtime_id: &str, max_bytes: usize) -> TerminalBackendResult<crate::terminal_runtime_contract::TerminalScreenSnapshot> {
-        let record = self.runtimes.read().map_err(|_| "本地 Runtime 状态锁已损坏")?
-            .get(runtime_id).cloned().ok_or_else(|| "终端 Runtime 不存在".to_string())?;
-        Ok(record.output.lock().map_err(|_| "本地 output 锁已损坏")?.screen_snapshot(runtime_id, max_bytes))
+    fn screen_snapshot(
+        &self,
+        runtime_id: &str,
+        max_bytes: usize,
+    ) -> TerminalBackendResult<crate::terminal_runtime_contract::TerminalScreenSnapshot> {
+        let record = self
+            .runtimes
+            .read()
+            .map_err(|_| "本地 Runtime 状态锁已损坏")?
+            .get(runtime_id)
+            .cloned()
+            .ok_or_else(|| "终端 Runtime 不存在".to_string())?;
+        Ok(record
+            .output
+            .lock()
+            .map_err(|_| "本地 output 锁已损坏")?
+            .screen_snapshot(runtime_id, max_bytes))
     }
 
     fn read_output(
@@ -1422,10 +1456,8 @@ mod tests {
     async fn assert_powershell_runtime_preserves_unicode_sets_terminal_type_and_exits(
         target_id: &str,
     ) {
-        let log_dir = std::env::temp_dir().join(format!(
-            "luna-mux-pty-natural-exit-{}",
-            Uuid::new_v4()
-        ));
+        let log_dir =
+            std::env::temp_dir().join(format!("luna-mux-pty-natural-exit-{}", Uuid::new_v4()));
         let backend = InProcessLocalPtyTerminalBackend::new();
         backend.set_input_diagnostics(Arc::new(TerminalInputDiagnostics::new(log_dir.clone())));
         let mut request = request_for_target(
@@ -1489,10 +1521,8 @@ mod tests {
 
     #[tokio::test]
     async fn close_kills_powershell_runtime() {
-        let log_dir = std::env::temp_dir().join(format!(
-            "luna-mux-pty-lifecycle-{}",
-            Uuid::new_v4()
-        ));
+        let log_dir =
+            std::env::temp_dir().join(format!("luna-mux-pty-lifecycle-{}", Uuid::new_v4()));
         let backend = InProcessLocalPtyTerminalBackend::new();
         backend.set_input_diagnostics(Arc::new(TerminalInputDiagnostics::new(log_dir.clone())));
         let runtime = backend
@@ -1530,14 +1560,26 @@ mod tests {
             .lines()
             .find(|line| line.contains("\"event\":\"close_requested\""))
             .expect("close request diagnostic");
-        assert!(close_request.contains("\"processStateAtClose\":\"alive\""), "{log}");
+        assert!(
+            close_request.contains("\"processStateAtClose\":\"alive\""),
+            "{log}"
+        );
         let event_position = |event: &str| {
             log.find(&format!("\"event\":\"{event}\""))
                 .unwrap_or_else(|| panic!("missing {event}: {log}"))
         };
-        assert!(event_position("runtime_spawned") < event_position("close_requested"), "{log}");
-        assert!(event_position("close_requested") < event_position("shell_exited"), "{log}");
-        assert!(event_position("shell_exited") < event_position("runtime_finished"), "{log}");
+        assert!(
+            event_position("runtime_spawned") < event_position("close_requested"),
+            "{log}"
+        );
+        assert!(
+            event_position("close_requested") < event_position("shell_exited"),
+            "{log}"
+        );
+        assert!(
+            event_position("shell_exited") < event_position("runtime_finished"),
+            "{log}"
+        );
         let _ = std::fs::remove_dir_all(log_dir);
     }
 

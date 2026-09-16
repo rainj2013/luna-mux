@@ -488,9 +488,7 @@ fn list_tools_result_for_protocol(
     if protocol_version.is_some_and(|version| version >= ProtocolVersion::V_2026_07_28) {
         // The catalog is filtered by the authenticated caller's grants and can
         // change with the active Mux Session, so never share or retain it.
-        result
-            .with_ttl_ms(0)
-            .with_cache_scope(CacheScope::Private)
+        result.with_ttl_ms(0).with_cache_scope(CacheScope::Private)
     } else {
         result
     }
@@ -832,8 +830,12 @@ fn control_arguments_schema(operation: &str) -> Value {
         | "terminal.runtime.close"
         | "transfers.list"
         | "tunnels.list" => empty_object_schema(),
-        "database.pane.fill" => json!({"type":"object","properties":{"ref":{"type":"string","minLength":1,"maxLength":1024},"value":{"type":"string","maxLength":65536}},"required":["ref","value"],"additionalProperties":false}),
-        "database.pane.click" => json!({"type":"object","properties":{"ref":{"type":"string","minLength":1,"maxLength":1024}},"required":["ref"],"additionalProperties":false}),
+        "database.pane.fill" => {
+            json!({"type":"object","properties":{"ref":{"type":"string","minLength":1,"maxLength":1024},"value":{"type":"string","maxLength":65536}},"required":["ref","value"],"additionalProperties":false})
+        }
+        "database.pane.click" => {
+            json!({"type":"object","properties":{"ref":{"type":"string","minLength":1,"maxLength":1024}},"required":["ref"],"additionalProperties":false})
+        }
         "diagnostics.run" => json!({
             "type": "object",
             "properties": {
@@ -1319,14 +1321,29 @@ mod tests {
     #[test]
     fn interaction_schema_requires_retry_key_and_bounded_waits() {
         let tool = tool_for(ControlOperationDescriptor {
-            name: "terminal.runtime.interact".into(), version: 1, access: ControlAccess::Write,
-            resource_kind: ControlResourceKind::TerminalRuntime, mutating: true,
-            supports_idempotency: true, approval: ControlApprovalRequirement::None,
+            name: "terminal.runtime.interact".into(),
+            version: 1,
+            access: ControlAccess::Write,
+            resource_kind: ControlResourceKind::TerminalRuntime,
+            mutating: true,
+            supports_idempotency: true,
+            approval: ControlApprovalRequirement::None,
         });
         let schema = Value::Object((*tool.input_schema).clone());
-        assert_eq!(schema["required"], json!(["resourceId", "arguments", "idempotencyKey"]));
-        assert_eq!(schema["properties"]["arguments"]["properties"]["timeoutMs"]["maximum"], 30000);
-        for name in ["terminal.runtime.output.wait", "terminal.runtime.execution.read", "terminal.runtime.execution.wait", "terminal.runtime.execution.cancel"] {
+        assert_eq!(
+            schema["required"],
+            json!(["resourceId", "arguments", "idempotencyKey"])
+        );
+        assert_eq!(
+            schema["properties"]["arguments"]["properties"]["timeoutMs"]["maximum"],
+            30000
+        );
+        for name in [
+            "terminal.runtime.output.wait",
+            "terminal.runtime.execution.read",
+            "terminal.runtime.execution.wait",
+            "terminal.runtime.execution.cancel",
+        ] {
             let args = control_arguments_schema(name);
             assert_eq!(args["additionalProperties"], false);
             assert!(!args["required"].as_array().unwrap().is_empty());
@@ -1338,13 +1355,27 @@ mod tests {
     fn screen_and_mode_input_schemas_expose_phase_two_contract() {
         let screen = control_arguments_schema("terminal.runtime.screen.snapshot");
         assert_eq!(screen["properties"]["maxBytes"]["maximum"], 262144);
-        assert_eq!(screen["properties"]["cli"]["properties"]["rules"]["maxItems"], 16);
+        assert_eq!(
+            screen["properties"]["cli"]["properties"]["rules"]["maxItems"],
+            16
+        );
         assert_eq!(screen["additionalProperties"], false);
         let interaction = control_arguments_schema("terminal.runtime.interact");
-        let variants = interaction["properties"]["input"]["oneOf"].as_array().unwrap();
-        assert!(variants.iter().any(|v| v["properties"]["type"]["const"] == "autoPaste"));
-        assert_eq!(interaction["properties"]["wait"]["properties"]["prompt"]["required"], json!(["cli"]));
-        assert!(operation_routing_guidance("terminal.runtime.screen.snapshot").contains("No browser"));
+        let variants = interaction["properties"]["input"]["oneOf"]
+            .as_array()
+            .unwrap();
+        assert!(
+            variants
+                .iter()
+                .any(|v| v["properties"]["type"]["const"] == "autoPaste")
+        );
+        assert_eq!(
+            interaction["properties"]["wait"]["properties"]["prompt"]["required"],
+            json!(["cli"])
+        );
+        assert!(
+            operation_routing_guidance("terminal.runtime.screen.snapshot").contains("No browser")
+        );
     }
 
     #[tokio::test]
@@ -1634,18 +1665,14 @@ mod tests {
 
     #[test]
     fn tool_list_cache_hints_follow_the_negotiated_protocol_version() {
-        let current = list_tools_result_for_protocol(
-            Vec::new(),
-            Some(ProtocolVersion::V_2026_07_28),
-        );
+        let current =
+            list_tools_result_for_protocol(Vec::new(), Some(ProtocolVersion::V_2026_07_28));
         let current_json = serde_json::to_value(current).unwrap();
         assert_eq!(current_json["ttlMs"], 0);
         assert_eq!(current_json["cacheScope"], "private");
 
-        let legacy = list_tools_result_for_protocol(
-            Vec::new(),
-            Some(ProtocolVersion::V_2025_11_25),
-        );
+        let legacy =
+            list_tools_result_for_protocol(Vec::new(), Some(ProtocolVersion::V_2025_11_25));
         let legacy_json = serde_json::to_value(legacy).unwrap();
         assert!(legacy_json.get("ttlMs").is_none());
         assert!(legacy_json.get("cacheScope").is_none());

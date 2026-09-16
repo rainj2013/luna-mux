@@ -76,7 +76,8 @@ async fn run_proxy() -> Result<(), String> {
             }
         }
     }
-    let upstream = upstream.ok_or_else(|| format!("Luna MCP proxy connect failed: {last_error}"))?;
+    let upstream =
+        upstream.ok_or_else(|| format!("Luna MCP proxy connect failed: {last_error}"))?;
     let peer = upstream.peer().clone();
     let peer_info = peer
         .peer_info()

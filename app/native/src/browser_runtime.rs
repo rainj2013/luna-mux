@@ -43,7 +43,11 @@ pub(crate) fn record_remote_bridge_diagnostic(message: &str) {
         return;
     }
     use std::io::Write;
-    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
         let _ = writeln!(file, "{message}");
     }
 }
@@ -1545,8 +1549,7 @@ fn is_agent_browser_config_filename(name: &str) -> bool {
     }) else {
         return false;
     };
-    (scope.starts_with("luna-mux-") || scope.starts_with("lm-"))
-        && Uuid::parse_str(uuid).is_ok()
+    (scope.starts_with("luna-mux-") || scope.starts_with("lm-")) && Uuid::parse_str(uuid).is_ok()
 }
 
 pub(crate) async fn warm_agent_browser_session(
@@ -1976,17 +1979,23 @@ fn windows_runtime_process_ids(_profiles_root: &Path) -> Vec<u32> {
     let Ok(output) = crate::local_pty_backend::windows_no_window_command(tool)
         .args(["process", "get", "ProcessId,CommandLine", "/format:csv"])
         .output()
-    else { return Vec::new(); };
+    else {
+        return Vec::new();
+    };
     let profile_prefix = format!("--user-data-dir={}", _profiles_root.to_string_lossy());
     let executable = ["chro", "me.exe"].concat();
-    String::from_utf8_lossy(&output.stdout).lines().filter_map(|line| {
-        let fields = line.split(',').collect::<Vec<_>>();
-        let command = fields.get(fields.len().saturating_sub(2))?.trim();
-        let process_id = fields.last()?.trim().parse::<u32>().ok()?;
-        (command.to_ascii_lowercase().contains(&executable)
-            && command.contains(&profile_prefix)
-            && command.contains("--remote-debugging-port=")).then_some(process_id)
-    }).collect()
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let fields = line.split(',').collect::<Vec<_>>();
+            let command = fields.get(fields.len().saturating_sub(2))?.trim();
+            let process_id = fields.last()?.trim().parse::<u32>().ok()?;
+            (command.to_ascii_lowercase().contains(&executable)
+                && command.contains(&profile_prefix)
+                && command.contains("--remote-debugging-port="))
+            .then_some(process_id)
+        })
+        .collect()
 }
 
 #[cfg(target_os = "windows")]
@@ -2480,14 +2489,11 @@ mod tests {
 
     use super::{
         BrowserRuntimeCreateRequest, BrowserRuntimeManager, BrowserRuntimeStatus,
-        BrowserWarmupGate, close_agent_browser_session, close_process_tree,
-        cleanup_agent_browser_config_dir_at,
-        configure_process_group, create_agent_browser_mcp_config,
-        ensure_agent_browser_mcp_config,
-        discover_chrome,
-        mark_chrome_profile_clean, normalize_url, page_websocket_url, parse_shortcut,
-        reserve_loopback_port, resolve_agent_browser_binary, select_page_websocket_url,
-        wait_for_cdp, warm_agent_browser_session,
+        BrowserWarmupGate, cleanup_agent_browser_config_dir_at, close_agent_browser_session,
+        close_process_tree, configure_process_group, create_agent_browser_mcp_config,
+        discover_chrome, ensure_agent_browser_mcp_config, mark_chrome_profile_clean, normalize_url,
+        page_websocket_url, parse_shortcut, reserve_loopback_port, resolve_agent_browser_binary,
+        select_page_websocket_url, wait_for_cdp, warm_agent_browser_session,
     };
 
     #[tokio::test]
@@ -2713,10 +2719,8 @@ mod tests {
 
     #[test]
     fn agent_browser_config_cleanup_only_removes_owned_json_files() {
-        let root = std::env::temp_dir().join(format!(
-            "luna-mux-agent-browser-cleanup-{}",
-            Uuid::new_v4()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("luna-mux-agent-browser-cleanup-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         // The scope may contain hyphens; the final UUID is the ownership marker.
         let owned = root.join(format!("luna-mux-session-{}.json", Uuid::new_v4()));
@@ -2739,10 +2743,8 @@ mod tests {
 
     #[test]
     fn agent_browser_config_cleanup_keeps_recent_owned_files() {
-        let root = std::env::temp_dir().join(format!(
-            "luna-mux-agent-browser-recent-{}",
-            Uuid::new_v4()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("luna-mux-agent-browser-recent-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let recent = root.join(format!("luna-mux-session-{}.json", Uuid::new_v4()));
         std::fs::write(&recent, b"{}").unwrap();

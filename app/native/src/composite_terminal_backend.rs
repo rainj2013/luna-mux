@@ -104,7 +104,11 @@ impl TerminalBackend for CompositeTerminalBackend {
         }
     }
 
-    fn screen_snapshot(&self, runtime_id: &str, max_bytes: usize) -> TerminalBackendResult<crate::terminal_runtime_contract::TerminalScreenSnapshot> {
+    fn screen_snapshot(
+        &self,
+        runtime_id: &str,
+        max_bytes: usize,
+    ) -> TerminalBackendResult<crate::terminal_runtime_contract::TerminalScreenSnapshot> {
         if self.local_runtime(runtime_id)? {
             self.local.screen_snapshot(runtime_id, max_bytes)
         } else {

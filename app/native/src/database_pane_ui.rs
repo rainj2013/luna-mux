@@ -1,8 +1,8 @@
 //! A request bridge to mounted database UI controls. This module never accesses
 //! database connections, credentials, SQL drivers, or arbitrary webview scripts.
-use std::{collections::HashMap, sync::Mutex, time::Duration};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::{collections::HashMap, sync::Mutex, time::Duration};
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
@@ -19,7 +19,9 @@ impl PaneUiAction {
         let reference = match self {
             Self::Snapshot => return Ok(()),
             Self::Fill { r#ref, value } => {
-                if value.len() > 65536 { return Err("Control value exceeds 65536 bytes".into()); }
+                if value.len() > 65536 {
+                    return Err("Control value exceeds 65536 bytes".into());
+                }
                 r#ref
             }
             Self::Click { r#ref } => r#ref,
@@ -53,13 +55,20 @@ struct Inner {
 }
 
 #[derive(Default)]
-pub struct DatabasePaneUiBridge { inner: Mutex<Inner> }
+pub struct DatabasePaneUiBridge {
+    inner: Mutex<Inner>,
+}
 
 // Cancellation and timeout release the reservation, including dropped callers.
-struct Reservation<'a> { bridge: &'a DatabasePaneUiBridge, id: String }
+struct Reservation<'a> {
+    bridge: &'a DatabasePaneUiBridge,
+    id: String,
+}
 impl Drop for Reservation<'_> {
     fn drop(&mut self) {
-        if let Ok(mut inner) = self.bridge.inner.lock() { inner.pending.remove(&self.id); }
+        if let Ok(mut inner) = self.bridge.inner.lock() {
+            inner.pending.remove(&self.id);
+        }
     }
 }
 
@@ -68,13 +77,20 @@ impl DatabasePaneUiBridge {
         if pane_id.is_empty() || mount_id.is_empty() || mount_id.len() > 128 {
             return Err("Invalid database pane mount".into());
         }
-        let mut inner = self.inner.lock().map_err(|_| "Database UI bridge lock poisoned")?;
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| "Database UI bridge lock poisoned")?;
         if mounted {
             inner.mounted.insert(pane_id.into(), mount_id.into());
-            inner.pending.retain(|_, pending| pending.pane_id != pane_id);
+            inner
+                .pending
+                .retain(|_, pending| pending.pane_id != pane_id);
         } else if inner.mounted.get(pane_id).map(String::as_str) == Some(mount_id) {
             inner.mounted.remove(pane_id);
-            inner.pending.retain(|_, pending| pending.pane_id != pane_id);
+            inner
+                .pending
+                .retain(|_, pending| pending.pane_id != pane_id);
         }
         Ok(())
     }
@@ -85,44 +101,94 @@ impl DatabasePaneUiBridge {
         action: PaneUiAction,
         emit: impl FnOnce(&PaneUiRequest) -> Result<(), String>,
     ) -> Result<Value, String> {
-        self.request_with_timeout(pane_id, action, Duration::from_secs(10), emit).await
+        self.request_with_timeout(pane_id, action, Duration::from_secs(10), emit)
+            .await
     }
 
     async fn request_with_timeout(
-        &self, pane_id: &str, action: PaneUiAction, timeout: Duration,
+        &self,
+        pane_id: &str,
+        action: PaneUiAction,
+        timeout: Duration,
         emit: impl FnOnce(&PaneUiRequest) -> Result<(), String>,
     ) -> Result<Value, String> {
         action.validate()?;
         let (sender, receiver) = oneshot::channel();
         let request = {
-            let mut inner = self.inner.lock().map_err(|_| "Database UI bridge lock poisoned")?;
-            let mount_id = inner.mounted.get(pane_id).cloned()
+            let mut inner = self
+                .inner
+                .lock()
+                .map_err(|_| "Database UI bridge lock poisoned")?;
+            let mount_id = inner
+                .mounted
+                .get(pane_id)
+                .cloned()
                 .ok_or("Database pane UI is not mounted; open its Session first")?;
             if inner.pending.len() >= 64 || inner.pending.values().any(|p| p.pane_id == pane_id) {
                 return Err("Database pane UI already has a pending request".into());
             }
             let request_id = Uuid::new_v4().to_string();
-            inner.pending.insert(request_id.clone(), Pending { pane_id: pane_id.into(), mount_id: mount_id.clone(), sender });
-            PaneUiRequest { request_id, pane_id: pane_id.into(), mount_id, action }
+            inner.pending.insert(
+                request_id.clone(),
+                Pending {
+                    pane_id: pane_id.into(),
+                    mount_id: mount_id.clone(),
+                    sender,
+                },
+            );
+            PaneUiRequest {
+                request_id,
+                pane_id: pane_id.into(),
+                mount_id,
+                action,
+            }
         };
-        let _reservation = Reservation { bridge: self, id: request.request_id.clone() };
+        let _reservation = Reservation {
+            bridge: self,
+            id: request.request_id.clone(),
+        };
         emit(&request)?;
-        tokio::time::timeout(timeout, receiver).await
-            .map_err(|_| "Database pane UI did not respond; inspect before retrying a click".to_string())?
+        tokio::time::timeout(timeout, receiver)
+            .await
+            .map_err(|_| {
+                "Database pane UI did not respond; inspect before retrying a click".to_string()
+            })?
             .map_err(|_| "Database pane UI was unmounted".to_string())?
     }
 
-    pub fn respond(&self, request_id: &str, pane_id: &str, mount_id: &str, result: Result<Value, String>) -> Result<(), String> {
-        if serde_json::to_vec(&result).map_err(|_| "Invalid UI response")?.len() > 512 * 1024 {
+    pub fn respond(
+        &self,
+        request_id: &str,
+        pane_id: &str,
+        mount_id: &str,
+        result: Result<Value, String>,
+    ) -> Result<(), String> {
+        if serde_json::to_vec(&result)
+            .map_err(|_| "Invalid UI response")?
+            .len()
+            > 512 * 1024
+        {
             return Err("Database UI response exceeds 512 KiB".into());
         }
-        let mut inner = self.inner.lock().map_err(|_| "Database UI bridge lock poisoned")?;
-        let pending = inner.pending.get(request_id).ok_or("Database UI request expired")?;
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| "Database UI bridge lock poisoned")?;
+        let pending = inner
+            .pending
+            .get(request_id)
+            .ok_or("Database UI request expired")?;
         if pending.pane_id != pane_id || pending.mount_id != mount_id {
             return Err("Database UI response has the wrong pane or mount".into());
         }
-        let pending = inner.pending.remove(request_id).expect("validated pending request");
-        pending.sender.send(result).map_err(|_| "Database UI caller disconnected".into())
+        let pending = inner
+            .pending
+            .remove(request_id)
+            .expect("validated pending request");
+        pending
+            .sender
+            .send(result)
+            .map_err(|_| "Database UI caller disconnected".into())
     }
 }
 
@@ -135,10 +201,17 @@ mod tests {
     async fn reply_is_bound_to_mounted_pane_and_request() {
         let bridge = DatabasePaneUiBridge::default();
         bridge.mount("pane", "mount", true).unwrap();
-        let result = bridge.request("pane", PaneUiAction::Snapshot, |r| {
-            assert!(bridge.respond(&r.request_id, "other", "mount", Ok(json!({}))).is_err());
-            bridge.respond(&r.request_id, "pane", "mount", Ok(json!({"ready": true})))
-        }).await.unwrap();
+        let result = bridge
+            .request("pane", PaneUiAction::Snapshot, |r| {
+                assert!(
+                    bridge
+                        .respond(&r.request_id, "other", "mount", Ok(json!({})))
+                        .is_err()
+                );
+                bridge.respond(&r.request_id, "pane", "mount", Ok(json!({"ready": true})))
+            })
+            .await
+            .unwrap();
         assert_eq!(result["ready"], true);
         assert!(bridge.inner.lock().unwrap().pending.is_empty());
     }
@@ -146,11 +219,41 @@ mod tests {
     #[tokio::test]
     async fn timeout_emit_failure_and_unmount_release_requests() {
         let bridge = DatabasePaneUiBridge::default();
-        assert!(bridge.request("pane", PaneUiAction::Snapshot, |_| Ok(())).await.is_err());
+        assert!(
+            bridge
+                .request("pane", PaneUiAction::Snapshot, |_| Ok(()))
+                .await
+                .is_err()
+        );
         bridge.mount("pane", "mount", true).unwrap();
-        assert!(bridge.request_with_timeout("pane", PaneUiAction::Snapshot, Duration::from_millis(1), |_| Ok(())).await.is_err());
-        assert!(bridge.request("pane", PaneUiAction::Snapshot, |_| Err("emit failed".into())).await.is_err());
-        assert!(bridge.request("pane", PaneUiAction::Snapshot, |_| bridge.mount("pane", "mount", false)).await.is_err());
+        assert!(
+            bridge
+                .request_with_timeout(
+                    "pane",
+                    PaneUiAction::Snapshot,
+                    Duration::from_millis(1),
+                    |_| Ok(())
+                )
+                .await
+                .is_err()
+        );
+        assert!(
+            bridge
+                .request(
+                    "pane",
+                    PaneUiAction::Snapshot,
+                    |_| Err("emit failed".into())
+                )
+                .await
+                .is_err()
+        );
+        assert!(
+            bridge
+                .request("pane", PaneUiAction::Snapshot, |_| bridge
+                    .mount("pane", "mount", false))
+                .await
+                .is_err()
+        );
         assert!(bridge.inner.lock().unwrap().pending.is_empty());
     }
 

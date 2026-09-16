@@ -3,8 +3,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use serde_json::{Map, Value, json};
 use crate::shell_quoting::{shell_argument_quote, shell_quote};
+use serde_json::{Map, Value, json};
 
 use crate::{
     agent_adapters::{CLAUDE_CODE_ADAPTER_ID, ManagedAgentLaunch},
@@ -54,10 +54,8 @@ fn install_with_executable(
     let root = crate::agent_adapters::runtime_shim_root(context);
     crate::runtime_env::write_runtime_owner(&context.runtime_id)?;
     fs::create_dir_all(&root).map_err(|error| error.to_string())?;
-    let settings = hook_settings_json(
-        hook_endpoint.unwrap_or("http://127.0.0.1:0/v1/hooks"),
-        None,
-    )?;
+    let settings =
+        hook_settings_json(hook_endpoint.unwrap_or("http://127.0.0.1:0/v1/hooks"), None)?;
     let mcp_endpoint = mcp_endpoint.unwrap_or("http://127.0.0.1:0/mcp");
     let executable_value = executable.to_string_lossy();
     let mcp_without_browser = mcp_config_json(mcp_endpoint, None, &[], None, None, context)?;
@@ -164,10 +162,11 @@ pub fn managed_command(launch: &ManagedAgentLaunch<'_>) -> Result<String, String
     } else {
         Some(executable_for_target(&executable, launch.target_id)?)
     };
-    let browser_command = launch
-        .browser_command
-        .map(str::to_string)
-        .or_else(|| local_browser_executable.as_ref().map(|path| path.to_string_lossy().into_owned()));
+    let browser_command = launch.browser_command.map(str::to_string).or_else(|| {
+        local_browser_executable
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned())
+    });
     let browser_args = if launch.browser_command.is_some() {
         &[][..]
     } else {

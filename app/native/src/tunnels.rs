@@ -448,10 +448,17 @@ mod tests {
 
     #[test]
     fn dynamic_forwarding_is_loopback_only() {
-        assert!(validate_dynamic_bind_address(&profile("127.0.0.1", PortForwardType::Dynamic)).is_ok());
+        assert!(
+            validate_dynamic_bind_address(&profile("127.0.0.1", PortForwardType::Dynamic)).is_ok()
+        );
         assert!(validate_dynamic_bind_address(&profile("::1", PortForwardType::Dynamic)).is_ok());
-        assert!(validate_dynamic_bind_address(&profile("0.0.0.0", PortForwardType::Dynamic)).is_err());
-        assert!(validate_dynamic_bind_address(&profile("example.com", PortForwardType::Dynamic)).is_err());
+        assert!(
+            validate_dynamic_bind_address(&profile("0.0.0.0", PortForwardType::Dynamic)).is_err()
+        );
+        assert!(
+            validate_dynamic_bind_address(&profile("example.com", PortForwardType::Dynamic))
+                .is_err()
+        );
         assert!(validate_dynamic_bind_address(&profile("0.0.0.0", PortForwardType::Local)).is_ok());
     }
 }
