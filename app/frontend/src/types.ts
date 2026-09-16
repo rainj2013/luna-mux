@@ -675,15 +675,18 @@ export type ClipboardContent =
   | { type: 'image' }
   | { type: 'empty' }
 
-export type TerminalUiDiagnosticEventKind = 'heartbeat' | 'focus' | 'blur' | 'pointerDown' | 'keydown' | 'input' | 'wheel' | 'scroll' | 'flowPause' | 'flowResume' | 'dispose'
+export type TerminalUiDiagnosticEventKind = 'heartbeat' | 'focus' | 'blur' | 'pointerDown' | 'keydown' | 'input' | 'wheel' | 'scroll' | 'flowPause' | 'flowResume' | 'dispose' | 'mount' | 'outputSkipped'
 export type TerminalUiKeyCategory = 'printable' | 'enter' | 'escape' | 'control' | 'navigation' | 'other'
+export type TerminalUiInputPath = 'write' | 'buffered' | 'dropped'
 
 export interface TerminalUiDiagnosticEvent {
   kind: TerminalUiDiagnosticEventKind
   connected: boolean
+  connecting: boolean
   visible: boolean
   documentVisible: boolean
   focused: boolean
+  focusOwner?: string
   alternateBuffer: boolean
   pendingOutput: number
   outputCursor: number
@@ -691,6 +694,9 @@ export interface TerminalUiDiagnosticEvent {
   baseY: number
   keyCategory?: TerminalUiKeyCategory
   clientInputId?: number
+  paneId?: string
+  inputPath?: TerminalUiInputPath
+  reason?: string
 }
 
 export interface AppApi {

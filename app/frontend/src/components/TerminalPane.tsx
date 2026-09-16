@@ -5,7 +5,7 @@ import { SerializeAddon } from '@xterm/addon-serialize'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { ChevronDown, ChevronUp, ClipboardPaste, Copy, KeyRound, Palette, Play, RefreshCw, Search, ShieldAlert, X } from 'lucide-react'
-import type { TerminalRuntimeEvent, TerminalSettings, TerminalUiDiagnosticEvent, TerminalUiKeyCategory } from '../types'
+import type { TerminalRuntimeEvent, TerminalSettings, TerminalUiDiagnosticEvent, TerminalUiInputPath, TerminalUiKeyCategory } from '../types'
 import { colorWithOpacity } from '../terminal-style'
 import { createTerminalOutputWriter, type TerminalOutputWriter } from '../terminal-output-writer'
 import { agentImagePasteInput, handleCodexMultilinePasteEvent, routeTerminalPaste } from '../terminal-input'
@@ -27,10 +27,46 @@ const terminalSelectionTheme = {
 interface TerminalSearchMatch { row: number; col: number; length: number }
 interface PendingImePunctuation { text: string; createdAt: number; timer: number }
 interface TerminalSnapshot { runtimeId?: string; outputCursor: number; cols: number; rows: number; serialized: string }
+interface TerminalRuntimeSize { runtimeId: string; cols: number; rows: number }
+interface DiagnosticExtras { inputPath?: TerminalUiInputPath; reason?: string }
+type DiagnosticRecorder = (kind: TerminalUiDiagnosticEvent['kind'], keyCategory?: TerminalUiKeyCategory, throttleMs?: number, extras?: DiagnosticExtras) => void
+
+/**
+ * A pane whose runtime id has been cleared cannot address its own runtime, so
+ * its diagnostics would be dropped by the empty-id check. Recording them under
+ * a sentinel keeps that state visible instead of silent.
+ */
+const unboundDiagnosticRuntimeId = 'unbound'
 
 const terminalSnapshots = new Map<string, TerminalSnapshot>()
 const discardedTerminalSnapshots = new Set<string>()
 const mountedTerminalPanes = new Set<string>()
+
+/**
+ * Tauri rejects a failed command with the backend's error string, which is the
+ * only description of why a call failed; recording it is what turns "the pane
+ * went quiet" into a named cause.
+ */
+function describeError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error)
+  return message.slice(0, 200) || 'unknown'
+}
+
+/**
+ * A pane whose cursor blinks is a pane whose textarea holds DOM focus, so when
+ * input stops working the first question is which textarea that is. Counting
+ * the helper textareas in the document also exposes leaked instances of a
+ * disposed terminal, which nothing else in the log would reveal.
+ */
+function describeFocusOwner(ownTextarea: HTMLTextAreaElement | undefined): string {
+  const focused = document.activeElement
+  if (!(focused instanceof HTMLElement)) return focused ? 'non-element' : 'none'
+  const helpers = Array.from(document.querySelectorAll<HTMLTextAreaElement>('textarea.xterm-helper-textarea'))
+  const index = helpers.indexOf(focused as HTMLTextAreaElement)
+  if (index >= 0) return `${focused === ownTextarea ? 'own' : 'other'}-helper-textarea[${index + 1}/${helpers.length}]`
+  const key = focused.className ? `${focused.tagName.toLowerCase()}.${String(focused.className).split(/\s+/)[0]}` : focused.tagName.toLowerCase()
+  return `${key}[helper-textareas:${helpers.length}]`
+}
 
 function shouldOpenTerminalLink(event: MouseEvent): boolean {
   if (event.button !== 0) return false
@@ -113,6 +149,48 @@ function recentTerminalText(term: Terminal, maxLines: number, maxChars: number):
   return characters.length > maxChars ? characters.slice(-maxChars).join('') : text
 }
 
+interface PrivateRenderer {
+  /** Only the DOM renderer derives its advance from layout; WebGL has no such method. */
+  _setDefaultSpacing?: () => void
+}
+interface PrivateRenderService { _renderer?: { value?: PrivateRenderer } }
+interface TerminalInternals { _core?: { _renderService?: PrivateRenderService } }
+
+/**
+ * Repairs the doubled character advance a pane shows after it has been inactive.
+ *
+ * The DOM renderer takes one letter-spacing for the whole row container from a
+ * layout measurement (`_setDefaultSpacing()`), which runs from its constructor
+ * and from option changes. When it runs while the pane has no layout box, every
+ * glyph measures 0, so the deviation is computed as a full cell width and lands
+ * in both the row container and the row factory's default. Rows already on
+ * screen have no inline override, so they inherit that value and the text
+ * renders with its advance doubled while glyph widths and row heights stay
+ * correct. Disposing the WebGL addon for an inactive pane is what triggers it:
+ * the addon builds a fresh DOM renderer in the effect that runs while the pane
+ * is still hidden. `fit()` cannot repair it, because `handleResize()` never
+ * re-derives the default - the measurement has to be taken again once the pane
+ * is laid out. The WebGL renderer is immune (it measures glyphs through
+ * CharSizeService and adds only the letterSpacing option, which this app never
+ * sets), so the row container's presence is what tells the two apart.
+ */
+function resyncRendererDefaultSpacing(term: Terminal, element: HTMLElement): void {
+  if (!element.querySelector('.xterm-rows')) return
+  // Never measure an element that has no layout box: that measurement is exactly
+  // what corrupts the value, so running here would plant the damage it repairs.
+  if (element.getClientRects().length === 0) return
+  const renderer = (term as unknown as TerminalInternals)._core?._renderService?._renderer?.value
+  if (renderer?._setDefaultSpacing) {
+    renderer._setDefaultSpacing()
+    return
+  }
+  // The layout-derived advance only exists on the DOM renderer, so this is the
+  // path for a version that renamed the private method above. A fresh theme
+  // object is the app's existing idiom for forcing a renderer option change;
+  // object identity is what makes the write observable to xterm.
+  term.options.theme = { ...term.options.theme }
+}
+
 export interface TerminalPaneHandle {
   getRecentLines(maxLines: number, maxChars: number): string
 }
@@ -170,6 +248,10 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
   const boundRuntimeId = useRef<string | undefined>(undefined)
   const outputCursor = useRef(0)
   const renderedOutputCursor = useRef(0)
+  const lastRuntimeSize = useRef<TerminalRuntimeSize | undefined>(undefined)
+  // The recorder closes over per-mount state, so effects outside the terminal
+  // effect reach it through a ref instead of duplicating its payload.
+  const diagnosticRecorder = useRef<DiagnosticRecorder | null>(null)
   const [started, setStarted] = useState(Boolean(runtimeId))
   const [searchOpen, setSearchOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -187,13 +269,35 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
   const reportRuntimeInputError = (failedRuntimeId: string, error: unknown): void => {
     if (reportedInputErrorRuntimeId.current === failedRuntimeId) return
     reportedInputErrorRuntimeId.current = failedRuntimeId
-    const message = error instanceof Error ? error.message : String(error)
-    onRuntimeErrorRef.current?.(failedRuntimeId, message)
+    onRuntimeErrorRef.current?.(failedRuntimeId, describeError(error))
+  }
+
+  const focusTerminalIfVisible = (term: Terminal): void => {
+    if (visibleRef.current && terminal.current === term) term.focus()
+  }
+
+  const resizeRuntimeIfVisible = (term: Terminal, targetRuntimeId = runtimeIdRef.current): void => {
+    // A split can remount a terminal while its DOM is between layout sizes.
+    // Keep inactive panes visually fitted, but defer the native PTY resize
+    // until that pane is active so ConPTY/SSH cannot stall the agent on a
+    // transient resize during layout reconciliation.
+    if (!visibleRef.current || !targetRuntimeId) return
+    const next = { runtimeId: targetRuntimeId, cols: term.cols, rows: term.rows }
+    const previous = lastRuntimeSize.current
+    if (previous?.runtimeId === next.runtimeId && previous.cols === next.cols && previous.rows === next.rows) return
+    lastRuntimeSize.current = next
+    void window.api.terminalRuntimes.resize(next.runtimeId, next.cols, next.rows).catch((error) => {
+      if (lastRuntimeSize.current === next) lastRuntimeSize.current = undefined
+      // The rejection reason is the only signal that the backend refused the
+      // resize; a poisoned runtime looks idle otherwise.
+      diagnosticRecorder.current?.('outputSkipped', undefined, 1000, { reason: `resize-failed: ${describeError(error)}` })
+    })
   }
 
   useEffect(() => {
     const previousRuntimeId = runtimeIdRef.current
     runtimeIdRef.current = runtimeId
+    if (previousRuntimeId !== runtimeId) lastRuntimeSize.current = undefined
     connectedRef.current = connected
     connectingRef.current = connecting
     if (previousRuntimeId && previousRuntimeId !== runtimeId) pendingRuntimeInput.current.delete(previousRuntimeId)
@@ -215,7 +319,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     renderedOutputCursor.current = 0
     requestAnimationFrame(() => {
       fitAddon.current?.fit()
-      void window.api.terminalRuntimes.resize(runtimeId, term.cols, term.rows)
+      resizeRuntimeIfVisible(term, runtimeId)
     })
   }, [runtimeId, connected, connecting, t])
 
@@ -230,8 +334,8 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
       const term = terminal.current
       if (!term) return
       fitAddon.current?.fit()
-      void window.api.terminalRuntimes.resize(runtimeId, term.cols, term.rows)
-      term.focus()
+      resizeRuntimeIfVisible(term, runtimeId)
+      focusTerminalIfVisible(term)
     })
     return () => cancelAnimationFrame(frame)
   }, [connected, visible, runtimeId])
@@ -275,36 +379,46 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     const pendingImePunctuation = new Set<PendingImePunctuation>()
     const lastUiDiagnosticAt = new Map<string, number>()
 
-    const createUiDiagnostic = (kind: TerminalUiDiagnosticEvent['kind'], keyCategory?: TerminalUiKeyCategory, throttleMs = 0): TerminalUiDiagnosticEvent | undefined => {
-      const activeRuntimeId = runtimeIdRef.current
-      if (!activeRuntimeId) return undefined
+    const createUiDiagnostic = (kind: TerminalUiDiagnosticEvent['kind'], keyCategory?: TerminalUiKeyCategory, throttleMs = 0, extras: DiagnosticExtras = {}): TerminalUiDiagnosticEvent | undefined => {
       const now = performance.now()
       const throttleKey = `${kind}:${keyCategory ?? ''}`
       const previous = lastUiDiagnosticAt.get(throttleKey) ?? Number.NEGATIVE_INFINITY
       if (throttleMs > 0 && now - previous < throttleMs) return undefined
-      lastUiDiagnosticAt.set(throttleKey, now)
+      // Unthrottled events share a throttle key with throttled ones of the same
+      // kind, so they must not advance the window and swallow the next record.
+      if (throttleMs > 0) lastUiDiagnosticAt.set(throttleKey, now)
       const buffer = term.buffer.active
       return {
         kind,
         connected: connectedRef.current,
+        connecting: connectingRef.current,
         visible: visibleRef.current,
         documentVisible: document.visibilityState === 'visible',
         focused: document.activeElement === term.textarea,
+        focusOwner: describeFocusOwner(term.textarea),
         alternateBuffer: buffer.type === 'alternate',
         pendingOutput,
         outputCursor: outputCursor.current,
         viewportY: buffer.viewportY,
         baseY: buffer.baseY,
-        ...(keyCategory ? { keyCategory } : {})
+        paneId,
+        ...(keyCategory ? { keyCategory } : {}),
+        ...(extras.inputPath ? { inputPath: extras.inputPath } : {}),
+        ...(extras.reason ? { reason: extras.reason } : {})
       }
     }
 
-    const recordUiDiagnostic = (kind: TerminalUiDiagnosticEvent['kind'], keyCategory?: TerminalUiKeyCategory, throttleMs = 0): void => {
-      const activeRuntimeId = runtimeIdRef.current
-      const event = createUiDiagnostic(kind, keyCategory, throttleMs)
-      if (!activeRuntimeId || !event) return
-      void window.api.terminalRuntimes.recordDiagnostic(activeRuntimeId, event).catch(() => undefined)
+    const recordUiDiagnostic = (kind: TerminalUiDiagnosticEvent['kind'], keyCategory?: TerminalUiKeyCategory, throttleMs = 0, extras: DiagnosticExtras = {}): void => {
+      const event = createUiDiagnostic(kind, keyCategory, throttleMs, extras)
+      if (!event) return
+      // Deliberately no early return for a missing runtime id: a pane that lost
+      // its runtime is one of the states under investigation.
+      void window.api.terminalRuntimes.recordDiagnostic(runtimeIdRef.current || unboundDiagnosticRuntimeId, event).catch(() => undefined)
     }
+    diagnosticRecorder.current = recordUiDiagnostic
+    // One mount record per mounted terminal. Pairing these with dispose events
+    // exposes remounts that no pane or runtime lifecycle change would explain.
+    recordUiDiagnostic('mount', undefined, 0, { reason: restorableSnapshot ? 'snapshot' : 'fresh' })
 
     const writeTerminalInput = (data: string): void => {
       const now = performance.now()
@@ -316,10 +430,13 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
       if (hasCommittedNonAscii && lastTerminalInput.runtimeId === activeRuntimeId && lastTerminalInput.data === data && now - lastTerminalInput.timestamp < duplicateImeInputWindowMs) {
         // Do not send the same committed IME payload twice.  This is deliberately
         // limited to non-ASCII text so ordinary terminal key repeats are untouched.
+        // Recorded anyway: a guard that misfires discards input just as silently
+        // as a disconnected runtime does.
+        recordUiDiagnostic('input', undefined, 0, { inputPath: 'dropped', reason: 'duplicate-ime' })
         return
       }
       lastTerminalInput = { data, timestamp: now, runtimeId: activeRuntimeId }
-      const inputDiagnostic = createUiDiagnostic('input', undefined, 250)
+      const inputDiagnostic = createUiDiagnostic('input', undefined, 250, { inputPath: 'write' })
       for (const pending of pendingImePunctuation) {
         if (!data.includes(pending.text)) continue
         window.clearTimeout(pending.timer)
@@ -329,9 +446,16 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
       if (connectedRef.current && activeRuntimeId) {
         void window.api.terminalRuntimes.write(activeRuntimeId, data, inputDiagnostic).catch((error) => reportRuntimeInputError(activeRuntimeId, error))
       } else if (connectingRef.current && activeRuntimeId) {
+        // Unthrottled: this branch keeps the keystroke out of the PTY for as
+        // long as the pane stays in the connecting state.
+        recordUiDiagnostic('input', undefined, 0, { inputPath: 'buffered', reason: 'connecting' })
         const pending = pendingRuntimeInput.current.get(activeRuntimeId) ?? []
         pending.push(data)
         pendingRuntimeInput.current.set(activeRuntimeId, pending)
+      } else {
+        // Neither branch taken: the keystroke is discarded and nothing is sent
+        // to the PTY. Previously this produced no record at all.
+        recordUiDiagnostic('input', undefined, 0, { inputPath: 'dropped', reason: activeRuntimeId ? 'not-connected' : 'no-runtime-id' })
       }
     }
 
@@ -352,7 +476,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
       } catch (error) {
         console.warn('Failed to paste into terminal', error)
       } finally {
-        if (!disposed) term.focus()
+        if (!disposed) focusTerminalIfVisible(term)
       }
     }
     pasteClipboardRef.current = pasteClipboard
@@ -493,9 +617,11 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     term.element?.addEventListener('pointerdown', recordPointerDown)
     term.element?.addEventListener('wheel', recordWheel, { passive: true })
     const diagnosticHeartbeat = window.setInterval(() => {
-      if (visibleRef.current) recordUiDiagnostic('heartbeat')
+      // Not gated on visibility: an inactive pane must still prove it is alive,
+      // otherwise silence cannot be told apart from a broken pane.
+      recordUiDiagnostic('heartbeat')
     }, 10_000)
-    const resize = term.onResize(({ cols, rows }) => { if (runtimeIdRef.current) void window.api.terminalRuntimes.resize(runtimeIdRef.current, cols, rows) })
+    const resize = term.onResize(() => resizeRuntimeIfVisible(term))
     let catchingUp = true
     const queuedOutput: Array<Extract<TerminalRuntimeEvent, { type: 'output' }>['payload']> = []
     type TerminalOutputPayload = Extract<TerminalRuntimeEvent, { type: 'output' }>['payload']
@@ -522,14 +648,25 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     }
     const writeOutput = (rawPayload: TerminalOutputPayload): void => {
       const payload = outputFromCursor(rawPayload, outputCursor.current)
-      if (!payload) return
+      if (!payload) {
+        // Dropping output that the cursor has already passed is intentional,
+        // but a cursor left ahead of the runtime's ring silences the pane for
+        // good, so record which case this is.
+        recordUiDiagnostic('outputSkipped', undefined, 250, { reason: rawPayload.endCursor <= outputCursor.current ? 'behind-cursor' : 'empty-slice' })
+        return
+      }
       if (payload.endCursor <= outputCursor.current) return
       const length = payload.data.length
       outputCursor.current = payload.endCursor
       pendingOutput += length
-      if (!paused && pendingOutput >= terminalHighWaterMark) {
+      // Background panes must keep draining their PTY. xterm rendering can be
+      // throttled when a pane loses focus (for example when a database pane is
+      // opened), and pausing the backend here would block the agent process on
+      // its PTY output buffer. Only the active pane participates in UI flow
+      // control; the runtime ring buffer remains the bounded catch-up source.
+      if (visibleRef.current && !paused && pendingOutput >= terminalHighWaterMark) {
         paused = true
-        recordUiDiagnostic('flowPause')
+        recordUiDiagnostic('flowPause', undefined, 0, { reason: 'high-water' })
         void window.api.terminalRuntimes.flow(payload.runtimeId, true)
       }
       writer.write(payload.data, () => {
@@ -538,7 +675,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
         pendingOutput = Math.max(0, pendingOutput - length)
         if (paused && pendingOutput <= terminalLowWaterMark && runtimeIdRef.current) {
           paused = false
-          recordUiDiagnostic('flowResume')
+          recordUiDiagnostic('flowResume', undefined, 0, { reason: 'low-water' })
           void window.api.terminalRuntimes.flow(runtimeIdRef.current, false)
         }
       })
@@ -555,7 +692,14 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
           while (!disposed && catchUpRuntimeId === runtimeIdRef.current) {
             const before = outputCursor.current
             const result = await window.api.terminalRuntimes.readOutput(catchUpRuntimeId, before, terminalHighWaterMark)
-            if (result.runtimeId !== runtimeIdRef.current || !result.data || result.nextCursor <= before) break
+            if (result.runtimeId !== runtimeIdRef.current || !result.data || result.nextCursor <= before) {
+              // A stalled cursor means the replay starts behind where this pane
+              // believes it is, and live output will be skipped from here on.
+              recordUiDiagnostic('outputSkipped', undefined, 0, {
+                reason: result.runtimeId !== runtimeIdRef.current ? 'runtime-changed' : !result.data ? 'no-data' : 'catch-up-stalled'
+              })
+              break
+            }
             outputCursor.current = result.nextCursor
             writer.write(result.data, () => {
               if (userScrolled) term.scrollToLine(scrollAnchor)
@@ -563,8 +707,12 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
             })
           }
         }
-      } catch {
-        // Live events below still keep the terminal current if the bounded replay is unavailable.
+      } catch (error) {
+        // This loop runs once per mount and never retries, so a failure here
+        // ends the replay for the life of the mount. The reason is the only
+        // record of that; live events cannot cover for it when the backend
+        // stopped emitting them.
+        recordUiDiagnostic('outputSkipped', undefined, 0, { reason: `catch-up-failed: ${describeError(error)}` })
       } finally {
         catchingUp = false
         if (!disposed) {
@@ -576,11 +724,12 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     })()
     const observer = new ResizeObserver(() => {
       if (container.current?.offsetParent) requestAnimationFrame(() => {
+        if (disposed || terminal.current !== term) return
         fit.fit()
-        if (runtimeIdRef.current) void window.api.terminalRuntimes.resize(runtimeIdRef.current, term.cols, term.rows)
-        if (visible) {
+        resizeRuntimeIfVisible(term)
+        if (visibleRef.current) {
           term.refresh(0, Math.max(0, term.rows - 1))
-          term.focus()
+          focusTerminalIfVisible(term)
         }
       })
     })
@@ -591,7 +740,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
       recordUiDiagnostic('scroll', undefined, 250)
     })
     observer.observe(container.current)
-    if (visible) term.focus()
+    focusTerminalIfVisible(term)
     return () => {
       recordUiDiagnostic('dispose')
       disposed = true
@@ -611,7 +760,12 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
           terminalSnapshots.delete(paneId)
         }
       }
-      if (paused && runtimeIdRef.current) void window.api.terminalRuntimes.flow(runtimeIdRef.current, false)
+      if (paused && runtimeIdRef.current) {
+        // An unpaired resume here would look identical to a low-water resume in
+        // the log, even though this one is caused by the pane going away.
+        recordUiDiagnostic('flowResume', undefined, 0, { reason: 'dispose' })
+        void window.api.terminalRuntimes.flow(runtimeIdRef.current, false)
+      }
       pendingRuntimeInput.current.clear()
       for (const pending of pendingImePunctuation) window.clearTimeout(pending.timer)
       pendingImePunctuation.clear()
@@ -631,6 +785,9 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
       stop(); observer.disconnect(); input.dispose(); resize.dispose(); scroll.dispose(); writer.dispose(); webglAddon.current?.dispose(); term.dispose()
       void catchUp
       webglAddon.current = null; outputWriter.current = null; terminal.current = null; fitAddon.current = null
+      // The recorder closes over this mount's refs; leaving it reachable after
+      // dispose would let an outside effect report against a dead terminal.
+      if (diagnosticRecorder.current === recordUiDiagnostic) diagnosticRecorder.current = null
     }
   }, [paneId, shouldRenderTerminal])
 
@@ -673,20 +830,35 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
       }
     }
     requestAnimationFrame(() => {
+      if (terminal.current !== term) return
       fitAddon.current?.fit()
+      // After fit(), so the advance is measured against the layout the pane has
+      // now and the repaint below already uses the repaired value.
+      resyncRendererDefaultSpacing(term, element)
       term.refresh(0, Math.max(0, term.rows - 1))
-      term.focus()
+      focusTerminalIfVisible(term)
       // The WebGL addon can finish attaching after the first frame when a
       // session was hidden for a while. Refresh again once its cell metrics
       // have been committed by the browser.
       requestAnimationFrame(() => {
-        if (!terminal.current || !visible) return
+        if (terminal.current !== term || !visibleRef.current) return
         fitAddon.current?.fit()
+        resyncRendererDefaultSpacing(term, element)
         term.refresh(0, Math.max(0, term.rows - 1))
-        term.focus()
+        focusTerminalIfVisible(term)
       })
     })
   }, [visible, shouldRenderTerminal])
+
+  useEffect(() => {
+    // If a visible pane was flow-paused just before it became inactive, do not
+    // leave its PTY reader suspended while another pane is being used.
+    if (visible || !runtimeId) return
+    // Recorded through the ref because this effect sits outside the terminal
+    // effect's closure; an unlogged resume here hides the pane-inactive state.
+    diagnosticRecorder.current?.('flowResume', undefined, 0, { reason: 'pane-inactive' })
+    void window.api.terminalRuntimes.flow(runtimeId, false)
+  }, [visible, runtimeId])
 
   useEffect(() => {
     if (searchOpen) setTimeout(() => { searchInput.current?.focus(); searchInput.current?.select() }, 0)
