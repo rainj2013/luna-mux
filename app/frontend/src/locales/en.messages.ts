@@ -166,6 +166,7 @@ export default {
   "database.structureHint": "View columns, indexes and foreign keys.",
   "database.columnName": "Column name",
   "database.type": "Type",
+  "database.length": "Length",
   "database.constraints": "Constraints",
   "database.delete": "Delete",
   "database.addColumn": "Add column",

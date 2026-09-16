@@ -166,6 +166,7 @@ export default {
   "database.structureHint": "查看字段、索引和外键。",
   "database.columnName": "字段名",
   "database.type": "类型",
+  "database.length": "长度",
   "database.constraints": "约束",
   "database.delete": "删除",
   "database.addColumn": "新增字段",

@@ -569,6 +569,11 @@ pub fn write_query_sql_file_with_progress(
 pub struct DatabaseColumnInfo {
     pub name: String,
     pub data_type: String,
+    /// Declared size of the type as its engine reports it: the character length
+    /// (`255`), or `precision,scale` for the decimal family (`10,2`). `None` for types
+    /// that take no size, and rendered as an em dash by the structure view.
+    #[serde(default)]
+    pub length: Option<String>,
     pub not_null: bool,
     pub primary_key: bool,
     pub default_value: Option<String>,
@@ -589,6 +594,69 @@ pub struct DatabaseForeignKeyInfo {
     pub references_column: String,
     pub on_update: String,
     pub on_delete: String,
+}
+
+/// Reads an integer-valued metadata cell.
+///
+/// Both drivers reach this query over a text protocol, so every value arrives as a JSON
+/// string today: `read_postgres_result` stringifies each one, and `mysql_value` maps the
+/// text protocol's bytes to a string. The number arm is defensive only — `mysql_value`
+/// does turn `Value::Int`/`Value::UInt` into JSON numbers, so the shape is a property of
+/// the driver rather than of this query, and reading both keeps a future switch to the
+/// binary protocol from silently emptying the length column.
+fn row_i64(value: Option<&serde_json::Value>) -> Option<i64> {
+    match value? {
+        // Metadata that cannot be a size is not a size, so an out-of-range integer is
+        // rejected rather than truncated.
+        serde_json::Value::Number(number) => number
+            .as_i64()
+            .or_else(|| number.as_u64().and_then(|v| i64::try_from(v).ok())),
+        serde_json::Value::String(text) => text.trim().parse::<i64>().ok(),
+        _ => None,
+    }
+}
+
+/// Declared size of a column: its character maximum length when the type takes one,
+/// otherwise `precision,scale` for the decimal family.
+///
+/// The type-name gate is load-bearing rather than defensive: PostgreSQL reports
+/// `numeric_precision = 32, numeric_scale = 0` for a plain `integer`, so reading width
+/// from precision alone would render every integer column as `32,0`.
+fn column_size(
+    data_type: &str,
+    character_maximum_length: Option<i64>,
+    numeric_precision: Option<i64>,
+    numeric_scale: Option<i64>,
+) -> Option<String> {
+    let kind = data_type.trim().to_ascii_lowercase();
+    // MySQL reports the longest member for these, which is not a declared length.
+    if kind == "enum" || kind == "set" {
+        return None;
+    }
+    if let Some(length) = character_maximum_length {
+        return Some(length.to_string());
+    }
+    if matches!(kind.as_str(), "decimal" | "numeric" | "dec" | "fixed") {
+        if let (Some(precision), Some(scale)) = (numeric_precision, numeric_scale) {
+            return Some(format!("{precision},{scale}"));
+        }
+    }
+    None
+}
+
+/// SQLite keeps no separate size column: the declared type text carries it, as in
+/// `VARCHAR(255)` or `DECIMAL(10,2)`. Only a purely numeric parenthetical counts as a
+/// size, so `UNSIGNED BIG INT` and friends report none.
+fn sqlite_declared_size(declared_type: &str) -> Option<String> {
+    let inner = declared_type.split_once('(')?.1.split_once(')')?.0.trim();
+    if !inner
+        .chars()
+        .all(|c| c.is_ascii_digit() || c == ',' || c.is_whitespace())
+    {
+        return None;
+    }
+    let size: String = inner.chars().filter(|c| !c.is_whitespace()).collect();
+    size.chars().any(|c| c.is_ascii_digit()).then_some(size)
 }
 
 impl DatabaseRuntimeManager {
@@ -743,12 +811,15 @@ impl DatabaseRuntimeManager {
             let config = config.clone();
             drop(map);
             let sql = match config.driver {
+                // The trailing size columns are read positionally by the shared row
+                // closure below, so both branches have to select them in the same order
+                // as the character columns.
                 DatabaseDriver::Postgres => format!(
-                    "SELECT c.column_name,c.data_type,c.is_nullable,c.column_default,pg_catalog.col_description(cl.oid,attr.attnum) FROM information_schema.columns c JOIN pg_catalog.pg_namespace ns ON ns.nspname=c.table_schema JOIN pg_catalog.pg_class cl ON cl.relnamespace=ns.oid AND cl.relname=c.table_name JOIN pg_catalog.pg_attribute attr ON attr.attrelid=cl.oid AND attr.attname=c.column_name WHERE c.table_schema='public' AND c.table_name='{}' ORDER BY c.ordinal_position",
+                    "SELECT c.column_name,c.data_type,c.is_nullable,c.column_default,pg_catalog.col_description(cl.oid,attr.attnum),c.character_maximum_length,c.numeric_precision,c.numeric_scale FROM information_schema.columns c JOIN pg_catalog.pg_namespace ns ON ns.nspname=c.table_schema JOIN pg_catalog.pg_class cl ON cl.relnamespace=ns.oid AND cl.relname=c.table_name JOIN pg_catalog.pg_attribute attr ON attr.attrelid=cl.oid AND attr.attname=c.column_name WHERE c.table_schema='public' AND c.table_name='{}' ORDER BY c.ordinal_position",
                     table
                 ),
                 _ => format!(
-                    "SELECT column_name,data_type,is_nullable,column_default,column_comment FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='{}' ORDER BY ordinal_position",
+                    "SELECT column_name,data_type,is_nullable,column_default,column_comment,character_maximum_length,numeric_precision,numeric_scale FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='{}' ORDER BY ordinal_position",
                     table
                 ),
             };
@@ -757,25 +828,37 @@ impl DatabaseRuntimeManager {
                     result
                         .rows
                         .into_iter()
-                        .map(|row| DatabaseColumnInfo {
-                            name: row
-                                .first()
-                                .and_then(|v| v.as_str())
-                                .unwrap_or_default()
-                                .into(),
-                            data_type: row
+                        .map(|row| {
+                            let data_type: String = row
                                 .get(1)
                                 .and_then(|v| v.as_str())
                                 .unwrap_or_default()
-                                .into(),
-                            not_null: row.get(2).and_then(|v| v.as_str()) == Some("NO"),
-                            primary_key: false,
-                            default_value: row.get(3).and_then(|v| v.as_str()).map(str::to_string),
-                            comment: row
-                                .get(4)
-                                .and_then(|v| v.as_str())
-                                .filter(|v| !v.is_empty())
-                                .map(str::to_string),
+                                .into();
+                            DatabaseColumnInfo {
+                                name: row
+                                    .first()
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or_default()
+                                    .into(),
+                                length: column_size(
+                                    &data_type,
+                                    row_i64(row.get(5)),
+                                    row_i64(row.get(6)),
+                                    row_i64(row.get(7)),
+                                ),
+                                data_type,
+                                not_null: row.get(2).and_then(|v| v.as_str()) == Some("NO"),
+                                primary_key: false,
+                                default_value: row
+                                    .get(3)
+                                    .and_then(|v| v.as_str())
+                                    .map(str::to_string),
+                                comment: row
+                                    .get(4)
+                                    .and_then(|v| v.as_str())
+                                    .filter(|v| !v.is_empty())
+                                    .map(str::to_string),
+                            }
                         })
                         .collect()
                 },
@@ -788,9 +871,11 @@ impl DatabaseRuntimeManager {
             .prepare(&format!("PRAGMA table_info(\"{}\")", table))
             .map_err(|e| e.to_string())?;
         s.query_map([], |r| {
+            let data_type: String = r.get(2)?;
             Ok(DatabaseColumnInfo {
                 name: r.get(1)?,
-                data_type: r.get(2)?,
+                length: sqlite_declared_size(&data_type),
+                data_type,
                 not_null: r.get::<_, i64>(3)? != 0,
                 primary_key: r.get::<_, i64>(5)? != 0,
                 default_value: r.get(4)?,
@@ -2552,9 +2637,22 @@ mod tests {
             assert_eq!(data.first(), Some(&3));
             let sql = String::from_utf8_lossy(&data[1..]);
             let values = if sql.contains("@@max_allowed_packet") {
-                vec!["67108864", "28800"]
+                vec![Some("67108864"), Some("28800")]
             } else if sql.contains("column_comment") {
-                vec!["id", "int", "NO", "0", "用户编号"]
+                assert!(sql.contains("character_maximum_length"));
+                assert!(sql.contains("numeric_precision"));
+                assert!(sql.contains("numeric_scale"));
+                // A declared varchar, whose length comes from the character maximum.
+                vec![
+                    Some("name"),
+                    Some("varchar"),
+                    Some("NO"),
+                    Some("0"),
+                    Some("用户名"),
+                    Some("255"),
+                    None,
+                    None,
+                ]
             } else {
                 assert!(sql.starts_with("SELECT 1"));
                 if stall_query {
@@ -2564,7 +2662,7 @@ mod tests {
                         .map(|data| data.first() == Some(&1))
                         .unwrap_or(true);
                 }
-                vec!["1"]
+                vec![Some("1")]
             };
             packet(&mut stream, 1, &[values.len() as u8]).await;
             let mut sequence = 2;
@@ -2580,8 +2678,14 @@ mod tests {
             sequence += 1;
             let mut row = Vec::new();
             for value in values {
-                row.push(value.len() as u8);
-                row.extend_from_slice(value.as_bytes());
+                // 0xfb is the length-encoded NULL of the text protocol.
+                match value {
+                    Some(value) => {
+                        row.push(value.len() as u8);
+                        row.extend_from_slice(value.as_bytes());
+                    }
+                    None => row.push(0xfb),
+                }
             }
             for _ in 0..if sql.starts_with("SELECT 1") {
                 capped_rows.unwrap_or(1)
@@ -2656,7 +2760,9 @@ mod tests {
                     .await
                     .unwrap()
                     .unwrap();
-            assert_eq!(columns[0].comment.as_deref(), Some("用户编号"));
+            assert_eq!(columns[0].comment.as_deref(), Some("用户名"));
+            assert_eq!(columns[0].length.as_deref(), Some("255"));
+            assert_eq!(columns[0].data_type, "varchar");
             assert!(columns[0].not_null);
             assert!(server.await.unwrap());
         }
@@ -2726,6 +2832,87 @@ mod tests {
         );
     }
 
+    #[test]
+    fn column_size_reads_only_declared_sizes() {
+        // Character types carry their length directly.
+        assert_eq!(
+            column_size("varchar", Some(255), None, None).as_deref(),
+            Some("255")
+        );
+        assert_eq!(
+            column_size("character", Some(10), None, None).as_deref(),
+            Some("10")
+        );
+        // The decimal family reports precision and scale instead.
+        assert_eq!(
+            column_size("numeric", None, Some(10), Some(2)).as_deref(),
+            Some("10,2")
+        );
+        assert_eq!(
+            column_size("DECIMAL", None, Some(18), Some(0)).as_deref(),
+            Some("18,0")
+        );
+        // PostgreSQL describes integer, bigint and the float types with real
+        // precision/scale numbers that are not declared sizes.
+        assert_eq!(column_size("integer", None, Some(32), Some(0)), None);
+        assert_eq!(column_size("bigint", None, Some(64), Some(0)), None);
+        assert_eq!(column_size("smallint", None, Some(16), Some(0)), None);
+        assert_eq!(column_size("double precision", None, Some(53), None), None);
+        assert_eq!(column_size("real", None, Some(24), None), None);
+        assert_eq!(column_size("text", None, None, None), None);
+        assert_eq!(column_size("timestamptz", None, None, None), None);
+        // A decimal without both halves is not a size.
+        assert_eq!(column_size("numeric", None, Some(10), None), None);
+        // MySQL reports the longest member for these, which is not a declared length.
+        assert_eq!(column_size("enum", Some(4), None, None), None);
+        assert_eq!(column_size("set", Some(7), None, None), None);
+    }
+
+    #[test]
+    fn sqlite_declared_size_reads_the_declared_parenthetical() {
+        assert_eq!(sqlite_declared_size("VARCHAR(255)").as_deref(), Some("255"));
+        assert_eq!(
+            sqlite_declared_size("DECIMAL(10,5)").as_deref(),
+            Some("10,5")
+        );
+        assert_eq!(
+            sqlite_declared_size("varchar ( 20 )").as_deref(),
+            Some("20")
+        );
+        assert_eq!(sqlite_declared_size("TEXT"), None);
+        assert_eq!(sqlite_declared_size("INTEGER"), None);
+        assert_eq!(sqlite_declared_size("UNSIGNED BIG INT"), None);
+        assert_eq!(sqlite_declared_size(""), None);
+        // Only a purely numeric parenthetical is a size.
+        assert_eq!(sqlite_declared_size("VARCHAR(abc)"), None);
+        // SQLite's declared type is free text, so a numeric parenthetical that means
+        // something other than a length is read as one. Types that take no size in
+        // practice (TEXT, INTEGER, UNSIGNED BIG INT) are unaffected.
+        assert_eq!(
+            sqlite_declared_size("TIMESTAMP(6) WITH TIME ZONE").as_deref(),
+            Some("6")
+        );
+    }
+
+    #[test]
+    fn row_i64_accepts_both_json_shapes() {
+        // Neither driver produces the number shape on this query path; it is covered
+        // here because the helper accepts it by contract.
+        assert_eq!(row_i64(Some(&serde_json::json!(255))), Some(255));
+        assert_eq!(row_i64(Some(&serde_json::json!("255"))), Some(255));
+        assert_eq!(row_i64(Some(&serde_json::json!(" 255 "))), Some(255));
+        assert_eq!(row_i64(Some(&serde_json::json!(null))), None);
+        assert_eq!(row_i64(Some(&serde_json::json!(""))), None);
+        assert_eq!(row_i64(Some(&serde_json::json!(true))), None);
+        assert_eq!(row_i64(None), None);
+        // Beyond i64 it is not a size at all, and must not wrap into a negative one.
+        assert_eq!(row_i64(Some(&serde_json::json!(u64::MAX))), None);
+        assert_eq!(
+            row_i64(Some(&serde_json::json!("18446744073709551615"))),
+            None
+        );
+    }
+
     #[tokio::test]
     async fn mysql_late_errors_after_row_budget_are_not_reported_as_success() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -2749,7 +2936,7 @@ mod tests {
                 DatabaseDriver::Postgres,
                 listener.local_addr().unwrap().port(),
             );
-            let server = tokio::spawn(postgres_rows_server(listener, vec!["1"], 700, ending));
+            let server = tokio::spawn(postgres_rows_server(listener, vec![Some("1")], 700, ending));
             let sql = "BEGIN; UPDATE users SET id=1; SELECT id FROM users; COMMIT";
             let result = execute_network(config, sql, 500).await;
             if ending == "error" {
@@ -2823,6 +3010,39 @@ mod tests {
     }
 
     #[test]
+    fn sqlite_declared_sizes_reach_the_structure_view() {
+        let path = temp_db();
+        let manager = DatabaseRuntimeManager::new();
+        let runtime = manager
+            .connect(DatabaseConnectionConfig {
+                sqlite_path: Some(path.clone()),
+                read_only: false,
+                ..network_config(DatabaseDriver::Sqlite, 0)
+            })
+            .unwrap();
+        manager
+            .execute(
+                &runtime.id,
+                "CREATE TABLE sized(id INTEGER PRIMARY KEY, name VARCHAR(255), price DECIMAL(10,2), note TEXT)",
+                500,
+            )
+            .unwrap();
+        let columns = manager.describe_table(&runtime.id, "sized").unwrap();
+        let lengths: Vec<Option<&str>> = columns
+            .iter()
+            .map(|column| column.length.as_deref())
+            .collect();
+        // SQLite keeps the size in the declared type text, and only the types that
+        // declare one report it.
+        assert_eq!(lengths, vec![None, Some("255"), Some("10,2"), None]);
+        assert_eq!(columns[0].name, "id");
+        assert!(columns[0].primary_key);
+        assert_eq!(columns[1].data_type, "VARCHAR(255)");
+        assert_eq!(columns[3].data_type, "TEXT");
+        manager.disconnect(&runtime.id).unwrap();
+        std::fs::remove_file(path).unwrap();
+    }
+
     fn sqlite_page_budgets_and_optional_column_comments() {
         let path = temp_db();
         let manager = DatabaseRuntimeManager::new();
@@ -2901,14 +3121,20 @@ mod tests {
         let columns = manager.describe_table(&runtime.id, "items").unwrap();
         assert!(columns.iter().all(|c| c.comment.is_none()));
         let mut value = serde_json::to_value(&columns[0]).unwrap();
-        value.as_object_mut().unwrap().remove("comment");
+        let legacy_object = value.as_object_mut().unwrap();
+        legacy_object.remove("comment");
+        legacy_object.remove("length");
         let legacy: DatabaseColumnInfo = serde_json::from_value(value).unwrap();
         assert!(legacy.comment.is_none());
+        assert!(legacy.length.is_none());
         let column = DatabaseColumnInfo {
             comment: Some("用户编号".into()),
+            length: Some("255".into()),
             ..legacy
         };
-        assert_eq!(serde_json::to_value(column).unwrap()["comment"], "用户编号");
+        let value = serde_json::to_value(column).unwrap();
+        assert_eq!(value["comment"], "用户编号");
+        assert_eq!(value["length"], "255");
         manager.disconnect(&runtime.id).unwrap();
         std::fs::remove_file(path).unwrap();
     }
@@ -3048,7 +3274,7 @@ mod tests {
 
     async fn postgres_rows_server(
         listener: tokio::net::TcpListener,
-        values: Vec<&'static str>,
+        values: Vec<Option<&'static str>>,
         count: usize,
         ending: &'static str,
     ) -> String {
@@ -3084,8 +3310,15 @@ mod tests {
         for _ in 0..count {
             let mut row = (values.len() as u16).to_be_bytes().to_vec();
             for value in &values {
-                row.extend_from_slice(&(value.len() as u32).to_be_bytes());
-                row.extend_from_slice(value.as_bytes());
+                // A -1 length is the protocol's NULL, which is what the size columns
+                // carry for most types.
+                match value {
+                    Some(value) => {
+                        row.extend_from_slice(&(value.len() as u32).to_be_bytes());
+                        row.extend_from_slice(value.as_bytes());
+                    }
+                    None => row.extend_from_slice(&(-1i32).to_be_bytes()),
+                }
             }
             message(&mut stream, b'D', &row).await;
         }
@@ -3114,7 +3347,12 @@ mod tests {
             DatabaseDriver::Postgres,
             listener.local_addr().unwrap().port(),
         );
-        let server = tokio::spawn(postgres_rows_server(listener, vec!["1"], 500, "complete"));
+        let server = tokio::spawn(postgres_rows_server(
+            listener,
+            vec![Some("1")],
+            500,
+            "complete",
+        ));
         let result = tokio::time::timeout(
             Duration::from_secs(3),
             execute_network(config, "SELECT 1", 500),
@@ -3141,7 +3379,19 @@ mod tests {
         );
         let server = tokio::spawn(postgres_rows_server(
             listener,
-            vec!["id", "integer", "NO", "0", "用户编号"],
+            vec![
+                Some("id"),
+                Some("integer"),
+                Some("NO"),
+                Some("0"),
+                Some("用户编号"),
+                // An integer column takes no declared length: PostgreSQL reports a NULL
+                // character_maximum_length but real precision/scale numbers, which must
+                // not be mistaken for a size.
+                None,
+                Some("32"),
+                Some("0"),
+            ],
             1,
             "complete",
         ));
@@ -3165,9 +3415,63 @@ mod tests {
                 .unwrap();
         assert_eq!(columns[0].comment.as_deref(), Some("用户编号"));
         assert!(columns[0].not_null);
+        // Precision 32 with scale 0 is how PostgreSQL describes a plain integer; it is
+        // not a declared size and must not reach the structure view.
+        assert_eq!(columns[0].length, None);
         let sql = server.await.unwrap();
         assert!(sql.contains("col_description"));
         assert!(sql.contains("attr.attnum"));
+        assert!(sql.contains("c.character_maximum_length"));
+        assert!(sql.contains("c.numeric_precision"));
+        assert!(sql.contains("c.numeric_scale"));
+    }
+
+    #[tokio::test]
+    async fn postgres_declared_size_survives_native_metadata_path() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let config = network_config(
+            DatabaseDriver::Postgres,
+            listener.local_addr().unwrap().port(),
+        );
+        let server = tokio::spawn(postgres_rows_server(
+            listener,
+            vec![
+                Some("name"),
+                Some("character varying"),
+                Some("YES"),
+                None,
+                None,
+                Some("255"),
+                None,
+                None,
+            ],
+            1,
+            "complete",
+        ));
+        let manager = DatabaseRuntimeManager::new();
+        manager.runtimes.lock().unwrap().insert(
+            "fixture".into(),
+            RuntimeRecord {
+                summary: DatabaseRuntimeSummary {
+                    id: "fixture".into(),
+                    driver: DatabaseDriver::Postgres,
+                    status: DatabaseRuntimeStatus::Ready,
+                    error: None,
+                },
+                handle: Some(DatabaseHandle::Network(config)),
+            },
+        );
+        let columns =
+            tokio::task::spawn_blocking(move || manager.describe_table("fixture", "users"))
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(columns[0].data_type, "character varying");
+        assert_eq!(columns[0].length.as_deref(), Some("255"));
+        assert!(!columns[0].not_null);
+        assert_eq!(columns[0].default_value, None);
+        assert_eq!(columns[0].comment, None);
+        assert!(server.await.unwrap().contains("character_maximum_length"));
     }
 
     #[tokio::test]
