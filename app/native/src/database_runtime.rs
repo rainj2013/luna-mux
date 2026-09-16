@@ -811,15 +811,20 @@ impl DatabaseRuntimeManager {
             let config = config.clone();
             drop(map);
             let sql = match config.driver {
-                // The trailing size columns are read positionally by the shared row
-                // closure below, so both branches have to select them in the same order
-                // as the character columns.
+                // The trailing size and primary-key columns are read positionally by the
+                // shared row closure below, so both branches have to select them in the
+                // same order as the character columns.
+                //
+                // Both engines report the primary key the same way here: MySQL has a
+                // dedicated `column_key` column, and the left join below projects
+                // PostgreSQL's key column usage into the same `PRI` marker, so one
+                // comparison serves both.
                 DatabaseDriver::Postgres => format!(
-                    "SELECT c.column_name,c.data_type,c.is_nullable,c.column_default,pg_catalog.col_description(cl.oid,attr.attnum),c.character_maximum_length,c.numeric_precision,c.numeric_scale FROM information_schema.columns c JOIN pg_catalog.pg_namespace ns ON ns.nspname=c.table_schema JOIN pg_catalog.pg_class cl ON cl.relnamespace=ns.oid AND cl.relname=c.table_name JOIN pg_catalog.pg_attribute attr ON attr.attrelid=cl.oid AND attr.attname=c.column_name WHERE c.table_schema='public' AND c.table_name='{}' ORDER BY c.ordinal_position",
+                    "SELECT c.column_name,c.data_type,c.is_nullable,c.column_default,pg_catalog.col_description(cl.oid,attr.attnum),c.character_maximum_length,c.numeric_precision,c.numeric_scale,CASE WHEN kcu.column_name IS NULL THEN '' ELSE 'PRI' END FROM information_schema.columns c JOIN pg_catalog.pg_namespace ns ON ns.nspname=c.table_schema JOIN pg_catalog.pg_class cl ON cl.relnamespace=ns.oid AND cl.relname=c.table_name JOIN pg_catalog.pg_attribute attr ON attr.attrelid=cl.oid AND attr.attname=c.column_name LEFT JOIN information_schema.table_constraints tc ON tc.table_schema=c.table_schema AND tc.table_name=c.table_name AND tc.constraint_type='PRIMARY KEY' LEFT JOIN information_schema.key_column_usage kcu ON kcu.constraint_schema=tc.constraint_schema AND kcu.constraint_name=tc.constraint_name AND kcu.table_schema=c.table_schema AND kcu.table_name=c.table_name AND kcu.column_name=c.column_name WHERE c.table_schema='public' AND c.table_name='{}' ORDER BY c.ordinal_position",
                     table
                 ),
                 _ => format!(
-                    "SELECT column_name,data_type,is_nullable,column_default,column_comment,character_maximum_length,numeric_precision,numeric_scale FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='{}' ORDER BY ordinal_position",
+                    "SELECT column_name,data_type,is_nullable,column_default,column_comment,character_maximum_length,numeric_precision,numeric_scale,column_key FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='{}' ORDER BY ordinal_position",
                     table
                 ),
             };
@@ -848,7 +853,7 @@ impl DatabaseRuntimeManager {
                                 ),
                                 data_type,
                                 not_null: row.get(2).and_then(|v| v.as_str()) == Some("NO"),
-                                primary_key: false,
+                                primary_key: row.get(8).and_then(|v| v.as_str()) == Some("PRI"),
                                 default_value: row
                                     .get(3)
                                     .and_then(|v| v.as_str())
@@ -2642,7 +2647,9 @@ mod tests {
                 assert!(sql.contains("character_maximum_length"));
                 assert!(sql.contains("numeric_precision"));
                 assert!(sql.contains("numeric_scale"));
-                // A declared varchar, whose length comes from the character maximum.
+                assert!(sql.contains("column_key"));
+                // A declared varchar primary key, whose length comes from the character
+                // maximum.
                 vec![
                     Some("name"),
                     Some("varchar"),
@@ -2652,6 +2659,7 @@ mod tests {
                     Some("255"),
                     None,
                     None,
+                    Some("PRI"),
                 ]
             } else {
                 assert!(sql.starts_with("SELECT 1"));
@@ -2764,6 +2772,7 @@ mod tests {
             assert_eq!(columns[0].length.as_deref(), Some("255"));
             assert_eq!(columns[0].data_type, "varchar");
             assert!(columns[0].not_null);
+            assert!(columns[0].primary_key);
             assert!(server.await.unwrap());
         }
     }
@@ -3391,6 +3400,7 @@ mod tests {
                 None,
                 Some("32"),
                 Some("0"),
+                Some("PRI"),
             ],
             1,
             "complete",
@@ -3415,6 +3425,7 @@ mod tests {
                 .unwrap();
         assert_eq!(columns[0].comment.as_deref(), Some("用户编号"));
         assert!(columns[0].not_null);
+        assert!(columns[0].primary_key);
         // Precision 32 with scale 0 is how PostgreSQL describes a plain integer; it is
         // not a declared size and must not reach the structure view.
         assert_eq!(columns[0].length, None);
@@ -3424,6 +3435,8 @@ mod tests {
         assert!(sql.contains("c.character_maximum_length"));
         assert!(sql.contains("c.numeric_precision"));
         assert!(sql.contains("c.numeric_scale"));
+        assert!(sql.contains("information_schema.table_constraints"));
+        assert!(sql.contains("information_schema.key_column_usage"));
     }
 
     #[tokio::test]
@@ -3444,6 +3457,9 @@ mod tests {
                 Some("255"),
                 None,
                 None,
+                // The left join finds no primary key constraint for this column, and the
+                // projected marker comes back as an empty string rather than NULL.
+                Some(""),
             ],
             1,
             "complete",
@@ -3469,6 +3485,7 @@ mod tests {
         assert_eq!(columns[0].data_type, "character varying");
         assert_eq!(columns[0].length.as_deref(), Some("255"));
         assert!(!columns[0].not_null);
+        assert!(!columns[0].primary_key);
         assert_eq!(columns[0].default_value, None);
         assert_eq!(columns[0].comment, None);
         assert!(server.await.unwrap().contains("character_maximum_length"));
