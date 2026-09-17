@@ -84,6 +84,8 @@ pub struct DoctorRuntimeInput {
     pub remote_helper_log: Option<String>,
     pub remote_bridge_log: Option<String>,
     pub integration_enabled: bool,
+    /// `None` keeps legacy/manual Runtime diagnostics behavior.
+    pub mcp_expected: Option<bool>,
     pub browser_runtime: Option<String>,
 }
 
@@ -197,13 +199,15 @@ fn runtime_report(input: &DoctorRuntimeInput) -> DoctorRuntimeReport {
         repairable: false,
     });
     if input.integration_enabled {
-        checks.push(probe_runtime_endpoint(
-            "luna_mcp",
-            "luna_mcp",
-            input.mcp_endpoint.as_deref(),
-            input.mcp_token.as_deref(),
-            true,
-        ));
+        if input.mcp_expected.unwrap_or(true) {
+            checks.push(probe_runtime_endpoint(
+                "luna_mcp",
+                "luna_mcp",
+                input.mcp_endpoint.as_deref(),
+                input.mcp_token.as_deref(),
+                true,
+            ));
+        }
         checks.push(probe_runtime_endpoint(
             "hook",
             "hook",
@@ -215,7 +219,10 @@ fn runtime_report(input: &DoctorRuntimeInput) -> DoctorRuntimeReport {
     // A Browser Resource belongs to the session, but this Runtime may already
     // have exited. Do not attach the session's current Browser status to a
     // historical Runtime report.
-    if running && let Some(browser) = input.browser_runtime.as_deref() {
+    if input.mcp_expected.unwrap_or(true)
+        && running
+        && let Some(browser) = input.browser_runtime.as_deref()
+    {
         let lower = browser.to_ascii_lowercase();
         let (status, code, repairable) = if lower.starts_with("running") {
             ("ok", None, false)
@@ -252,7 +259,9 @@ fn runtime_report(input: &DoctorRuntimeInput) -> DoctorRuntimeReport {
     if let Some(log) = input.remote_helper_log.as_deref() {
         checks.push(remote_log_check("remote_helper_log", log));
     }
-    if let Some(log) = input.remote_bridge_log.as_deref() {
+    if input.mcp_expected.unwrap_or(true)
+        && let Some(log) = input.remote_bridge_log.as_deref()
+    {
         checks.push(remote_log_check("browser_bridge", log));
     }
     DoctorRuntimeReport {
@@ -588,7 +597,9 @@ fn check_local_agents() -> AgentCheck {
     let mut warnings = Vec::new();
     let targets = crate::agent_command::default_local_target_ids();
     for target_id in &targets {
-        let discovery = crate::agent_command::discover(&["codex", "claude"], target_id);
+        let commands = crate::agent_adapters::command_names();
+        let command_refs = commands.iter().map(String::as_str).collect::<Vec<_>>();
+        let discovery = crate::agent_command::discover(&command_refs, target_id);
         for (command, path) in discovery.paths {
             available.push(format!("{command}[{target_id}]={}", path.to_string_lossy()));
         }
@@ -1220,6 +1231,32 @@ mod tests {
                 .iter()
                 .all(|check| check.name != "agent_browser")
         );
+    }
+
+    #[test]
+    fn tracking_only_runtime_skips_mcp_and_browser_checks() {
+        let report = runtime_report(&DoctorRuntimeInput {
+            runtime_id: "runtime-grok".into(),
+            target_id: "ssh-bookmark:test".into(),
+            title: "Grok Build".into(),
+            status: "Running".into(),
+            hook_endpoint: Some("http://127.0.0.1:1/v1/hooks".into()),
+            hook_token: Some("secret-token".into()),
+            mcp_expected: Some(false),
+            browser_runtime: Some("Error unavailable".into()),
+            remote_bridge_log: Some("remote forward bridge failed".into()),
+            integration_enabled: true,
+            ..Default::default()
+        });
+
+        assert!(report.checks.iter().all(|check| check.name != "luna_mcp"));
+        assert!(
+            report
+                .checks
+                .iter()
+                .all(|check| check.name != "agent_browser" && check.name != "browser_bridge")
+        );
+        assert!(report.checks.iter().any(|check| check.name == "hook"));
     }
 
     #[test]

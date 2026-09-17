@@ -75,7 +75,7 @@ export function createChineseHelpSections(commandKey: string): HelpSection[] {
           <li>选择普通“终端”或一个 Coding Agent 启动配置。</li>
           <li>选择运行目标：Windows 提供 PowerShell 7 和已安装的 WSL 发行版；macOS 使用登录 Shell；远程目标来自 SSH 目标资源库。</li>
         </ol>
-        <p>普通终端里也可以手动运行 <code>codex</code> 或 <code>claude</code>，Luna Mux 会在检测到活动后把它识别为 Agent。</p>
+        <p>普通终端里也可以手动运行已安装的 Agent（例如 <code>codex</code>、<code>claude</code> 或 <code>grok</code>），Luna Mux 会在检测到活动后把它识别为 Agent。</p>
         <h3>拆分和布局</h3>
         <ul>
           <li>窗格标题栏的左右拆分和上下拆分按钮会复制当前目标定义，创建一个新的同类窗格。</li>
@@ -108,11 +108,11 @@ export function createChineseHelpSections(commandKey: string): HelpSection[] {
       searchText: 'agent codex claude code 启动 手动 hook mcp luna browser 状态 提醒 等待 授权 环境 集成 adapter 多窗格 协作 输出 指令 bash 远程 agent ssh 注入',
       content: <>
         <h2>Coding Agent 工作流</h2>
-        <p>Luna Mux 把 Codex 和 Claude Code 放进会话窗格中运行，并为每个运行时注入 Hook、Luna MCP 和 Browser MCP 配置。这样 Agent 可以感知同会话窗格、请求确认、读取受管浏览器状态，并把等待或完成状态反馈到界面。</p>
+        <p>Luna Mux 把 Codex、Claude Code 和 Grok Build 放进会话窗格中运行。Codex 和 Claude Code 会获得 Hook、Luna MCP 与 Browser MCP；Grok Build 当前只通过启动包装脚本报告进程启动和退出，不会注入 MCP。</p>
         <h3>启动方式</h3>
         <ol>
           <li>创建终端窗格，或在添加窗格时选择 Coding Agent 启动配置。</li>
-          <li>在窗格中运行 <code>codex</code> 或 <code>claude</code>；受管启动会直接进入对应 Agent，普通终端也会在活动出现后识别。</li>
+          <li>在窗格中运行已安装的 Agent；受管启动会直接进入对应 Agent，普通终端也会在活动出现后识别。</li>
           <li>Agent 退出后，重新启动会建立新的运行时身份，状态和授权会重新绑定到当前窗格。</li>
         </ol>
         <h3>提醒如何工作</h3>
@@ -122,7 +122,7 @@ export function createChineseHelpSections(commandKey: string): HelpSection[] {
           <li>进入窗格可阅读最新事件；提交输入、确认权限、按 Esc 或 Ctrl+C 会推动 Agent 继续运行或中断。</li>
         </ul>
         <h3>同会话多 Agent 协作</h3>
-        <p>项目会话是协作边界。同一会话中的 Agent 可以发现会话内所有窗格和当前运行时，并通过 Luna MCP 与其他终端或 Agent 协作。</p>
+        <p>项目会话是协作边界。获得 Luna MCP 的 Codex 和 Claude Code 可以发现会话内所有窗格和当前运行时，并与其他终端或 Agent 协作；Grok Build 当前不具备这项能力。</p>
         <ul>
           <li><code>terminal.runtimes.list</code> 返回终端运行时和所属窗格，目标可以是 Agent，也可以是普通 Bash、PowerShell 或 SSH Shell。</li>
           <li><code>terminal.runtime.output.read</code> 按游标增量读取有界输出；<code>terminal.runtime.write</code> 向目标 PTY 写入文本或命令。</li>
@@ -134,12 +134,12 @@ export function createChineseHelpSections(commandKey: string): HelpSection[] {
         <ul>
           <li>“会话环境”显示项目根目录，以及 Browser MCP 当前是否已就绪或可按需启动。</li>
           <li>“活跃 Agent 运行环境”显示每个 Agent 的适配器、所属窗格、启动方式和本地/SSH 目标。</li>
-          <li>Hook 和 Luna MCP 列显示结构化集成是否已经连接和配置。</li>
+          <li>Hook 和 Luna MCP 列显示适配器支持的结构化集成状态；Grok Build 只会报告生命周期 Hook。</li>
           <li>筛选框可按 Agent、窗格或目标快速定位活跃运行时；输入框可向选中的 Agent 发送文本。</li>
         </ul>
         <h3>运行时集成</h3>
-        <p>Luna Mux 按窗格运行时写入临时 Hook、Luna MCP 与 Browser MCP 环境变量。配置随运行时生效，并在运行时结束后失效。</p>
-        <p>远程 Agent 集成通过“设置 → SSH → 远程 Agent 集成”开启。开启后，新建或重启的 SSH 窗格会在远端探测 Codex、Claude Code 和网络工具，上传运行时 helper 到 <code>~/.luna-mux/runtime/&lt;runtime-id&gt;</code>，临时调整当前 Shell 的 PATH，并建立绑定远端回环地址的反向转发。</p>
+        <p>Luna Mux 为 Codex 和 Claude Code 写入临时 Hook、Luna MCP 与 Browser MCP 配置；Grok Build 只接收用于启动/退出跟踪的临时身份。配置随运行时生效，并在运行时结束后失效。</p>
+        <p>远程 Agent 集成通过“设置 → SSH → 远程 Agent 集成”开启。开启后，新建或重启的 SSH 窗格会在远端探测 Codex、Claude Code、Grok Build 和网络工具，上传运行时 helper 到 <code>~/.luna-mux/runtime/&lt;runtime-id&gt;</code>，并临时调整当前 Shell 的 PATH。Codex 和 Claude Code 会建立绑定远端回环地址的 MCP 反向转发；Grok Build 只使用生命周期 Hook。</p>
         <p>远程 Browser MCP 会通过当前 SSH 连接把 MCP 请求送回本机，并操作本机会话的 Browser Resource。Hook 转发需要 curl 或 wget；Browser MCP 需要 socat、nc/ncat 或 bash TCP 支持。正常断开时，运行时目录会通过 SFTP 清理。</p>
       </>
     },
@@ -148,7 +148,7 @@ export function createChineseHelpSections(commandKey: string): HelpSection[] {
       searchText: '浏览器 browser chrome cdp profile agent-browser mcp 自动 按需 启动 停止 重启 打开 tab 页面 可用 agent 退出 profile 保留',
       content: <>
         <h2>受管浏览器与网页验证</h2>
-        <p>每个项目会话自动拥有一个 Browser Resource。它为同会话 Agent 提供独立 Chrome 进程、持久化 Profile 和 agent-browser MCP 连接。</p>
+        <p>每个项目会话自动拥有一个 Browser Resource。它为同会话中支持 Browser MCP 的 Codex 和 Claude Code 提供独立 Chrome 进程、持久化 Profile 和 agent-browser MCP 连接；Grok Build 当前不会注入该连接。</p>
         <h3>自动使用</h3>
         <ol>
           <li>Agent 第一次调用注入的 <code>agent_browser</code> 工具时，Luna Mux 会解析当前会话的 Browser Resource。</li>
@@ -321,7 +321,7 @@ export function createChineseHelpSections(commandKey: string): HelpSection[] {
         <h3>安全边界</h3>
         <ul>
           <li>密码、私钥口令和 AI API Key 使用 macOS Keychain 或 Windows Credential Manager；私钥文件本身由文件系统管理。</li>
-          <li>每个 Agent 运行时获得临时身份。Hook、Luna MCP 和 Browser MCP 都绑定到当前会话与窗格，运行时退出后撤销。</li>
+          <li>每个 Agent 运行时获得临时身份。Codex 与 Claude Code 的 Hook、Luna MCP 和 Browser MCP 都绑定到当前会话与窗格，运行时退出后撤销；Grok Build 只使用生命周期 Hook。</li>
           <li>Browser Resource 使用会话独立 Profile。Profile 目录和 CDP 端点适合交给 Luna Mux 与 agent-browser 管理。</li>
         </ul>
         <h3>Agent 状态诊断</h3>
@@ -412,7 +412,7 @@ export function createEnglishHelpSections(commandKey: string): HelpSection[] {
           <li>Choose ordinary Terminal or a Coding Agent launch profile.</li>
           <li>Choose a target. Windows offers PowerShell 7 and installed WSL distributions; macOS uses the login shell; remote targets come from the SSH target library.</li>
         </ol>
-        <p>You can also run <code>codex</code> or <code>claude</code> manually in an ordinary terminal. Luna Mux recognizes the Agent after activity is detected.</p>
+        <p>You can also run an installed Agent such as <code>codex</code>, <code>claude</code>, or <code>grok</code> manually in an ordinary terminal. Luna Mux recognizes the Agent after activity is detected.</p>
         <h3>Splits and layout</h3>
         <ul>
           <li>The split-right and split-down buttons duplicate the current target definition into a new matching Pane.</li>
@@ -445,11 +445,11 @@ export function createEnglishHelpSections(commandKey: string): HelpSection[] {
       searchText: 'agent codex claude code managed manual hook mcp luna browser status attention waiting permission environment integration adapter multi pane collaboration output command bash remote agent ssh injection',
       content: <>
         <h2>Coding Agent workflows</h2>
-        <p>Luna Mux runs Codex and Claude Code inside Session Panes and injects Hooks, Luna MCP, and Browser MCP for each runtime. This lets Agents inspect same-Session Panes, request approvals, read managed browser status, and report waiting or completion state back to the interface.</p>
+        <p>Luna Mux runs Codex, Claude Code, and Grok Build inside Session Panes. Codex and Claude Code receive Hooks, Luna MCP, and Browser MCP; Grok Build currently reports only process start and exit through its launch wrapper and does not receive MCP.</p>
         <h3>Launching an Agent</h3>
         <ol>
           <li>Create a terminal Pane or choose a Coding Agent launch profile while adding a Pane.</li>
-          <li>Run <code>codex</code> or <code>claude</code> in the Pane. Managed launch starts the selected Agent directly, and ordinary terminals are recognized after activity appears.</li>
+          <li>Run an installed Agent in the Pane. Managed launch starts the selected Agent directly, and ordinary terminals are recognized after activity appears.</li>
           <li>After an Agent exits, starting it again creates a new runtime identity and binds state and authorization to the current Pane.</li>
         </ol>
         <h3>Attention behavior</h3>
@@ -459,7 +459,7 @@ export function createEnglishHelpSections(commandKey: string): HelpSection[] {
           <li>Open the Pane to read the latest event; submit input, approve permissions, press Escape, or press Ctrl+C to continue or interrupt the Agent.</li>
         </ul>
         <h3>Multi-Agent collaboration inside a Session</h3>
-        <p>The project Session is the collaboration boundary. Agents in one Session can discover all of its Panes and current runtimes and collaborate with other terminals or Agents through Luna MCP.</p>
+        <p>The project Session is the collaboration boundary. Codex and Claude Code runtimes with Luna MCP can discover its Panes and current runtimes and collaborate with other terminals or Agents; Grok Build does not currently have this capability.</p>
         <ul>
           <li><code>terminal.runtimes.list</code> returns terminal runtimes and owner Panes. A target may contain an Agent or an ordinary Bash, PowerShell, or SSH shell.</li>
           <li><code>terminal.runtime.output.read</code> incrementally reads bounded output by cursor, while <code>terminal.runtime.write</code> writes text or commands to the target PTY.</li>
@@ -471,12 +471,12 @@ export function createEnglishHelpSections(commandKey: string): HelpSection[] {
         <ul>
           <li>Session environment shows the project root and whether Browser MCP is ready or available on demand.</li>
           <li>Active Agent environments show each Agent's adapter, owner Pane, launch mode, and local/SSH target.</li>
-          <li>Hook and Luna MCP columns show structured integration connection and configuration state.</li>
+          <li>Hook and Luna MCP columns show the integration supported by each adapter; Grok Build reports only its lifecycle Hook.</li>
           <li>The filter field locates active runtimes by Agent, Pane, or target; the input field sends text to the selected Agent.</li>
         </ul>
         <h3>Runtime integration</h3>
-        <p>Luna Mux writes temporary Hook, Luna MCP, and Browser MCP environment variables for each Pane runtime. The configuration is active for that runtime and expires when the runtime ends.</p>
-        <p>Remote Agent integration is enabled under Settings → SSH → Remote Agent integration. For newly created or restarted SSH Panes, Luna Mux probes Codex, Claude Code, and network tools on the remote host, uploads a runtime helper under <code>~/.luna-mux/runtime/&lt;runtime-id&gt;</code>, temporarily adjusts the current shell PATH, and creates reverse forwards bound to remote loopback.</p>
+        <p>Luna Mux writes temporary Hook, Luna MCP, and Browser MCP configuration for Codex and Claude Code. Grok Build receives only a temporary identity for start/exit tracking. Configuration is active for that runtime and expires when the runtime ends.</p>
+        <p>Remote Agent integration is enabled under Settings → SSH → Remote Agent integration. For newly created or restarted SSH Panes, Luna Mux probes Codex, Claude Code, Grok Build, and network tools on the remote host, uploads a runtime helper under <code>~/.luna-mux/runtime/&lt;runtime-id&gt;</code>, and temporarily adjusts the current shell PATH. Codex and Claude Code receive MCP reverse forwards bound to remote loopback; Grok Build uses only the lifecycle Hook.</p>
         <p>Remote Browser MCP sends MCP requests back through the current SSH connection and operates the local Session Browser Resource. Hook forwarding needs curl or wget; Browser MCP needs socat, nc/ncat, or bash TCP support. On a normal disconnect, the runtime directory is cleaned up over SFTP.</p>
       </>
     },
@@ -485,7 +485,7 @@ export function createEnglishHelpSections(commandKey: string): HelpSection[] {
       searchText: 'browser chrome cdp profile agent-browser mcp automatic on demand start stop restart focus tab page available agent exit profile persistence',
       content: <>
         <h2>Managed browser and web verification</h2>
-        <p>Every Session automatically owns one Browser Resource. It gives Agents in that Session an isolated Chrome process, persistent Profile, and agent-browser MCP connection.</p>
+        <p>Every Session automatically owns one Browser Resource. It gives Codex and Claude Code runtimes with Browser MCP an isolated Chrome process, persistent Profile, and agent-browser MCP connection; Grok Build does not currently receive that connection.</p>
         <h3>Automatic use</h3>
         <ol>
           <li>On the first injected <code>agent_browser</code> tool call, Luna Mux resolves the current Session's Browser Resource.</li>
@@ -658,7 +658,7 @@ export function createEnglishHelpSections(commandKey: string): HelpSection[] {
         <h3>Security boundaries</h3>
         <ul>
           <li>Passwords, private-key passphrases, and AI API Keys use macOS Keychain or Windows Credential Manager. Private-key files are managed by the filesystem.</li>
-          <li>Each Agent runtime receives an ephemeral identity. Hooks, Luna MCP, and Browser MCP are scoped to its Session and Pane and revoked on exit.</li>
+          <li>Each Agent runtime receives an ephemeral identity. Codex and Claude Code Hooks, Luna MCP, and Browser MCP are scoped to its Session and Pane and revoked on exit; Grok Build uses only the lifecycle Hook.</li>
           <li>Browser Resources use Session-isolated Profiles. Profile directories and CDP endpoints are best managed through Luna Mux and agent-browser.</li>
         </ul>
         <h3>Agent state diagnostics</h3>

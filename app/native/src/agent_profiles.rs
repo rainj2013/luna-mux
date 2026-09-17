@@ -2,6 +2,7 @@ use serde::Serialize;
 
 pub const DEFAULT_CODEX_PROFILE_ID: &str = "codex.default";
 pub const DEFAULT_CLAUDE_CODE_PROFILE_ID: &str = "claude-code.default";
+pub const DEFAULT_GROK_BUILD_PROFILE_ID: &str = "grok-build.default";
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -84,6 +85,10 @@ mod tests {
         assert_eq!(
             resolve(DEFAULT_CLAUDE_CODE_PROFILE_ID).unwrap().adapter,
             "claude-code"
+        );
+        assert_eq!(
+            resolve(DEFAULT_GROK_BUILD_PROFILE_ID).unwrap().adapter,
+            "grok-build"
         );
         assert!(resolve("unknown").is_err());
     }

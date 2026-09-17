@@ -139,6 +139,7 @@ function isSshAuthenticationFailure(error?: string): boolean {
 function agentAdapterLabel(adapterId: string): string {
   if (adapterId === 'codex') return 'Codex'
   if (adapterId === 'claude-code') return 'Claude Code'
+  if (adapterId === 'grok-build') return 'Grok Build'
   return adapterId
 }
 
@@ -661,11 +662,19 @@ export function App(): React.JSX.Element {
     const tone = agentAttentionTone(agent)
     return tone ? [[agent.paneId, tone] as const] : []
   })), [allAgents])
-  const activeAgentAdapterByPane = useMemo(() => new Map(allAgents.flatMap((agent) => {
-    const pane = tabs.find((item) => item.id === agent.paneId)
-    const adapterId = agentAdapterId(agent.latest?.adapterId, pane?.launchProfileId ?? '')
-    return adapterId ? [[agent.paneId, adapterId] as const] : []
-  })), [allAgents, tabs])
+  const activeAgentAdapterByPane = useMemo(() => {
+    const adapters = new Map<string, string>()
+    for (const pane of tabs) {
+      const adapterId = agentAdapterId(undefined, pane.launchProfileId ?? '')
+      if (adapterId) adapters.set(pane.id, adapterId)
+    }
+    for (const agent of allAgents) {
+      const pane = tabs.find((item) => item.id === agent.paneId)
+      const adapterId = agentAdapterId(agent.latest?.adapterId, pane?.launchProfileId ?? '')
+      if (adapterId) adapters.set(agent.paneId, adapterId)
+    }
+    return adapters
+  }, [allAgents, tabs])
   const selectedBookmark = bookmarkMap.get(selectedBookmarkId) ?? activeBookmark
   const filteredBookmarks = bookmarks.filter((item) => `${item.name} ${item.host} ${item.username} ${item.groupName} ${item.note}`.toLowerCase().includes(query.toLowerCase()))
   const bookmarkGroups = useMemo(() => {
@@ -2580,6 +2589,7 @@ function parseRuntimeEnvironmentDetail(detail: string): DiagnosticsRuntimeEnviro
 function agentTypeLabel(adapter: string): string {
   if (adapter === 'claude-code') return 'Claude Code'
   if (adapter === 'codex') return 'Codex'
+  if (adapter === 'grok-build') return 'Grok Build'
   return adapter || 'Agent'
 }
 
@@ -2610,7 +2620,7 @@ function readableDiagnosticDetail(name: string, detail: string): string {
       const agentName = match[1] ?? ''
       const targetName = match[2] ?? ''
       const result = match[3] ?? ''
-      const agent = agentName === 'codex' ? 'Codex' : agentName === 'claude' ? 'Claude Code' : agentName
+      const agent = agentName === 'codex' ? 'Codex' : agentName === 'claude' ? 'Claude Code' : agentName === 'grok' ? 'Grok Build' : agentName
       const target = targetName.replace(/^local:/, '').replace(/^powershell5?$/, 'Windows PowerShell')
       return `已找到 ${agent}（${target}）：${result}`
     })

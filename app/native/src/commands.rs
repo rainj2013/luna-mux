@@ -902,6 +902,14 @@ pub async fn terminal_runtime_create(
                 .into(),
         );
     }
+    let managed_profile = request
+        .managed_agent
+        .as_ref()
+        .map(|agent| agent_profiles::resolve(&agent.launch_profile_id))
+        .transpose()?;
+    let managed_supports_mcp = managed_profile
+        .as_ref()
+        .is_none_or(|profile| agent_adapters::supports_managed_mcp(&profile.adapter));
     let mut issued_hook_token = None;
     let mut issued_mcp_token = None;
     let mut remote_agent_launch = None;
@@ -918,21 +926,22 @@ pub async fn terminal_runtime_create(
         request
             .launch_environment
             .insert("LUNA_MUX_RUNTIME_ID".into(), context.runtime_id.clone());
-        let browser_cdp_port = if !is_remote || remote_agent_integration_enabled {
-            request.launch_environment.insert(
-                "LUNA_MUX_BROWSER_REGISTRY_PATH".into(),
-                state.browser_runtimes.registry_path(),
-            );
-            let port = state
-                .browser_runtimes
-                .session_cdp_port(&context.mux_session_id)?;
-            request
-                .launch_environment
-                .insert("LUNA_MUX_BROWSER_CDP_PORT".into(), port.to_string());
-            Some(port)
-        } else {
-            None
-        };
+        let browser_cdp_port =
+            if managed_supports_mcp && (!is_remote || remote_agent_integration_enabled) {
+                request.launch_environment.insert(
+                    "LUNA_MUX_BROWSER_REGISTRY_PATH".into(),
+                    state.browser_runtimes.registry_path(),
+                );
+                let port = state
+                    .browser_runtimes
+                    .session_cdp_port(&context.mux_session_id)?;
+                request
+                    .launch_environment
+                    .insert("LUNA_MUX_BROWSER_CDP_PORT".into(), port.to_string());
+                Some(port)
+            } else {
+                None
+            };
         if request.managed_agent.is_none() && remote_agent_integration_enabled {
             let endpoint = state.agent_hooks.endpoint()?;
             let token = state.agent_hooks.issue_bootstrap_token(context.clone())?;
@@ -992,7 +1001,24 @@ pub async fn terminal_runtime_create(
                                 return Err(error);
                             }
                         };
-                    Some(format!("{codex_bootstrap}; {claude_bootstrap}"))
+                    let grok_bootstrap =
+                        match crate::grok_build_adapter::install_wsl_manual_bootstrap(
+                            &context,
+                            &request.target_id,
+                            &endpoint,
+                            &mcp_endpoint,
+                            environment_path.as_path().to_str(),
+                        ) {
+                            Ok(command) => command,
+                            Err(error) => {
+                                state.agent_hooks.revoke_token(&token);
+                                state.luna_mcp.revoke_token(&mcp_token);
+                                return Err(error);
+                            }
+                        };
+                    Some(format!(
+                        "{codex_bootstrap}; {claude_bootstrap}; {grok_bootstrap}"
+                    ))
                 } else {
                     None
                 };
@@ -1026,24 +1052,35 @@ pub async fn terminal_runtime_create(
     if let Some(agent) = request.managed_agent.clone() {
         validate_managed_agent_context(&request, &agent)?;
         let agent_process_id = agent.agent_id.clone();
-        let profile = agent_profiles::resolve(&agent.launch_profile_id)?;
+        let profile = managed_profile
+            .clone()
+            .expect("managed profile was resolved before runtime setup");
         let endpoint = state.agent_hooks.endpoint()?;
-        let mcp_endpoint = state.luna_mcp.endpoint()?;
+        let mcp_endpoint = if managed_supports_mcp {
+            Some(state.luna_mcp.endpoint()?)
+        } else {
+            None
+        };
         let token = state.agent_hooks.issue_token(agent)?;
         issued_hook_token = Some(token.clone());
-        let mcp_token = match state.luna_mcp.issue_runtime_token(
-            request
-                .managed_agent
-                .as_ref()
-                .expect("managed agent context"),
-        ) {
-            Ok(token) => token,
-            Err(error) => {
-                state.agent_hooks.revoke_token(&token);
-                return Err(error);
-            }
+        let mcp = if let Some(mcp_endpoint) = mcp_endpoint {
+            let mcp_token = match state.luna_mcp.issue_runtime_token(
+                request
+                    .managed_agent
+                    .as_ref()
+                    .expect("managed agent context"),
+            ) {
+                Ok(token) => token,
+                Err(error) => {
+                    state.agent_hooks.revoke_token(&token);
+                    return Err(error);
+                }
+            };
+            issued_mcp_token = Some(mcp_token.clone());
+            Some((mcp_endpoint, mcp_token))
+        } else {
+            None
         };
-        issued_mcp_token = Some(mcp_token.clone());
         request
             .launch_environment
             .insert("LUNA_MUX_AGENT_ADAPTER".into(), profile.adapter.clone());
@@ -1056,16 +1093,17 @@ pub async fn terminal_runtime_create(
                 .clone()
                 .expect("managed agent context");
             request.command = None;
-            remote_agent_launch =
-                Some((endpoint, token, mcp_endpoint, mcp_token, profile, context));
+            remote_agent_launch = Some((endpoint, token, mcp, profile, context));
         } else {
             request
                 .launch_environment
                 .insert("LUNA_MUX_HOOK_ENDPOINT".into(), endpoint.clone());
-            request
-                .launch_environment
-                .insert("LUNA_MUX_MCP_ENDPOINT".into(), mcp_endpoint.clone());
-            // Native local shells load a runtime-scoped codex/claude shim below.
+            if let Some((mcp_endpoint, _)) = &mcp {
+                request
+                    .launch_environment
+                    .insert("LUNA_MUX_MCP_ENDPOINT".into(), mcp_endpoint.clone());
+            }
+            // Native local shells load runtime-scoped Agent shims below.
             // Keep the PTY's initial input short: injecting the full configuration
             // command through a canonical TTY can exceed MAX_CANON, truncate a
             // quoted argument, and leave zsh at its `quote>` continuation prompt.
@@ -1078,7 +1116,10 @@ pub async fn terminal_runtime_create(
                     profile: &profile,
                     target_id: &request.target_id,
                     hook_endpoint: &endpoint,
-                    mcp_endpoint: &mcp_endpoint,
+                    mcp_endpoint: mcp
+                        .as_ref()
+                        .map(|(endpoint, _)| endpoint.as_str())
+                        .unwrap_or("http://127.0.0.1:0/mcp"),
                     context: request
                         .managed_agent
                         .as_ref()
@@ -1107,78 +1148,91 @@ pub async fn terminal_runtime_create(
             request
                 .launch_environment
                 .insert("LUNA_MUX_HOOK_AUTHORIZATION".into(), token);
-            request
-                .launch_environment
-                .insert(MCP_AUTHORIZATION_ENV.into(), mcp_token);
+            if let Some((_, mcp_token)) = mcp {
+                request
+                    .launch_environment
+                    .insert(MCP_AUTHORIZATION_ENV.into(), mcp_token);
+            }
             request.command = Some(launch_command);
         }
     }
     match state.terminal_backend.create(request).await {
         Ok(runtime) => {
-            if let Some((local_endpoint, token, local_mcp_endpoint, mcp_token, profile, context)) =
-                remote_agent_launch
-            {
+            if let Some((local_endpoint, token, mcp, profile, context)) = remote_agent_launch {
                 let setup = async {
                     wait_for_runtime(&*state.terminal_backend, &runtime.runtime_id).await?;
                     retry_remote_setup("remote setup", || {
                         state.sessions.verify_remote_agent_requirements(
                             &runtime.runtime_id,
                             &profile.command,
-                            profile.adapter == "codex",
+                            agent_adapters::requires_remote_hook_helper(&profile.adapter),
+                            mcp.is_some(),
                         )
                     })
                     .await?;
                     let local_port = hook_endpoint_port(&local_endpoint)?;
-                    let local_mcp_port = mcp_endpoint_port(&local_mcp_endpoint)?;
                     let remote_port = retry_remote_setup("remote setup", || {
                         state
                             .sessions
                             .start_loopback_reverse_forward(&runtime.runtime_id, local_port)
                     })
                     .await?;
-                    let remote_mcp_port = retry_remote_setup("remote setup", || {
-                        state
-                            .sessions
-                            .start_loopback_reverse_forward(&runtime.runtime_id, local_mcp_port)
-                    })
-                    .await?;
                     let remote_endpoint = format!("http://127.0.0.1:{remote_port}/v1/hooks");
-                    let remote_mcp_endpoint = format!("http://127.0.0.1:{remote_mcp_port}/mcp");
-                    let browser_bridge_token = format!("lmxbm_{}", Uuid::new_v4().simple());
-                    let browser_cdp_port = state
-                        .browser_runtimes
-                        .session_cdp_port(&context.mux_session_id)?;
-                    let remote_browser_port = retry_remote_setup("remote setup", || {
-                        state.sessions.start_browser_mcp_reverse_forward(
-                            &runtime.runtime_id,
-                            context.mux_session_id.clone(),
-                            browser_cdp_port,
-                            browser_bridge_token.clone(),
-                        )
-                    })
-                    .await?;
                     let remote_helper = retry_remote_setup("remote setup", || {
                         state
                             .sessions
                             .install_remote_agent_helper(&runtime.runtime_id)
                     })
                     .await?;
+                    let remote_mcp = if let Some((local_mcp_endpoint, mcp_token)) = &mcp {
+                        let local_mcp_port = mcp_endpoint_port(local_mcp_endpoint)?;
+                        let remote_mcp_port = retry_remote_setup("remote setup", || {
+                            state
+                                .sessions
+                                .start_loopback_reverse_forward(&runtime.runtime_id, local_mcp_port)
+                        })
+                        .await?;
+                        let browser_bridge_token = format!("lmxbm_{}", Uuid::new_v4().simple());
+                        let browser_cdp_port = state
+                            .browser_runtimes
+                            .session_cdp_port(&context.mux_session_id)?;
+                        let remote_browser_port = retry_remote_setup("remote setup", || {
+                            state.sessions.start_browser_mcp_reverse_forward(
+                                &runtime.runtime_id,
+                                context.mux_session_id.clone(),
+                                browser_cdp_port,
+                                browser_bridge_token.clone(),
+                            )
+                        })
+                        .await?;
+                        Some((
+                            format!("http://127.0.0.1:{remote_mcp_port}/mcp"),
+                            mcp_token.as_str(),
+                            remote_browser_port,
+                            browser_bridge_token,
+                        ))
+                    } else {
+                        None
+                    };
                     let environment_file = retry_remote_setup("remote setup", || {
                         state.sessions.write_agent_environment_file(
                             &runtime.runtime_id,
                             &runtime.runtime_id,
                             &remote_endpoint,
                             &token,
-                            &mcp_token,
-                            Some((remote_browser_port, &browser_bridge_token)),
+                            remote_mcp.as_ref().map(|(_, token, _, _)| *token),
+                            remote_mcp
+                                .as_ref()
+                                .map(|(_, _, port, token)| (*port, token.as_str())),
                         )
                     })
                     .await?;
-                    let remote_hook_command = if profile.adapter == "codex" {
-                        Some(format!("{} hook", posix_shell_quote(&remote_helper)))
-                    } else {
-                        None
-                    };
+                    let remote_hook_command =
+                        if agent_adapters::requires_remote_hook_helper(&profile.adapter) {
+                            Some(format!("{} hook", posix_shell_quote(&remote_helper)))
+                        } else {
+                            None
+                        };
                     let existing_developer_instructions = if profile.adapter == "codex" {
                         remote_setup_optional(|| {
                             state
@@ -1193,12 +1247,17 @@ pub async fn terminal_runtime_create(
                         profile: &profile,
                         target_id: &runtime.target_id,
                         hook_endpoint: &remote_endpoint,
-                        mcp_endpoint: &remote_mcp_endpoint,
+                        mcp_endpoint: remote_mcp
+                            .as_ref()
+                            .map(|(endpoint, _, _, _)| endpoint.as_str())
+                            .unwrap_or("http://127.0.0.1:0/mcp"),
                         context: &context,
                         inject_inline_hooks: true,
                         hook_command: remote_hook_command.as_deref(),
-                        browser_command: Some(&remote_helper),
-                        browser_credentials_file: Some(&environment_file),
+                        browser_command: remote_mcp.as_ref().map(|_| remote_helper.as_str()),
+                        browser_credentials_file: remote_mcp
+                            .as_ref()
+                            .map(|_| environment_file.as_str()),
                         existing_developer_instructions: existing_developer_instructions.as_deref(),
                     })?;
                     let command = remote_managed_agent_command(
@@ -1222,7 +1281,9 @@ pub async fn terminal_runtime_create(
                 .await;
                 if let Err(error) = setup {
                     state.agent_hooks.revoke_token(&token);
-                    state.luna_mcp.revoke_token(&mcp_token);
+                    if let Some((_, mcp_token)) = &mcp {
+                        state.luna_mcp.revoke_token(mcp_token);
+                    }
                     let _ = state.terminal_backend.close(&runtime.runtime_id).await;
                     return Err(format!("远端 Agent 集成初始化失败：{error}"));
                 }
@@ -1369,28 +1430,29 @@ async fn setup_remote_manual_agent_shims(
     // The remote helper is POSIX shell and uses curl/wget plus a TCP utility;
     // Python is not required.  The managed path performs the same capability
     // check after the runtime is ready.
-    let (codex, claude) = tokio::join!(
-        remote_setup_optional(|| state
-            .sessions
-            .remote_command_path(&runtime.runtime_id, "codex")),
-        remote_setup_optional(|| state
-            .sessions
-            .remote_command_path(&runtime.runtime_id, "claude"))
-    );
-    if codex.is_none() && claude.is_none() {
-        return Err("远端没有可用的 codex 或 claude 命令，已跳过 Agent 注入".into());
+    let mut remote_agents = Vec::new();
+    for profile in agent_adapters::profiles() {
+        if let Some(command) = remote_setup_optional(|| {
+            state
+                .sessions
+                .remote_command_path(&runtime.runtime_id, &profile.command)
+        })
+        .await
+        {
+            remote_agents.push((profile, command));
+        }
     }
+    let Some((_, verification_command)) = remote_agents.first() else {
+        return Err("远端没有可用的内置 Agent 命令，已跳过 Agent 注入".into());
+    };
     state
         .sessions
-        .verify_remote_agent_requirements(
-            &runtime.runtime_id,
-            codex.as_deref().or(claude.as_deref()).unwrap_or("codex"),
-            true,
-        )
+        .verify_remote_agent_requirements(&runtime.runtime_id, verification_command, true, true)
         .await?;
-    let has_codex = codex.is_some();
-    let has_claude = claude.is_some();
-    let existing_developer_instructions = if codex.is_some() {
+    let existing_developer_instructions = if remote_agents
+        .iter()
+        .any(|(profile, _)| profile.adapter == agent_adapters::CODEX_ADAPTER_ID)
+    {
         remote_setup_optional(|| {
             state
                 .sessions
@@ -1476,18 +1538,17 @@ async fn setup_remote_manual_agent_shims(
             launch_profile_id: "manual.remote".into(),
         };
         let mut shim_bin = None;
-        for (adapter, real_command, profile_id, label) in [
-            ("codex", codex, "codex.default", "Codex"),
-            ("claude-code", claude, "claude-code.default", "Claude Code"),
-        ] {
-            let Some(real_command) = real_command else {
-                continue;
-            };
+        let enabled_commands = remote_agents
+            .iter()
+            .map(|(profile, _)| profile.command.clone())
+            .collect::<Vec<_>>();
+        for (base_profile, real_command) in &remote_agents {
+            let adapter = base_profile.adapter.as_str();
             let profile = AgentLaunchProfile {
-                id: profile_id.into(),
-                label: label.into(),
-                adapter: adapter.into(),
-                command: posix_shell_quote(&real_command),
+                id: base_profile.id.clone(),
+                label: base_profile.label.clone(),
+                adapter: base_profile.adapter.clone(),
+                command: posix_shell_quote(real_command),
                 built_in: true,
             };
             let launch = agent_adapters::managed_command(&ManagedAgentLaunch {
@@ -1504,16 +1565,11 @@ async fn setup_remote_manual_agent_shims(
             })?;
             let script =
                 remote_manual_agent_script(adapter, &hook_command, &launch, &environment_file);
-            let name = if adapter == "codex" {
-                "codex"
-            } else {
-                "claude"
-            };
             let (bin, _) = retry_remote_setup("remote setup", || {
                 state.sessions.install_remote_runtime_shim(
                     &runtime.runtime_id,
                     &runtime.runtime_id,
-                    name,
+                    &base_profile.command,
                     &script,
                 )
             })
@@ -1521,13 +1577,8 @@ async fn setup_remote_manual_agent_shims(
             shim_bin = Some(bin);
         }
         let shim_bin = shim_bin.ok_or_else(|| "没有生成远端 Agent shim".to_string())?;
-        let bootstrap = remote_manual_shell_bootstrap(
-            context,
-            &environment_file,
-            &shim_bin,
-            has_codex,
-            has_claude,
-        );
+        let bootstrap =
+            remote_manual_shell_bootstrap(context, &environment_file, &shim_bin, &enabled_commands);
         let write_result = tokio::time::timeout(
             std::time::Duration::from_secs(10),
             state
@@ -1562,11 +1613,7 @@ fn remote_manual_agent_script(
     launch: &str,
     environment_file: &str,
 ) -> String {
-    let payload_adapter = if adapter_id == "claude-code" {
-        "claude-code"
-    } else {
-        "codex"
-    };
+    let payload_adapter = adapter_id;
     format!(
         "#!/bin/sh\n\
 luna_mux_env_file={}\n\
@@ -1597,8 +1644,7 @@ fn remote_manual_shell_bootstrap(
     context: &TerminalRuntimeContext,
     environment_file: &str,
     shim_bin: &str,
-    has_codex: bool,
-    has_claude: bool,
+    enabled_commands: &[String],
 ) -> String {
     let mut command = format!(
         "set -a; . {}; set +a; LUNA_MUX_SESSION_ID={}; LUNA_MUX_PANE_ID={}; LUNA_MUX_RUNTIME_ID={}; export LUNA_MUX_SESSION_ID LUNA_MUX_PANE_ID LUNA_MUX_RUNTIME_ID; PATH={}:\"$PATH\"; export PATH; hash -r 2>/dev/null || true",
@@ -1608,13 +1654,11 @@ fn remote_manual_shell_bootstrap(
         posix_shell_quote(&context.runtime_id),
         posix_shell_quote(shim_bin),
     );
-    for (name, enabled) in [("codex", has_codex), ("claude", has_claude)] {
-        if enabled {
-            command.push_str(&format!(
-                "; unalias {name} 2>/dev/null || true; {name}() {{ {} \"$@\"; }}",
-                posix_shell_quote(&format!("{shim_bin}/{name}"))
-            ));
-        }
+    for name in enabled_commands {
+        command.push_str(&format!(
+            "; unalias {name} 2>/dev/null || true; {name}() {{ {} \"$@\"; }}",
+            posix_shell_quote(&format!("{shim_bin}/{name}"))
+        ));
     }
     command
 }
@@ -1903,8 +1947,7 @@ mod managed_agent_launch_tests {
             &context,
             "/home/user/.luna-mux/runtime/agent.env",
             "/home/user/.luna-mux/runtime/runtime-1/bin",
-            true,
-            true,
+            &["codex".into(), "claude".into(), "grok".into()],
         );
         assert!(command.contains(". '/home/user/.luna-mux/runtime/agent.env'"));
         assert!(!command.contains("rm -f --"));
@@ -1918,6 +1961,10 @@ mod managed_agent_launch_tests {
             command.contains(
                 "claude() { '/home/user/.luna-mux/runtime/runtime-1/bin/claude' \"$@\"; }"
             )
+        );
+        assert!(
+            command
+                .contains("grok() { '/home/user/.luna-mux/runtime/runtime-1/bin/grok' \"$@\"; }")
         );
         assert!(!command.contains("lmxbm_"));
         assert!(!command.contains("LUNA_MUX_HOOK_AUTHORIZATION="));
@@ -3878,6 +3925,10 @@ pub async fn diagnostics_run(
         .collect::<HashMap<_, _>>();
     let mut runtime_inputs = Vec::new();
     for runtime in state.terminal_backend.list()? {
+        let mcp_expected = runtime.managed_agent.as_ref().and_then(|agent| {
+            crate::agent_adapters::adapter_id_for_profile(&agent.launch_profile_id)
+                .map(crate::agent_adapters::supports_managed_mcp)
+        });
         let context = runtime.context.clone().or_else(|| {
             runtime.managed_agent.as_ref().map(|agent| {
                 crate::terminal_runtime_contract::TerminalRuntimeContext {
@@ -3927,6 +3978,7 @@ pub async fn diagnostics_run(
                 .flatten(),
             integration_enabled: !runtime.target_id.starts_with("ssh-bookmark:")
                 || state.db.get_setting("remoteAgentIntegrationEnabled", false),
+            mcp_expected,
             browser_runtime: browser_by_session.get(&context.mux_session_id).cloned(),
         });
     }

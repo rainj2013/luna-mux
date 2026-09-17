@@ -1,15 +1,15 @@
+#[cfg(all(test, any(windows, target_os = "macos")))]
+use std::process::Command;
 use std::{
     fs,
     path::{Path, PathBuf},
 };
-#[cfg(all(test, any(windows, target_os = "macos")))]
-use std::process::Command;
 
-use crate::{luna_mcp::MCP_AUTHORIZATION_ENV, terminal_runtime_contract::TerminalRuntimeContext};
-use crate::shell_quoting::{executable_command_quote, shell_argument_quote};
 #[cfg(any(not(windows), test))]
 #[allow(unused_imports)]
 use crate::shell_quoting::shell_quote;
+use crate::shell_quoting::{executable_command_quote, shell_argument_quote};
+use crate::{luna_mcp::MCP_AUTHORIZATION_ENV, terminal_runtime_contract::TerminalRuntimeContext};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SkillConfigEntry {
@@ -115,10 +115,7 @@ fn install_with_paths(
     let Some(real) = resolved_command.map(resolve_codex_command) else {
         return Ok(None);
     };
-    let root = std::env::temp_dir()
-        .join("luna-mux")
-        .join(&context.runtime_id)
-        .join("bin");
+    let root = crate::agent_adapters::runtime_shim_root(context);
     crate::runtime_env::write_runtime_owner(&context.runtime_id)?;
     fs::create_dir_all(&root).map_err(|error| error.to_string())?;
     let hook = format!("{} hook", quote_path(&executable));
@@ -310,7 +307,7 @@ unset LUNA_MUX_USER_ZDOTDIR\n",
     );
     let mut bootstrap = String::new();
     let mut posix_bootstrap = String::new();
-    for name in ["codex", "claude"] {
+    for name in crate::agent_adapters::command_names() {
         let shim = root.join(name);
         if shim.is_file() {
             bootstrap.push_str(&format!(
@@ -470,10 +467,7 @@ pub fn install_wsl_manual_bootstrap(
     if !target_id.starts_with("local:wsl:") {
         return Err("WSL Codex 启动脚本只能安装到 WSL 终端".into());
     }
-    let root = std::env::temp_dir()
-        .join("luna-mux")
-        .join(&context.runtime_id)
-        .join("bin");
+    let root = crate::agent_adapters::runtime_shim_root(context);
     crate::runtime_env::write_runtime_owner(&context.runtime_id)?;
     fs::create_dir_all(&root).map_err(|error| error.to_string())?;
     let env_source = environment_file
@@ -559,7 +553,8 @@ pub(crate) fn powershell_native_arg_quote_script() -> String {
   if ($pending -gt 0) { $quoted += ('\' * ($pending * 2)) }
   return $quoted + '"'
 }
-"#.replace('\n', "\r\n")
+"#
+    .replace('\n', "\r\n")
 }
 
 #[cfg(any(windows, test))]
@@ -615,12 +610,7 @@ fn powershell_command_invocation_with_environment(
     let native = Path::new(executable.as_str())
         .extension()
         .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| {
-            matches!(
-                extension.to_ascii_lowercase().as_str(),
-                "exe" | "com"
-            )
-        });
+        .is_some_and(|extension| matches!(extension.to_ascii_lowercase().as_str(), "exe" | "com"));
     if native {
         format!(
             "  $lunaMuxCommandLine = ((${arguments_variable} | ForEach-Object {{ ConvertTo-LunaMuxNativeArg $_ }}) -join ' ')\r\n\
@@ -669,10 +659,7 @@ fn resolve_windows_managed_codex_launcher(path: &Path) -> Option<(PathBuf, Manag
 
     let launcher = canonicalize_windows_path(path);
     let bin = launcher.parent()?;
-    let mut package_roots = vec![bin
-        .join("node_modules")
-        .join("@openai")
-        .join("codex")];
+    let mut package_roots = vec![bin.join("node_modules").join("@openai").join("codex")];
     if let Some(parent) = bin.parent() {
         package_roots.push(
             parent
@@ -1048,13 +1035,14 @@ mod tests {
     fn package_manager_detection_matches_codex_launcher_layouts() {
         let standalone = Path::new(r"C:\Users\Test\.local\bin\codex.exe");
         let standalone = resolve_codex_command(standalone);
-        assert_eq!(standalone.executable, Path::new(r"C:\Users\Test\.local\bin\codex.exe"));
+        assert_eq!(
+            standalone.executable,
+            Path::new(r"C:\Users\Test\.local\bin\codex.exe")
+        );
         assert!(standalone.managed_package.is_none());
 
-        let fixture = std::env::temp_dir().join(format!(
-            "luna-mux-codex-manager-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let fixture =
+            std::env::temp_dir().join(format!("luna-mux-codex-manager-{}", uuid::Uuid::new_v4()));
         let node_modules = fixture.join("node_modules");
         let package_root = node_modules.join("@openai").join("codex");
         let launcher = fixture.join("codex.cmd");
@@ -1260,9 +1248,8 @@ $agentExitCode = 1\r\n\
             "installed Codex resolution returned a Luna runtime shim: {}",
             codex.display()
         );
-        let Some(powershell) =
-            crate::local_pty_backend::windows_powershell5_executable()
-                .or_else(crate::local_pty_backend::windows_powershell7_executable)
+        let Some(powershell) = crate::local_pty_backend::windows_powershell5_executable()
+            .or_else(crate::local_pty_backend::windows_powershell7_executable)
         else {
             return;
         };
@@ -1300,20 +1287,20 @@ $agentExitCode = 1\r\n\
         .expect("install Codex shim")
         .expect("installed Codex is available");
         let output = Command::new(&powershell)
-        .args([
-            "-NoLogo",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-        ])
-        .arg(root.join("codex.ps1"))
-        .args(["mcp", "list"])
-        .env("LUNA_MUX_SESSION_ID", "session-1")
-        .env("LUNA_MUX_BROWSER_CDP_PORT", "43129")
-        .env("LUNA_MUX_BROWSER_REGISTRY_PATH", &registry)
-        .output()
-        .expect("run generated Codex shim");
+            .args([
+                "-NoLogo",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+            ])
+            .arg(root.join("codex.ps1"))
+            .args(["mcp", "list"])
+            .env("LUNA_MUX_SESSION_ID", "session-1")
+            .env("LUNA_MUX_BROWSER_CDP_PORT", "43129")
+            .env("LUNA_MUX_BROWSER_REGISTRY_PATH", &registry)
+            .output()
+            .expect("run generated Codex shim");
         assert!(
             output.status.success(),
             "Codex rejected generated shim configuration through {} using {} (status {}):\nstdout:\n{}\nstderr:\n{}",
@@ -1397,20 +1384,20 @@ $agentExitCode = 1\r\n\
         )
         .expect("rewrite stopped browser registry fixture");
         let output_without_browser = Command::new(&powershell)
-        .args([
-            "-NoLogo",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-        ])
-        .arg(root.join("codex.ps1"))
-        .args(["mcp", "list"])
-        .env("LUNA_MUX_SESSION_ID", "session-1")
-        .env("LUNA_MUX_BROWSER_CDP_PORT", "43129")
-        .env("LUNA_MUX_BROWSER_REGISTRY_PATH", &registry)
-        .output()
-        .expect("run generated Codex shim without browser");
+            .args([
+                "-NoLogo",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+            ])
+            .arg(root.join("codex.ps1"))
+            .args(["mcp", "list"])
+            .env("LUNA_MUX_SESSION_ID", "session-1")
+            .env("LUNA_MUX_BROWSER_CDP_PORT", "43129")
+            .env("LUNA_MUX_BROWSER_REGISTRY_PATH", &registry)
+            .output()
+            .expect("run generated Codex shim without browser");
         assert!(
             output_without_browser.status.success(),
             "Codex rejected shim without browser through {} using {} (status {}):\nstdout:\n{}\nstderr:\n{}",
@@ -1526,7 +1513,10 @@ mod macos_tests {
         );
         assert!(bash_stdout.contains("codex is a function"), "{bash_stdout}");
         assert!(bash_stdout.contains("shim-codex:marker"), "{bash_stdout}");
-        assert!(bash_stdout.contains("claude is a function"), "{bash_stdout}");
+        assert!(
+            bash_stdout.contains("claude is a function"),
+            "{bash_stdout}"
+        );
         assert!(bash_stdout.contains("shim-claude:marker"), "{bash_stdout}");
 
         let _ = fs::remove_dir_all(root);

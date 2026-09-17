@@ -27,9 +27,11 @@ use crate::models::{
     TransferStatus, TransferTask, TunnelSummary, UiTheme,
 };
 use crate::terminal_backend::TerminalBackend;
-use crate::terminal_cli::{ScreenSnapshotArguments, PromptMatcher};
-use crate::terminal_interaction::{TerminalInteractionManager, InteractArguments, OutputWaitArguments,
-    ExecutionReadArguments, ExecutionWaitArguments, ExecutionCancelArguments};
+use crate::terminal_cli::{PromptMatcher, ScreenSnapshotArguments};
+use crate::terminal_interaction::{
+    ExecutionCancelArguments, ExecutionReadArguments, ExecutionWaitArguments, InteractArguments,
+    OutputWaitArguments, TerminalInteractionManager,
+};
 use crate::terminal_runtime_contract::TerminalRuntimeEvent;
 use crate::transfers::TransferManager;
 use crate::tunnels::TunnelManager;
@@ -164,7 +166,13 @@ type IdempotencyCacheKey = (String, String, String);
 
 #[async_trait]
 pub trait ControlSideEffects: Send + Sync {
-    async fn database_pane_ui_request(&self, _pane_id: &str, _action: PaneUiAction) -> Result<serde_json::Value, String> { Err("数据库窗格 UI 控制不可用".into()) }
+    async fn database_pane_ui_request(
+        &self,
+        _pane_id: &str,
+        _action: PaneUiAction,
+    ) -> Result<serde_json::Value, String> {
+        Err("数据库窗格 UI 控制不可用".into())
+    }
     async fn settings_set_ui_theme(&self, theme: UiTheme) -> Result<UiTheme, String>;
     async fn settings_set_terminal(
         &self,
@@ -273,13 +281,25 @@ impl InProcessControlSideEffects {
         })
     }
 
-    pub fn database_pane_ui(&self) -> Arc<DatabasePaneUiBridge> { self.database_pane_ui.clone() }
+    pub fn database_pane_ui(&self) -> Arc<DatabasePaneUiBridge> {
+        self.database_pane_ui.clone()
+    }
 }
 
 #[async_trait]
 impl ControlSideEffects for InProcessControlSideEffects {
-    async fn database_pane_ui_request(&self, pane_id: &str, action: PaneUiAction) -> Result<serde_json::Value, String> {
-        self.database_pane_ui.request(pane_id, action, |request| self.window.emit("database-pane-ui:request", request).map_err(|e| e.to_string())).await
+    async fn database_pane_ui_request(
+        &self,
+        pane_id: &str,
+        action: PaneUiAction,
+    ) -> Result<serde_json::Value, String> {
+        self.database_pane_ui
+            .request(pane_id, action, |request| {
+                self.window
+                    .emit("database-pane-ui:request", request)
+                    .map_err(|e| e.to_string())
+            })
+            .await
     }
     async fn settings_set_ui_theme(&self, theme: UiTheme) -> Result<UiTheme, String> {
         crate::commands::save_ui_theme(&self.window, &self.database, theme)
@@ -489,8 +509,26 @@ impl ControlSideEffects for InProcessControlSideEffects {
 
 impl InProcessControlService {
     fn require_database_pane(&self, pane_id: &str) -> ControlResult<()> {
-        let pane = self.database.list_mux_panes(None).map_err(internal_error)?.into_iter().find(|pane| pane.id == pane_id).ok_or_else(|| ControlError { code: ControlErrorCode::NotFound, message: "Mux Pane 不存在".into(), retryable: false, details: None })?;
-        if pane.kind != MuxPaneKind::Database { return Err(ControlError { code: ControlErrorCode::InvalidArguments, message: "目标 Pane 不是数据库窗格".into(), retryable: false, details: None }); }
+        let pane = self
+            .database
+            .list_mux_panes(None)
+            .map_err(internal_error)?
+            .into_iter()
+            .find(|pane| pane.id == pane_id)
+            .ok_or_else(|| ControlError {
+                code: ControlErrorCode::NotFound,
+                message: "Mux Pane 不存在".into(),
+                retryable: false,
+                details: None,
+            })?;
+        if pane.kind != MuxPaneKind::Database {
+            return Err(ControlError {
+                code: ControlErrorCode::InvalidArguments,
+                message: "目标 Pane 不是数据库窗格".into(),
+                retryable: false,
+                details: None,
+            });
+        }
         Ok(())
     }
     pub fn new(
@@ -678,9 +716,33 @@ impl InProcessControlService {
                 supports_idempotency: true,
                 approval: ControlApprovalRequirement::None,
             },
-            ControlOperationDescriptor { name: "database.pane.snapshot".into(), version: 1, access: ControlAccess::Read, resource_kind: ControlResourceKind::Pane, mutating: false, supports_idempotency: true, approval: ControlApprovalRequirement::None },
-            ControlOperationDescriptor { name: "database.pane.fill".into(), version: 1, access: ControlAccess::Write, resource_kind: ControlResourceKind::Pane, mutating: true, supports_idempotency: true, approval: ControlApprovalRequirement::None },
-            ControlOperationDescriptor { name: "database.pane.click".into(), version: 1, access: ControlAccess::Write, resource_kind: ControlResourceKind::Pane, mutating: true, supports_idempotency: true, approval: ControlApprovalRequirement::None },
+            ControlOperationDescriptor {
+                name: "database.pane.snapshot".into(),
+                version: 1,
+                access: ControlAccess::Read,
+                resource_kind: ControlResourceKind::Pane,
+                mutating: false,
+                supports_idempotency: true,
+                approval: ControlApprovalRequirement::None,
+            },
+            ControlOperationDescriptor {
+                name: "database.pane.fill".into(),
+                version: 1,
+                access: ControlAccess::Write,
+                resource_kind: ControlResourceKind::Pane,
+                mutating: true,
+                supports_idempotency: true,
+                approval: ControlApprovalRequirement::None,
+            },
+            ControlOperationDescriptor {
+                name: "database.pane.click".into(),
+                version: 1,
+                access: ControlAccess::Write,
+                resource_kind: ControlResourceKind::Pane,
+                mutating: true,
+                supports_idempotency: true,
+                approval: ControlApprovalRequirement::None,
+            },
             ControlOperationDescriptor {
                 name: "agents.list".into(),
                 version: 1,
@@ -799,9 +861,13 @@ impl InProcessControlService {
                 approval: ControlApprovalRequirement::None,
             },
             ControlOperationDescriptor {
-                name: "terminal.runtime.screen.snapshot".into(), version: 1,
-                access: ControlAccess::Read, resource_kind: ControlResourceKind::TerminalRuntime,
-                mutating: false, supports_idempotency: false, approval: ControlApprovalRequirement::None,
+                name: "terminal.runtime.screen.snapshot".into(),
+                version: 1,
+                access: ControlAccess::Read,
+                resource_kind: ControlResourceKind::TerminalRuntime,
+                mutating: false,
+                supports_idempotency: false,
+                approval: ControlApprovalRequirement::None,
             },
             ControlOperationDescriptor {
                 name: "terminal.runtime.output.wait".into(),
@@ -1412,6 +1478,13 @@ impl LunaControlService for InProcessControlService {
                             .unwrap_or_default()
                             .into_iter()
                             .filter_map(|runtime| {
+                                let mcp_expected =
+                                    runtime.managed_agent.as_ref().and_then(|agent| {
+                                        crate::agent_adapters::adapter_id_for_profile(
+                                            &agent.launch_profile_id,
+                                        )
+                                        .map(crate::agent_adapters::supports_managed_mcp)
+                                    });
                                 let context = runtime.context.clone().or_else(|| {
                                     runtime.managed_agent.as_ref().map(|agent| {
                                         crate::terminal_runtime_contract::TerminalRuntimeContext {
@@ -1451,6 +1524,7 @@ impl LunaControlService for InProcessControlService {
                                         || self
                                             .database
                                             .get_setting("remoteAgentIntegrationEnabled", false),
+                                    mcp_expected,
                                     browser_runtime: None,
                                 })
                             })
@@ -1529,25 +1603,50 @@ impl LunaControlService for InProcessControlService {
                     }
                     "databases.list" => {
                         require_empty_arguments(&request)?;
-                        serde_json::to_value(self.database.list_database_profiles().map_err(internal_error)?).map_err(|e| internal_error(e.to_string()))?
+                        serde_json::to_value(
+                            self.database
+                                .list_database_profiles()
+                                .map_err(internal_error)?,
+                        )
+                        .map_err(|e| internal_error(e.to_string()))?
                     }
                     "database.pane.snapshot" => {
                         require_empty_arguments(&request)?;
                         let pane_id = required_resource_id(&request)?;
                         self.require_database_pane(&pane_id)?;
-                        self.side_effects.database_pane_ui_request(&pane_id, PaneUiAction::Snapshot).await.map_err(internal_error)?
+                        self.side_effects
+                            .database_pane_ui_request(&pane_id, PaneUiAction::Snapshot)
+                            .await
+                            .map_err(internal_error)?
                     }
                     "database.pane.fill" => {
                         let pane_id = required_resource_id(&request)?;
                         self.require_database_pane(&pane_id)?;
                         let arguments: DatabasePaneFillArguments = parse_arguments(&request)?;
-                        self.side_effects.database_pane_ui_request(&pane_id, PaneUiAction::Fill { r#ref: arguments.r#ref, value: arguments.value }).await.map_err(internal_error)?
+                        self.side_effects
+                            .database_pane_ui_request(
+                                &pane_id,
+                                PaneUiAction::Fill {
+                                    r#ref: arguments.r#ref,
+                                    value: arguments.value,
+                                },
+                            )
+                            .await
+                            .map_err(internal_error)?
                     }
                     "database.pane.click" => {
                         let pane_id = required_resource_id(&request)?;
                         self.require_database_pane(&pane_id)?;
                         let arguments: DatabasePaneClickArguments = parse_arguments(&request)?;
-                        self.side_effects.database_pane_ui_request(&pane_id, PaneUiAction::Click { r#ref: arguments.r#ref }).await.map_err(internal_error)?
+                        self.side_effects
+                            .database_pane_ui_request(
+                                &pane_id,
+                                PaneUiAction::Click {
+                                    r#ref: arguments.r#ref,
+                                },
+                            )
+                            .await
+                            .map_err(internal_error)?
                     }
                     "agents.list" => {
                         require_empty_arguments(&request)?;
@@ -1607,7 +1706,14 @@ impl LunaControlService for InProcessControlService {
                             })?;
                         let payload = format!("{}\r", arguments.task);
                         self.interactions
-                            .write(&runtime_id, &payload, matches!(caller.kind, ControlCallerKind::Ui | ControlCallerKind::Internal))
+                            .write(
+                                &runtime_id,
+                                &payload,
+                                matches!(
+                                    caller.kind,
+                                    ControlCallerKind::Ui | ControlCallerKind::Internal
+                                ),
+                            )
                             .await?;
                         json!({ "acceptedBytes": arguments.task.len(), "runtimeId": runtime_id })
                     }
@@ -1626,9 +1732,7 @@ impl LunaControlService for InProcessControlService {
                                 retryable: false,
                                 details: None,
                             })?;
-                        self.interactions
-                            .interrupt(&runtime_id)
-                            .await?;
+                        self.interactions.interrupt(&runtime_id).await?;
                         json!({ "interrupted": true, "runtimeId": runtime_id })
                     }
                     "mux.sessions.list" => {
@@ -1952,43 +2056,87 @@ impl LunaControlService for InProcessControlService {
                     }
                     "terminal.runtime.screen.snapshot" => {
                         let args: ScreenSnapshotArguments = parse_arguments(&request)?;
-                        if !(4..=crate::terminal_runtime_contract::TERMINAL_SCREEN_MAX_BYTES).contains(&args.max_bytes) {
+                        if !(4..=crate::terminal_runtime_contract::TERMINAL_SCREEN_MAX_BYTES)
+                            .contains(&args.max_bytes)
+                        {
                             return Err(invalid_arguments("maxBytes must be 4..262144"));
                         }
-                        let matcher = args.cli.as_ref().map(PromptMatcher::new).transpose().map_err(invalid_arguments)?;
-                        let screen = self.backend.screen_snapshot(required_resource_id(&request)?, args.max_bytes).map_err(backend_error)?;
+                        let matcher = args
+                            .cli
+                            .as_ref()
+                            .map(PromptMatcher::new)
+                            .transpose()
+                            .map_err(invalid_arguments)?;
+                        let screen = self
+                            .backend
+                            .screen_snapshot(required_resource_id(&request)?, args.max_bytes)
+                            .map_err(backend_error)?;
                         let cli = matcher.map(|matcher| matcher.observe(&screen));
                         json!({ "screen": screen, "cli": cli })
                     }
                     "terminal.runtime.output.wait" => {
                         let args: OutputWaitArguments = parse_arguments(&request)?;
-                        serde_json::to_value(self.interactions.output_wait(required_resource_id(&request)?, args).await?)
-                            .map_err(|error| internal_error(error.to_string()))?
+                        serde_json::to_value(
+                            self.interactions
+                                .output_wait(required_resource_id(&request)?, args)
+                                .await?,
+                        )
+                        .map_err(|error| internal_error(error.to_string()))?
                     }
                     "terminal.runtime.interact" => {
                         let runtime = required_resource_id(&request)?;
                         let args: InteractArguments = parse_arguments(&request)?;
                         let key = request.idempotency_key.as_deref().unwrap_or_default();
-                        let execution_id = self.interactions.start(&caller.caller_id, runtime, key, &args).await?;
-                        self.interactions.wait(&caller.caller_id, runtime, ExecutionWaitArguments {
-                            execution_id, timeout_ms: args.timeout_ms, max_bytes: args.max_bytes,
-                        }).await?
+                        let execution_id = self
+                            .interactions
+                            .start(&caller.caller_id, runtime, key, &args)
+                            .await?;
+                        self.interactions
+                            .wait(
+                                &caller.caller_id,
+                                runtime,
+                                ExecutionWaitArguments {
+                                    execution_id,
+                                    timeout_ms: args.timeout_ms,
+                                    max_bytes: args.max_bytes,
+                                },
+                            )
+                            .await?
                     }
-                    "terminal.runtime.execution.read" => {
-                        self.interactions.read(&caller.caller_id, required_resource_id(&request)?, parse_arguments::<ExecutionReadArguments>(&request)?)?
-                    }
+                    "terminal.runtime.execution.read" => self.interactions.read(
+                        &caller.caller_id,
+                        required_resource_id(&request)?,
+                        parse_arguments::<ExecutionReadArguments>(&request)?,
+                    )?,
                     "terminal.runtime.execution.wait" => {
-                        self.interactions.wait(&caller.caller_id, required_resource_id(&request)?, parse_arguments::<ExecutionWaitArguments>(&request)?).await?
+                        self.interactions
+                            .wait(
+                                &caller.caller_id,
+                                required_resource_id(&request)?,
+                                parse_arguments::<ExecutionWaitArguments>(&request)?,
+                            )
+                            .await?
                     }
                     "terminal.runtime.execution.cancel" => {
                         let args: ExecutionCancelArguments = parse_arguments(&request)?;
-                        self.interactions.cancel(&caller.caller_id, required_resource_id(&request)?, &args.execution_id)?
+                        self.interactions.cancel(
+                            &caller.caller_id,
+                            required_resource_id(&request)?,
+                            &args.execution_id,
+                        )?
                     }
                     "terminal.runtime.write" => {
                         let runtime_id = required_resource_id(&request)?;
                         let data = required_string(&request, "data", true)?;
                         self.interactions
-                            .write(runtime_id, data, matches!(caller.kind, ControlCallerKind::Ui | ControlCallerKind::Internal))
+                            .write(
+                                runtime_id,
+                                data,
+                                matches!(
+                                    caller.kind,
+                                    ControlCallerKind::Ui | ControlCallerKind::Internal
+                                ),
+                            )
                             .await?;
                         json!({ "acceptedBytes": data.len() })
                     }
@@ -2016,9 +2164,7 @@ impl LunaControlService for InProcessControlService {
                     }
                     "terminal.runtime.interrupt" => {
                         let runtime_id = required_resource_id(&request)?;
-                        self.interactions
-                            .interrupt(runtime_id)
-                            .await?;
+                        self.interactions.interrupt(runtime_id).await?;
                         json!({ "interrupted": true })
                     }
                     "terminal.runtime.close" => {
@@ -2613,10 +2759,17 @@ struct ThemeSetArguments {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct DatabasePaneFillArguments { #[serde(rename = "ref")] r#ref: String, value: String }
+struct DatabasePaneFillArguments {
+    #[serde(rename = "ref")]
+    r#ref: String,
+    value: String,
+}
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct DatabasePaneClickArguments { #[serde(rename = "ref")] r#ref: String }
+struct DatabasePaneClickArguments {
+    #[serde(rename = "ref")]
+    r#ref: String,
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -2859,7 +3012,12 @@ fn audit_arguments(request: &ControlRequest) -> serde_json::Value {
             "valueBytes": request.arguments.get("value").and_then(|value| value.as_str()).map(str::len)
         });
     }
-    if matches!(request.operation.as_str(), "terminal.runtime.interact" | "terminal.runtime.output.wait" | "terminal.runtime.screen.snapshot") {
+    if matches!(
+        request.operation.as_str(),
+        "terminal.runtime.interact"
+            | "terminal.runtime.output.wait"
+            | "terminal.runtime.screen.snapshot"
+    ) {
         return json!({
             "inputBytes": request.arguments.pointer("/input/text").and_then(|v| v.as_str()).map(str::len),
             "timeoutMs": request.arguments.get("timeoutMs"),
@@ -3371,7 +3529,12 @@ mod tests {
         async fn close(&self, _runtime_id: &str) -> TerminalBackendResult<()> {
             Ok(())
         }
-        fn screen_snapshot(&self, runtime_id: &str, max_bytes: usize) -> TerminalBackendResult<crate::terminal_runtime_contract::TerminalScreenSnapshot> {
+        fn screen_snapshot(
+            &self,
+            runtime_id: &str,
+            max_bytes: usize,
+        ) -> TerminalBackendResult<crate::terminal_runtime_contract::TerminalScreenSnapshot>
+        {
             let mut output = crate::terminal_output::OutputBuffer::new(1024);
             output.push(runtime_id, "mysql> ".into());
             Ok(output.screen_snapshot(runtime_id, max_bytes))
@@ -4479,19 +4642,50 @@ mod tests {
         use crate::control_contract::ControlResourceRef;
         let backend = Arc::new(EmptyBackend::ssh_runtime("r"));
         let (service, path) = service_with(backend.clone(), Arc::new(EmptySideEffects));
-        let writer = caller(ControlResourceKind::TerminalRuntime, Some("r"), ControlAccess::Write);
+        let writer = caller(
+            ControlResourceKind::TerminalRuntime,
+            Some("r"),
+            ControlAccess::Write,
+        );
         let request = ControlRequest {
-            contract_version: CONTROL_CONTRACT_VERSION, request_id: "interaction".into(),
+            contract_version: CONTROL_CONTRACT_VERSION,
+            request_id: "interaction".into(),
             operation: "terminal.runtime.interact".into(),
-            resource: Some(ControlResourceRef { kind: ControlResourceKind::TerminalRuntime, id: "r".into() }),
+            resource: Some(ControlResourceRef {
+                kind: ControlResourceKind::TerminalRuntime,
+                id: "r".into(),
+            }),
             arguments: json!({ "input": { "type": "text", "text": "private-input", "submit": true },
                 "wait": { "text": "private-prompt" }, "timeoutMs": 0 }),
-            idempotency_key: Some("private-key".into()), approval_id: None,
+            idempotency_key: Some("private-key".into()),
+            approval_id: None,
         };
-        let reader = caller(ControlResourceKind::TerminalRuntime, Some("r"), ControlAccess::Read);
-        assert_eq!(service.invoke(&reader, request.clone()).await.unwrap_err().code, ControlErrorCode::Unauthorized);
-        let outsider = caller(ControlResourceKind::TerminalRuntime, Some("other"), ControlAccess::Write);
-        assert_eq!(service.invoke(&outsider, request.clone()).await.unwrap_err().code, ControlErrorCode::Unauthorized);
+        let reader = caller(
+            ControlResourceKind::TerminalRuntime,
+            Some("r"),
+            ControlAccess::Read,
+        );
+        assert_eq!(
+            service
+                .invoke(&reader, request.clone())
+                .await
+                .unwrap_err()
+                .code,
+            ControlErrorCode::Unauthorized
+        );
+        let outsider = caller(
+            ControlResourceKind::TerminalRuntime,
+            Some("other"),
+            ControlAccess::Write,
+        );
+        assert_eq!(
+            service
+                .invoke(&outsider, request.clone())
+                .await
+                .unwrap_err()
+                .code,
+            ControlErrorCode::Unauthorized
+        );
         assert!(backend.writes.lock().unwrap().is_empty());
         let first = service.invoke(&writer, request.clone()).await.unwrap();
         tokio::task::yield_now().await;
@@ -4502,48 +4696,115 @@ mod tests {
         assert!(service.idempotent_results.lock().unwrap().is_empty());
         let mut missing_key = request;
         missing_key.idempotency_key = None;
-        assert_eq!(service.invoke(&writer, missing_key).await.unwrap_err().code, ControlErrorCode::InvalidArguments);
+        assert_eq!(
+            service.invoke(&writer, missing_key).await.unwrap_err().code,
+            ControlErrorCode::InvalidArguments
+        );
         let mut read = ControlRequest {
-            contract_version: CONTROL_CONTRACT_VERSION, request_id: "read".into(),
+            contract_version: CONTROL_CONTRACT_VERSION,
+            request_id: "read".into(),
             operation: "terminal.runtime.execution.read".into(),
-            resource: Some(ControlResourceRef { kind: ControlResourceKind::TerminalRuntime, id: "r".into() }),
-            arguments: json!({ "executionId": first.result["executionId"] }), idempotency_key: None, approval_id: None,
+            resource: Some(ControlResourceRef {
+                kind: ControlResourceKind::TerminalRuntime,
+                id: "r".into(),
+            }),
+            arguments: json!({ "executionId": first.result["executionId"] }),
+            idempotency_key: None,
+            approval_id: None,
         };
-        assert_eq!(service.invoke(&outsider, read.clone()).await.unwrap_err().code, ControlErrorCode::Unauthorized);
-        let mut another_owner = writer.clone(); another_owner.caller_id = "different-agent".into();
-        assert_eq!(service.invoke(&another_owner, read.clone()).await.unwrap_err().code, ControlErrorCode::NotFound);
+        assert_eq!(
+            service
+                .invoke(&outsider, read.clone())
+                .await
+                .unwrap_err()
+                .code,
+            ControlErrorCode::Unauthorized
+        );
+        let mut another_owner = writer.clone();
+        another_owner.caller_id = "different-agent".into();
+        assert_eq!(
+            service
+                .invoke(&another_owner, read.clone())
+                .await
+                .unwrap_err()
+                .code,
+            ControlErrorCode::NotFound
+        );
         read.operation = "terminal.runtime.execution.cancel".into();
         service.invoke(&writer, read).await.unwrap();
         assert!(backend.interrupts.lock().unwrap().is_empty());
         let audit = serde_json::to_string(&service.read_events(&writer, 0, 100).unwrap()).unwrap();
-        assert!(!audit.contains("private-input")); assert!(!audit.contains("private-prompt")); assert!(!audit.contains("private-key"));
-        let stored = serde_json::to_string(&service.database.list_control_audit(100).unwrap()).unwrap();
-        assert!(!stored.contains("private-input")); assert!(!stored.contains("private-prompt")); assert!(!stored.contains("private-key"));
-        drop(service); let _ = std::fs::remove_file(path);
+        assert!(!audit.contains("private-input"));
+        assert!(!audit.contains("private-prompt"));
+        assert!(!audit.contains("private-key"));
+        let stored =
+            serde_json::to_string(&service.database.list_control_audit(100).unwrap()).unwrap();
+        assert!(!stored.contains("private-input"));
+        assert!(!stored.contains("private-prompt"));
+        assert!(!stored.contains("private-key"));
+        drop(service);
+        let _ = std::fs::remove_file(path);
     }
 
     #[tokio::test]
     async fn terminal_screen_control_is_scoped_and_redacts_cli_rules() {
         use crate::control_contract::ControlResourceRef;
-        let (service, path) = service_with(Arc::new(EmptyBackend::ssh_runtime("r")), Arc::new(EmptySideEffects));
-        let reader = caller(ControlResourceKind::TerminalRuntime, Some("r"), ControlAccess::Read);
+        let (service, path) = service_with(
+            Arc::new(EmptyBackend::ssh_runtime("r")),
+            Arc::new(EmptySideEffects),
+        );
+        let reader = caller(
+            ControlResourceKind::TerminalRuntime,
+            Some("r"),
+            ControlAccess::Read,
+        );
         let request = ControlRequest {
-            contract_version: CONTROL_CONTRACT_VERSION, request_id: "screen".into(), operation: "terminal.runtime.screen.snapshot".into(),
-            resource: Some(ControlResourceRef { kind: ControlResourceKind::TerminalRuntime, id: "r".into() }),
-            arguments: json!({ "cli": { "profile":"mysql" } }), idempotency_key: None, approval_id: None,
+            contract_version: CONTROL_CONTRACT_VERSION,
+            request_id: "screen".into(),
+            operation: "terminal.runtime.screen.snapshot".into(),
+            resource: Some(ControlResourceRef {
+                kind: ControlResourceKind::TerminalRuntime,
+                id: "r".into(),
+            }),
+            arguments: json!({ "cli": { "profile":"mysql" } }),
+            idempotency_key: None,
+            approval_id: None,
         };
-        let outsider = caller(ControlResourceKind::TerminalRuntime, Some("other"), ControlAccess::Read);
-        assert_eq!(service.invoke(&outsider, request.clone()).await.unwrap_err().code, ControlErrorCode::Unauthorized);
-        let result = service.invoke(&reader, request.clone()).await.unwrap().result;
+        let outsider = caller(
+            ControlResourceKind::TerminalRuntime,
+            Some("other"),
+            ControlAccess::Read,
+        );
+        assert_eq!(
+            service
+                .invoke(&outsider, request.clone())
+                .await
+                .unwrap_err()
+                .code,
+            ControlErrorCode::Unauthorized
+        );
+        let result = service
+            .invoke(&reader, request.clone())
+            .await
+            .unwrap()
+            .result;
         assert_eq!(result["screen"]["cursorCol"], 7);
         assert_eq!(result["cli"]["state"], "prompt");
-        let mut custom = request.clone(); custom.arguments = json!({ "cli":{"rules":[{"state":"prompt","pattern":"private-cli-marker"}]} });
+        let mut custom = request.clone();
+        custom.arguments =
+            json!({ "cli":{"rules":[{"state":"prompt","pattern":"private-cli-marker"}]} });
         service.invoke(&reader, custom).await.unwrap();
-        let stored = serde_json::to_string(&service.database.list_control_audit(100).unwrap()).unwrap();
+        let stored =
+            serde_json::to_string(&service.database.list_control_audit(100).unwrap()).unwrap();
         assert!(!stored.contains("private-cli-marker"));
-        let mut invalid = request; invalid.arguments = json!({"maxBytes":262145});
-        assert_eq!(service.invoke(&reader, invalid).await.unwrap_err().code, ControlErrorCode::InvalidArguments);
-        drop(service); let _ = std::fs::remove_file(path);
+        let mut invalid = request;
+        invalid.arguments = json!({"maxBytes":262145});
+        assert_eq!(
+            service.invoke(&reader, invalid).await.unwrap_err().code,
+            ControlErrorCode::InvalidArguments
+        );
+        drop(service);
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

@@ -1,9 +1,33 @@
 const bracketedPasteStart = '\x1b[200~'
 const bracketedPasteEnd = '\x1b[201~'
-const defaultCodexLaunchProfileId = 'codex.default'
+const launchProfileAdapters: Record<string, string> = {
+  'codex.default': 'codex',
+  'claude-code.default': 'claude-code',
+  'grok-build.default': 'grok-build',
+  'codex.auto': 'codex',
+  'claude-code.auto': 'claude-code',
+  'grok-build.auto': 'grok-build'
+}
+
+export type AgentImagePasteMode = 'control-v' | 'alt-v'
+
+const defaultImagePasteMode: AgentImagePasteMode = 'control-v'
+const imagePasteModes: Record<string, AgentImagePasteMode> = {
+  codex: 'control-v',
+  'claude-code': 'alt-v',
+  'grok-build': 'control-v'
+}
 
 export function agentAdapterId(adapterId: string | undefined, launchProfileId: string): string | undefined {
-  return adapterId ?? (launchProfileId === defaultCodexLaunchProfileId ? 'codex' : undefined)
+  return adapterId ?? launchProfileAdapters[launchProfileId]
+}
+
+/** Return the terminal sequence expected by the active Agent for an image paste. */
+export function agentImagePasteInput(adapterId: string | undefined, platform: string): string {
+  const mode = imagePasteModes[adapterId ?? ''] ?? defaultImagePasteMode
+  // Claude Code uses Alt+V on Windows; terminal emulators encode that as ESC + v.
+  if (mode === 'alt-v' && platform === 'win32') return '\x1bv'
+  return '\x16'
 }
 
 export function codexMultilinePastePayload(text: string): string | undefined {

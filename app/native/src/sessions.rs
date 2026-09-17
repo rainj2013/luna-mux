@@ -1292,6 +1292,7 @@ impl SessionManager {
         id: &str,
         command: &str,
         requires_hook_helper: bool,
+        requires_tcp_helper: bool,
     ) -> Result<(), String> {
         let active = self.get(id)?;
         // Remote integration no longer requires Python. Hook forwarding uses
@@ -1301,10 +1302,16 @@ impl SessionManager {
         } else {
             ""
         };
+        let tcp_tools = if requires_tcp_helper {
+            " && (command -v socat >/dev/null 2>&1 || command -v nc >/dev/null 2>&1 || command -v ncat >/dev/null 2>&1 || command -v bash >/dev/null 2>&1)"
+        } else {
+            ""
+        };
         let requirements = format!(
-            "({}) >/dev/null 2>&1{} && (command -v socat >/dev/null 2>&1 || command -v nc >/dev/null 2>&1 || command -v ncat >/dev/null 2>&1 || command -v bash >/dev/null 2>&1)",
+            "({}) >/dev/null 2>&1{}{}",
             remote_agent_command_lookup(command),
             hook_tools,
+            tcp_tools,
         );
         let probe = remote_interactive_shell_fallback(&requirements);
         self.exec_remote(&active, &probe)
@@ -1313,14 +1320,23 @@ impl SessionManager {
             .map_err(|error| match error {
                 RemoteExecError::Unavailable => "远端 SSH 服务器不支持命令探测".into(),
                 RemoteExecError::Timeout => "远端 Agent 依赖检查超时".into(),
-                RemoteExecError::Failed(_) => format!(
-                    "远端需要可用的 {command}，以及 socat/nc/ncat/bash 中的 TCP 工具{}",
-                    if requires_hook_helper {
-                        " 和 curl/wget"
-                    } else {
-                        ""
+                RemoteExecError::Failed(_) => {
+                    let mut dependencies = Vec::new();
+                    if requires_tcp_helper {
+                        dependencies.push("socat/nc/ncat/bash 中的 TCP 工具");
                     }
-                ),
+                    if requires_hook_helper {
+                        dependencies.push("curl/wget");
+                    }
+                    if dependencies.is_empty() {
+                        format!("远端需要可用的 {command}")
+                    } else {
+                        format!(
+                            "远端需要可用的 {command}，以及{}",
+                            dependencies.join(" 和 ")
+                        )
+                    }
+                }
             })
     }
 
@@ -1336,7 +1352,7 @@ impl SessionManager {
         runtime_id: &str,
         hook_endpoint: &str,
         hook_token: &str,
-        mcp_token: &str,
+        mcp_token: Option<&str>,
         browser_bridge: Option<(u16, &str)>,
     ) -> Result<String, String> {
         let runtime_root = self.remote_agent_runtime_root(id, runtime_id).await?;
@@ -1373,7 +1389,7 @@ impl SessionManager {
         let path = format!("{runtime_root}/agent.env");
         let sftp = self.sftp(id).await?;
         let contents =
-            agent_environment_contents(hook_endpoint, hook_token, mcp_token, browser_bridge);
+            agent_environment_contents(hook_endpoint, hook_token, Some(mcp_token), browser_bridge);
         let mut metadata = FileAttributes::empty();
         metadata.permissions = Some(0o600);
         let mut file = sftp
@@ -1723,15 +1739,20 @@ impl SessionManager {
 fn agent_environment_contents(
     hook_endpoint: &str,
     hook_token: &str,
-    mcp_token: &str,
+    mcp_token: Option<&str>,
     browser_bridge: Option<(u16, &str)>,
 ) -> String {
     let mut contents = format!(
-        "LUNA_MUX_HOOK_ENDPOINT={}\nLUNA_MUX_HOOK_AUTHORIZATION={}\nLUNA_MUX_MCP_AUTHORIZATION={}\n",
+        "LUNA_MUX_HOOK_ENDPOINT={}\nLUNA_MUX_HOOK_AUTHORIZATION={}\n",
         shell_quote(hook_endpoint),
         shell_quote(hook_token),
-        shell_quote(mcp_token),
     );
+    if let Some(mcp_token) = mcp_token {
+        contents.push_str(&format!(
+            "LUNA_MUX_MCP_AUTHORIZATION={}\n",
+            shell_quote(mcp_token),
+        ));
+    }
     if let Some((port, token)) = browser_bridge {
         contents.push_str(&format!(
             "LUNA_MUX_BROWSER_BRIDGE_PORT={}\nLUNA_MUX_BROWSER_BRIDGE_TOKEN={}\n",
@@ -1789,7 +1810,7 @@ mod agent_hook_forwarder_tests {
         let contents = agent_environment_contents(
             "http://127.0.0.1:43127/v1/hooks",
             "lmxh_hook-secret",
-            "lmx_control-secret",
+            Some("lmx_control-secret"),
             Some((43129, "lmxbm_browser-secret")),
         );
         assert!(contents.contains("LUNA_MUX_HOOK_ENDPOINT='http://127.0.0.1:43127/v1/hooks'"));
@@ -1798,6 +1819,20 @@ mod agent_hook_forwarder_tests {
         assert!(contents.contains("LUNA_MUX_BROWSER_BRIDGE_PORT='43129'"));
         assert!(contents.contains("LUNA_MUX_BROWSER_BRIDGE_TOKEN='lmxbm_browser-secret'"));
         assert_eq!(contents.lines().count(), 5);
+    }
+
+    #[test]
+    fn tracking_only_environment_omits_mcp_and_browser_credentials() {
+        let contents = agent_environment_contents(
+            "http://127.0.0.1:43127/v1/hooks",
+            "lmxh_hook-secret",
+            None,
+            None,
+        );
+        assert!(contents.contains("LUNA_MUX_HOOK_AUTHORIZATION='lmxh_hook-secret'"));
+        assert!(!contents.contains("LUNA_MUX_MCP_AUTHORIZATION"));
+        assert!(!contents.contains("LUNA_MUX_BROWSER_BRIDGE"));
+        assert_eq!(contents.lines().count(), 2);
     }
 }
 
