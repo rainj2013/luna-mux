@@ -267,7 +267,11 @@ impl TerminalBackend for InProcessSshTerminalBackend {
                 runtime.runtime_id.clone(),
                 RuntimeRecord {
                     runtime: runtime.clone(),
-                    output: OutputBuffer::with_size(OUTPUT_CAPACITY_BYTES, request.rows, request.cols),
+                    output: OutputBuffer::with_size(
+                        OUTPUT_CAPACITY_BYTES,
+                        request.rows,
+                        request.cols,
+                    ),
                     initial_input,
                     close_requested: false,
                 },
@@ -311,7 +315,12 @@ impl TerminalBackend for InProcessSshTerminalBackend {
 
     async fn resize(&self, runtime_id: &str, cols: u32, rows: u32) -> TerminalBackendResult<()> {
         self.sessions.resize(runtime_id, cols, rows).await?;
-        if let Some(record) = self.runtimes.write().map_err(|_| "SSH Runtime 状态锁已损坏")?.get_mut(runtime_id) {
+        if let Some(record) = self
+            .runtimes
+            .write()
+            .map_err(|_| "SSH Runtime 状态锁已损坏")?
+            .get_mut(runtime_id)
+        {
             record.output.resize_screen(rows, cols);
         }
         Ok(())
@@ -350,9 +359,18 @@ impl TerminalBackend for InProcessSshTerminalBackend {
         Ok(())
     }
 
-    fn screen_snapshot(&self, runtime_id: &str, max_bytes: usize) -> TerminalBackendResult<crate::terminal_runtime_contract::TerminalScreenSnapshot> {
-        let runtimes = self.runtimes.read().map_err(|_| "SSH Runtime 状态锁已损坏")?;
-        let record = runtimes.get(runtime_id).ok_or_else(|| "终端 Runtime 不存在".to_string())?;
+    fn screen_snapshot(
+        &self,
+        runtime_id: &str,
+        max_bytes: usize,
+    ) -> TerminalBackendResult<crate::terminal_runtime_contract::TerminalScreenSnapshot> {
+        let runtimes = self
+            .runtimes
+            .read()
+            .map_err(|_| "SSH Runtime 状态锁已损坏")?;
+        let record = runtimes
+            .get(runtime_id)
+            .ok_or_else(|| "终端 Runtime 不存在".to_string())?;
         Ok(record.output.screen_snapshot(runtime_id, max_bytes))
     }
 
