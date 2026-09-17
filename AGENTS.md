@@ -6,6 +6,12 @@
 - For cross-module changes, or changes to Tauri commands, Rust services, shared state, contracts, persistence, MCP/Hook, security, process lifecycle, terminal/PTY, browser runtime, WSL, or SSH, read and follow `docs/AI_DEVELOPMENT_GUIDELINES.md` before editing.
 - If a fast-path task expands into one of those areas, stop and switch to the full workflow.
 
+## Local Node.js toolchain
+
+- On all development platforms, including Windows and macOS, this repository's Node.js installation is managed by `fnm` and the version is selected by `.node-version`.
+- Non-interactive shells may not have the fnm environment on `PATH`. Before running `node`, `npm`, or project scripts, initialize it in the same shell command. Use `fnm env --use-on-cd --shell powershell | Out-String | Invoke-Expression` in PowerShell, or `eval "$(fnm env --use-on-cd --shell zsh)"` in macOS zsh.
+- Do not conclude that Node.js is unavailable, install another Node.js runtime, or switch package managers before attempting the fnm initialization above. Use `npm` and the checked-in `package-lock.json` for dependencies and scripts unless the user explicitly requests otherwise.
+
 ## Cross-platform terminal compatibility
 
 - When changing terminal, PTY, agent launch/injection, hook/MCP, browser runtime, WSL, or SSH remote features, keep behavior compatible across macOS, Windows PowerShell 5.1, PowerShell 7, WSL local terminals, and SSH remote terminals.
