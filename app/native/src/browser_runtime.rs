@@ -132,6 +132,10 @@ struct AgentBrowserMcpConfig {
     content_boundaries: bool,
     max_output: u32,
     pin_tab: bool,
+    /// Keep page-initiated downloads inside the product data directory instead
+    /// of the user's default Downloads folder, so browser downloads stay
+    /// isolated with the rest of the Session's browser state.
+    download_path: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -296,6 +300,18 @@ impl BrowserRuntimeManager {
         })
     }
 
+    /// Root directory holding every artifact the manager owns.  It is derived
+    /// from the registry path rather than from the environment so that a manager
+    /// built for a test stays inside its own data directory instead of writing
+    /// to the real product data directory.
+    fn data_root(&self) -> PathBuf {
+        data_root_from_registry_path(&self.registry_path).unwrap_or_else(browser_data_root)
+    }
+
+    fn download_dir(&self, mux_session_id: &str) -> PathBuf {
+        browser_download_dir_under(&self.data_root(), &agent_browser_scope(mux_session_id))
+    }
+
     pub fn discover_chrome(&self) -> Option<ChromeInstallation> {
         discover_chrome()
     }
@@ -419,6 +435,18 @@ impl BrowserRuntimeManager {
             )
         })?;
         mark_chrome_profile_clean(&profile_path)?;
+        // The agent-browser config only carries the download directory, so it
+        // must exist before the Agent can trigger a download.  Failing here is
+        // deliberate: it is the same class of failure as an unusable profile
+        // directory, and a silent fallback would let the user believe downloads
+        // land in the product data directory when they do not.
+        let download_dir = self.download_dir(&mux_session_id);
+        std::fs::create_dir_all(&download_dir).map_err(|error| {
+            format!(
+                "无法创建浏览器下载目录 {}: {error}",
+                download_dir.display()
+            )
+        })?;
         let port = self.take_session_cdp_port(&mux_session_id)?;
         let mut command = Command::new(&installation.executable_path);
         command
@@ -1032,7 +1060,7 @@ pub fn try_run_mcp_browser(args: &[String]) -> Option<i32> {
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
-    if let Err(error) = ensure_agent_browser_mcp_config(&config_path, cdp_port) {
+    if let Err(error) = ensure_agent_browser_mcp_config(&config_path, &scope, cdp_port) {
         let _ = std::fs::remove_file(&config_path);
         eprintln!("Luna Mux 无法恢复 Browser MCP 配置：{error}");
         return Some(1);
@@ -1130,7 +1158,7 @@ where
         // discarding stderr turns the actual startup error into an opaque
         // handshake failure.
         .stderr(Stdio::piped());
-    ensure_agent_browser_mcp_config(&config_path, cdp_port)?;
+    ensure_agent_browser_mcp_config(&config_path, &scope, cdp_port)?;
     let mut child = match tokio::process::Command::from(command).spawn() {
         Ok(child) => child,
         Err(error) => {
@@ -1471,16 +1499,17 @@ fn create_agent_browser_mcp_config(scope: &str, cdp_port: u16) -> Result<PathBuf
     let root = std::env::temp_dir().join("luna-mux").join("agent-browser");
     std::fs::create_dir_all(&root).map_err(|error| error.to_string())?;
     let path = root.join(format!("{scope}-{}.json", Uuid::new_v4()));
-    write_agent_browser_mcp_config(&path, cdp_port)?;
+    write_agent_browser_mcp_config(&path, scope, cdp_port)?;
     Ok(path)
 }
 
-fn write_agent_browser_mcp_config(path: &Path, cdp_port: u16) -> Result<(), String> {
+fn write_agent_browser_mcp_config(path: &Path, scope: &str, cdp_port: u16) -> Result<(), String> {
     let config = AgentBrowserMcpConfig {
         cdp: cdp_port.to_string(),
         content_boundaries: true,
         max_output: 50_000,
         pin_tab: true,
+        download_path: agent_browser_download_dir(scope).to_string_lossy().into_owned(),
     };
     let contents = serde_json::to_vec_pretty(&config).map_err(|error| error.to_string())?;
     let parent = path
@@ -1490,11 +1519,11 @@ fn write_agent_browser_mcp_config(path: &Path, cdp_port: u16) -> Result<(), Stri
     std::fs::write(path, contents).map_err(|error| error.to_string())
 }
 
-fn ensure_agent_browser_mcp_config(path: &Path, cdp_port: u16) -> Result<(), String> {
+fn ensure_agent_browser_mcp_config(path: &Path, scope: &str, cdp_port: u16) -> Result<(), String> {
     if path.exists() {
         Ok(())
     } else {
-        write_agent_browser_mcp_config(path, cdp_port)
+        write_agent_browser_mcp_config(path, scope, cdp_port)
     }
 }
 
@@ -1705,14 +1734,58 @@ async fn close_agent_browser_session(mux_session_id: &str) {
     .await;
 }
 
-fn browser_registry_path() -> PathBuf {
-    if let Some(path) = std::env::var_os("LUNA_MUX_BROWSER_REGISTRY_PATH") {
-        return PathBuf::from(path);
+/// Luna Mux data directory, as seen from any process that writes an
+/// agent-browser configuration.  The app hands Agents the absolute registry
+/// path via `LUNA_MUX_BROWSER_REGISTRY_PATH`, whose parent is this directory;
+/// the fallback matches Tauri's `app_data_dir()` for the `com.luna.mux`
+/// identifier so the app process resolves the same directory without extra
+/// plumbing.  This is the single derivation, so the app, the MCP shim, and the
+/// remote bridge always agree.
+fn browser_data_root() -> PathBuf {
+    if let Some(path) = std::env::var_os("LUNA_MUX_BROWSER_REGISTRY_PATH")
+        && let Some(root) = data_root_from_registry_path(Path::new(&path))
+    {
+        return root;
     }
     dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("com.luna.mux")
-        .join("browser-runtimes.json")
+}
+
+/// Parent directory of the browser registry file.  A bare filename has an empty
+/// parent, which would resolve the data directory to the process working
+/// directory; treat that as unresolvable and fall back instead.
+fn data_root_from_registry_path(registry_path: &Path) -> Option<PathBuf> {
+    registry_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+}
+
+fn browser_registry_path() -> PathBuf {
+    if let Some(path) = std::env::var_os("LUNA_MUX_BROWSER_REGISTRY_PATH") {
+        return PathBuf::from(path);
+    }
+    browser_data_root().join("browser-runtimes.json")
+}
+
+/// Downloads initiated by a page land here rather than in the user's default
+/// Downloads folder.  `scope` is already the stable, filesystem-safe per-Session
+/// token used for the agent-browser session and config file, so it is reused
+/// here instead of deriving a second identifier.  The directory is created when
+/// the Browser Runtime starts; this only computes the path.
+fn browser_download_dir_under(data_root: &Path, scope: &str) -> PathBuf {
+    data_root.join("browser-downloads").join(scope)
+}
+
+/// Download directory for a caller that has no manager and can only resolve the
+/// data directory from the environment: the MCP shim process and the remote
+/// bridge.  The app process derives the same directory from the manager's
+/// registry path (see `BrowserRuntimeManager::download_dir`) so that the path
+/// written into the agent-browser configuration matches the one the app
+/// creates.
+fn agent_browser_download_dir(scope: &str) -> PathBuf {
+    browser_download_dir_under(&browser_data_root(), scope)
 }
 
 fn validate_selector(selector: &str) -> Result<&str, String> {
@@ -2705,7 +2778,66 @@ mod tests {
         assert_eq!(config["contentBoundaries"], true);
         assert_eq!(config["maxOutput"], 50_000);
         assert_eq!(config["pinTab"], true);
+        assert!(
+            config["downloadPath"]
+                .as_str()
+                .expect("downloadPath is a string")
+                .ends_with("browser-downloads/luna-mux-session-1")
+                || config["downloadPath"]
+                    .as_str()
+                    .expect("downloadPath is a string")
+                    .ends_with("browser-downloads\\luna-mux-session-1"),
+            "downloads must stay inside the product data directory: {config}"
+        );
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn browser_data_root_ignores_a_registry_path_without_a_directory() {
+        assert_eq!(
+            super::data_root_from_registry_path(std::path::Path::new(
+                "/data/com.luna.mux/browser-runtimes.json"
+            )),
+            Some(std::path::PathBuf::from("/data/com.luna.mux"))
+        );
+        // A bare filename must not resolve the data directory to the current
+        // working directory.
+        assert_eq!(
+            super::data_root_from_registry_path(std::path::Path::new("browser-runtimes.json")),
+            None
+        );
+    }
+
+    #[test]
+    fn browser_downloads_are_scoped_under_the_given_data_root() {
+        let root = std::path::Path::new("/data/com.luna.mux");
+        assert_eq!(
+            super::browser_download_dir_under(root, "lm-session-scope"),
+            std::path::PathBuf::from("/data/com.luna.mux/browser-downloads/lm-session-scope")
+        );
+        // Deriving the path must not touch the filesystem; the directory is
+        // created when the Browser Runtime starts.
+        assert!(!super::browser_download_dir_under(root, "lm-session-scope").exists());
+    }
+
+    /// A test manager owns its own data directory, so downloads started by the
+    /// browser it launches must land there rather than in the real product data
+    /// directory of the user running the tests.
+    #[test]
+    fn manager_downloads_stay_inside_the_managers_own_data_root() {
+        let root = std::env::temp_dir().join(format!("luna-mux-browser-test-{}", Uuid::new_v4()));
+        let manager = BrowserRuntimeManager::new_for_test(&root);
+        let download_dir = manager.download_dir("integration-session");
+        assert_eq!(
+            download_dir,
+            root.join("browser-downloads")
+                .join(super::agent_browser_scope("integration-session"))
+        );
+        assert!(
+            download_dir.starts_with(&root),
+            "downloads escaped the manager data root: {}",
+            download_dir.display()
+        );
     }
 
     #[test]
@@ -2771,7 +2903,7 @@ mod tests {
             Uuid::new_v4()
         ));
         let path = root.join("session.json");
-        ensure_agent_browser_mcp_config(&path, 43_129).unwrap();
+        ensure_agent_browser_mcp_config(&path, "luna-mux-session-1", 43_129).unwrap();
         let config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(config["cdp"], "43129");
         let _ = std::fs::remove_dir_all(root);
