@@ -378,7 +378,7 @@ export interface DatabaseSqlExport { tables: number; rows: number; bytes: number
 export interface DatabaseSqlExportProgress { operationId: string; current: number; total: number; table?: string | null }
 export type DatabasePaneUiAction = { action: 'snapshot' } | { action: 'fill'; ref: string; value: string } | { action: 'click'; ref: string }
 export interface DatabasePaneUiRequest { requestId: string; paneId: string; mountId: string; action: DatabasePaneUiAction }
-export interface DatabaseColumnInfo { name: string; dataType: string; notNull: boolean; primaryKey: boolean; defaultValue?: string | null; comment?: string | null }
+export interface DatabaseColumnInfo { name: string; dataType: string; length?: string | null; notNull: boolean; primaryKey: boolean; defaultValue?: string | null; comment?: string | null }
 export interface DatabaseForeignKeyInfo { column: string; referencesTable: string; referencesColumn: string; onUpdate: string; onDelete: string }
 export interface DatabaseIndexInfo { name: string; unique: boolean }
 
