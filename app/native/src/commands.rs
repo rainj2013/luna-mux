@@ -50,7 +50,7 @@ use crate::{
     ssh_config,
     ssh_terminal_backend::InProcessSshTerminalBackend,
     terminal_backend::TerminalBackend,
-    terminal_input_diagnostics::TerminalInputDiagnostics,
+    terminal_input_diagnostics::{TerminalInputDiagnostics, TerminalUiDiagnosticEvent},
     terminal_runtime_contract::{
         TerminalRuntime, TerminalRuntimeAuthentication, TerminalRuntimeContext,
         TerminalRuntimeCreateRequest, TerminalRuntimeOutputReadResult, TerminalTarget,
@@ -2087,12 +2087,59 @@ pub async fn terminal_runtime_write(
 ) -> Result<(), String> {
     let diagnostics = state.terminal_input_diagnostics.clone();
     let interactions = state.control.interactions.clone();
+    diagnostics.record_runtime_event(
+        &runtime_id,
+        "terminal_input_received",
+        json!({
+            "byteLen": data.len(),
+            "clientInputId": client_input_id,
+            "inputKind": terminal_input_kind(&data),
+        }),
+    );
     let observation = diagnostics.observe("runtime_command", &runtime_id, &data, client_input_id);
-    let result = interactions.write(&runtime_id, &data, true).await.map_err(|error| error.message);
+    let started = std::time::Instant::now();
+    let result = interactions
+        .write(&runtime_id, &data, true)
+        .await
+        .map_err(|error| error.message);
+    diagnostics.record_runtime_event(
+        &runtime_id,
+        "terminal_input_completed",
+        json!({
+            "clientInputId": client_input_id,
+            "elapsedMs": started.elapsed().as_millis(),
+            "status": if result.is_ok() { "ok" } else { "error" },
+        }),
+    );
     if let Some(observation) = observation {
         diagnostics.record_observation(observation, if result.is_ok() { "ok" } else { "error" });
     }
     result
+}
+
+fn terminal_input_kind(data: &str) -> &'static str {
+    if data.chars().all(char::is_control) {
+        "control"
+    } else if data.is_ascii() {
+        "ascii"
+    } else {
+        "nonAscii"
+    }
+}
+
+#[tauri::command]
+pub async fn terminal_runtime_record_ui_diagnostic(
+    state: State<'_, AppState>,
+    runtime_id: String,
+    event: TerminalUiDiagnosticEvent,
+) -> Result<(), String> {
+    if runtime_id.trim().is_empty() {
+        return Err("终端 Runtime ID 不能为空".into());
+    }
+    state
+        .terminal_input_diagnostics
+        .record_ui_event(&runtime_id, event);
+    Ok(())
 }
 
 #[tauri::command]
@@ -2121,7 +2168,12 @@ pub async fn terminal_runtime_interrupt(
     state: State<'_, AppState>,
     runtime_id: String,
 ) -> Result<(), String> {
-    state.control.interactions.interrupt(&runtime_id).await.map_err(|error| error.message)
+    state
+        .control
+        .interactions
+        .interrupt(&runtime_id)
+        .await
+        .map_err(|error| error.message)
 }
 
 #[tauri::command]
@@ -2142,7 +2194,12 @@ pub async fn sessions_write(
     id: String,
     data: String,
 ) -> Result<(), String> {
-    state.control.interactions.write(&id, &data, true).await.map_err(|error| error.message)
+    state
+        .control
+        .interactions
+        .write(&id, &data, true)
+        .await
+        .map_err(|error| error.message)
 }
 #[tauri::command]
 pub async fn sessions_resize(

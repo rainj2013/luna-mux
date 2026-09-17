@@ -34,12 +34,12 @@ mod shell_quoting;
 mod ssh_config;
 mod ssh_terminal_backend;
 mod terminal_backend;
-mod terminal_input_diagnostics;
-mod terminal_output;
-mod terminal_screen;
 mod terminal_cli;
+mod terminal_input_diagnostics;
 mod terminal_interaction;
+mod terminal_output;
 mod terminal_runtime_contract;
+mod terminal_screen;
 mod transfers;
 mod tunnels;
 #[cfg(target_os = "windows")]
@@ -220,6 +220,10 @@ pub fn run() {
             let terminal_input_diagnostics = Arc::new(TerminalInputDiagnostics::new(
                 data_dir.join("logs"),
             ));
+            // Installed before any backend starts, so a panic under a runtime's
+            // output lock is recorded with its source location. The default hook
+            // writes to a stderr this GUI build discards.
+            terminal_input_diagnostics::install_panic_hook(terminal_input_diagnostics.clone());
             local_pty_backend.set_input_diagnostics(terminal_input_diagnostics.clone());
             let terminal_backend = CompositeTerminalBackend::new(
                 ssh_terminal_backend.clone(),
@@ -514,6 +518,7 @@ pub fn run() {
             terminal_runtimes_list,
             terminal_runtime_read_output,
             terminal_runtime_write,
+            terminal_runtime_record_ui_diagnostic,
             terminal_runtime_resize,
             terminal_runtime_flow,
             terminal_runtime_interrupt,

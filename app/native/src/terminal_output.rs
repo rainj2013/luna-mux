@@ -41,12 +41,29 @@ impl OutputBuffer {
         self.screen.resize(rows, cols);
     }
 
-    pub fn screen_snapshot(&self, runtime_id: &str, max_bytes: usize) -> crate::terminal_runtime_contract::TerminalScreenSnapshot {
-        self.screen.snapshot(runtime_id, self.next_cursor, max_bytes)
+    pub fn screen_snapshot(
+        &self,
+        runtime_id: &str,
+        max_bytes: usize,
+    ) -> crate::terminal_runtime_contract::TerminalScreenSnapshot {
+        self.screen
+            .snapshot(runtime_id, self.next_cursor, max_bytes)
     }
 
     pub fn next_cursor(&self) -> u64 {
         self.next_cursor
+    }
+
+    /// Number of vt100 panics the auxiliary screen contained. Output keeps
+    /// flowing either way; this says how often the screen had to restart.
+    pub fn screen_recoveries(&self) -> u64 {
+        self.screen.recoveries()
+    }
+
+    /// Recoveries whose screen contents could not be restored, leaving the
+    /// auxiliary screen empty from that point on.
+    pub fn degraded_screen_recoveries(&self) -> u64 {
+        self.screen.degraded_recoveries()
     }
 
     pub fn push(&mut self, runtime_id: &str, data: String) -> TerminalRuntimeOutputEvent {
@@ -163,5 +180,26 @@ mod tests {
         assert_eq!(screen.lines[1], "new");
         assert_eq!(screen.output_cursor, raw.next_cursor);
         assert!(!screen.truncated);
+    }
+
+    /// The freeze arrived through this method: the parse ran while the runtime's
+    /// output lock was held, so the unwind discarded the chunk *and* killed the
+    /// reader. `push` has to survive the parse panic and still hand the bytes on.
+    #[test]
+    fn a_parser_panic_keeps_delivering_output() {
+        let mut output = OutputBuffer::with_size(1024, 4, 3);
+        let first = output.push("r", "a中".into());
+        output.resize_screen(4, 2);
+        let second = output.push("r", "a".into());
+        assert_eq!(second.data, "a");
+        assert_eq!(second.start_cursor, first.end_cursor);
+        assert_eq!(output.next_cursor(), second.end_cursor);
+        assert!(output.screen_recoveries() >= 1);
+        // The raw stream is what the pane renders from, and it is intact.
+        assert_eq!(output.read("r", first.end_cursor, 64).unwrap().data, "a");
+        // The auxiliary screen came back at the size the resize asked for.
+        let screen = output.screen_snapshot("r", 1000);
+        assert_eq!((screen.rows, screen.cols), (4, 2));
+        assert_eq!(screen.output_cursor, second.end_cursor);
     }
 }

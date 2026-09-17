@@ -675,6 +675,30 @@ export type ClipboardContent =
   | { type: 'image' }
   | { type: 'empty' }
 
+export type TerminalUiDiagnosticEventKind = 'heartbeat' | 'focus' | 'blur' | 'pointerDown' | 'keydown' | 'input' | 'wheel' | 'scroll' | 'flowPause' | 'flowResume' | 'dispose' | 'mount' | 'outputSkipped'
+export type TerminalUiKeyCategory = 'printable' | 'enter' | 'escape' | 'control' | 'navigation' | 'other'
+export type TerminalUiInputPath = 'write' | 'buffered' | 'dropped'
+
+export interface TerminalUiDiagnosticEvent {
+  kind: TerminalUiDiagnosticEventKind
+  connected: boolean
+  connecting: boolean
+  visible: boolean
+  documentVisible: boolean
+  focused: boolean
+  focusOwner?: string
+  alternateBuffer: boolean
+  pendingOutput: number
+  outputCursor: number
+  viewportY: number
+  baseY: number
+  keyCategory?: TerminalUiKeyCategory
+  clientInputId?: number
+  paneId?: string
+  inputPath?: TerminalUiInputPath
+  reason?: string
+}
+
 export interface AppApi {
   platform: Platform
   system: {
@@ -782,7 +806,8 @@ export interface AppApi {
     list(): Promise<TerminalRuntime[]>
     create(request: TerminalRuntimeCreateRequest): Promise<TerminalRuntime>
     readOutput(runtimeId: string, fromCursor: number, maxBytes: number): Promise<TerminalRuntimeOutputReadResult>
-    write(runtimeId: string, data: string): Promise<void>
+    write(runtimeId: string, data: string, uiDiagnostic?: TerminalUiDiagnosticEvent): Promise<void>
+    recordDiagnostic(runtimeId: string, event: TerminalUiDiagnosticEvent): Promise<void>
     resize(runtimeId: string, cols: number, rows: number): Promise<void>
     flow(runtimeId: string, paused: boolean): Promise<void>
     interrupt(runtimeId: string): Promise<void>
