@@ -13,6 +13,7 @@ import { FileDialog } from './components/FileDialog'
 import { colorWithOpacity, terminalBackgroundStyle } from './terminal-style'
 import { availableLanguages, getNativeMenuLabels, useI18n, type MessageKey } from './i18n'
 import { PRODUCT_INFO } from './product-info'
+import { BUILD_TIME } from 'virtual:build-time'
 
 interface WorkspaceTab extends MuxPane { databaseRevision?: number; initialDatabaseProfile?: DatabaseProfile; initialDatabaseReadOnly?: boolean; key: string; sessionId?: string; runtimeId?: string; agentId?: string; status: SessionStatus; error?: string }
 interface AiCommandTarget { name: string; detail: string; runtimeId?: string; connected: boolean; remote: boolean; initialShell: AiShell }
@@ -2444,6 +2445,7 @@ function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, u
   const [testingAi, setTestingAi] = useState(false)
   const [aiTested, setAiTested] = useState(false)
   const [checkingUpdates, setCheckingUpdates] = useState(false)
+  const [showBuildTime, setShowBuildTime] = useState(false)
   const [section, setSection] = useState<SettingsSection>(initialSection)
   const [systemFonts, setSystemFonts] = useState<string[] | null>(null)
   const [manualFontMode, setManualFontMode] = useState(false)
@@ -2543,10 +2545,10 @@ function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, u
     </div>
     <div className={`settings-content ${section}`}>
     {section === 'appearance' ? <><fieldset className="ui-theme-settings"><legend>{t('common.theme')}</legend><div className="theme-options" role="radiogroup" aria-label={t('common.theme')}>{themeOptions.map((option) => { const Icon = option.icon; return <button key={option.value} type="button" role="radio" aria-checked={theme === option.value} className={theme === option.value ? 'active' : ''} onClick={() => selectTheme(option.value)}><Icon size={17} /><span>{option.label}</span></button> })}</div></fieldset><fieldset className="ui-theme-settings"><legend>{t('common.language')}</legend><div className="theme-options" role="radiogroup" aria-label={t('common.language')}>{availableLanguages.map((option) => <button key={option.code} type="button" role="radio" aria-checked={language === option.code} className={language === option.code ? 'active' : ''} onClick={() => { setDialogLanguage(option.code); onLanguagePreview(option.code) }}><Languages size={17} /><span>{option.label}</span></button>)}</div></fieldset><fieldset className="app-icon-settings"><legend>{t('app.appIcon')}</legend><div className="app-icon-options">{appIcons.options.map((icon) => <label key={icon.id} className={appIcon === icon.id ? 'selected' : ''}><input type="radio" name="app-icon" checked={appIcon === icon.id} onChange={() => setAppIcon(icon.id)} /><img src={icon.dataUrl} alt="" /><span>{t(appIconMessageKeys[icon.id])}</span></label>)}</div></fieldset></> : section === 'diagnostics' ? <DiagnosticsPanel onError={onError} /> : section === 'about' ? <div className="about-settings">
-      <div className="about-product"><img src={appIcons.options.find((icon) => icon.id === appIcon)?.dataUrl} alt="" /><div><h2>{PRODUCT_INFO.displayName}</h2><span>{t('app.versionValue', { value0: PRODUCT_INFO.version })}</span></div></div>
+      <div className="about-product"><img src={appIcons.options.find((icon) => icon.id === appIcon)?.dataUrl} alt="" onDoubleClick={() => setShowBuildTime(true)} /><div><h2>{PRODUCT_INFO.displayName}</h2><span>{t('app.versionValue', { value0: PRODUCT_INFO.version })}</span></div></div>
       <p>{t('app.aboutDescription')}</p>
       <div className="about-actions"><button type="button" className="primary-button" disabled={checkingUpdates} onClick={() => void checkForUpdates()}>{checkingUpdates ? t('app.checkingForUpdates') : t('app.checkForUpdates')}</button><button type="button" className="secondary-button" onClick={() => void window.api.system.openExternal(repositoryUrl).catch((error) => onError(errorMessage(error)))}><ExternalLink size={15} />{t('app.viewSourceCode')}</button></div>
-      <div className="about-meta"><span>{t('app.openSourceLicense')}</span></div>
+      <div className="about-meta"><span>{t('app.openSourceLicense')}</span>{showBuildTime && <span>{BUILD_TIME}</span>}</div>
     </div> : section === 'ssh' ? <div className="remote-agent-settings">
       <div className="settings-option-row"><div><strong>{t('app.remoteAgentIntegration')}</strong><span>{t('app.remoteAgentIntegrationDescription')}</span></div><label className="switch-control"><input type="checkbox" checked={remoteAgentIntegration} onChange={(event) => void changeRemoteAgentIntegration(event.target.checked)} /><span aria-hidden="true" /></label></div>
       <div className="settings-information"><ShieldAlert size={17} /><div><strong>{remoteAgentIntegration ? t('app.remoteAgentIntegrationOn') : t('app.remoteAgentIntegrationOff')}</strong><span>{remoteAgentIntegration ? t('app.remoteAgentIntegrationOnDescription') : t('app.remoteAgentIntegrationOffDescription')}</span></div></div>
