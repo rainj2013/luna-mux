@@ -1610,7 +1610,9 @@ mod tests {
         let log_dir =
             std::env::temp_dir().join(format!("luna-mux-pty-natural-exit-{}", Uuid::new_v4()));
         let backend = InProcessLocalPtyTerminalBackend::new();
-        backend.set_input_diagnostics(Arc::new(TerminalInputDiagnostics::new(log_dir.clone())));
+        backend.set_input_diagnostics(Arc::new(TerminalInputDiagnostics::new_detailed(
+            log_dir.clone(),
+        )));
         let mut request = request_for_target(
             target_id,
             Some("Write-Output \"LunaMux local ✓ TERM=$env:TERM\"; exit 0"),
@@ -1675,7 +1677,9 @@ mod tests {
         let log_dir =
             std::env::temp_dir().join(format!("luna-mux-pty-lifecycle-{}", Uuid::new_v4()));
         let backend = InProcessLocalPtyTerminalBackend::new();
-        backend.set_input_diagnostics(Arc::new(TerminalInputDiagnostics::new(log_dir.clone())));
+        backend.set_input_diagnostics(Arc::new(TerminalInputDiagnostics::new_detailed(
+            log_dir.clone(),
+        )));
         let runtime = backend
             .create(request(None))
             .await

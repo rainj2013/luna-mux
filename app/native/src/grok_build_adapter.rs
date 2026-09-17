@@ -76,7 +76,20 @@ fn install_with_executable(
 }
 
 pub fn managed_command(launch: &ManagedAgentLaunch<'_>) -> Result<String, String> {
-    Ok(launch.profile.command.trim().to_string())
+    let command = launch.profile.command.trim();
+    let hook = match launch.hook_command {
+        Some(command) => command.to_string(),
+        None if launch.target_id.starts_with("local:wsl:") => {
+            let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+            let executable = executable_for_target(&executable, launch.target_id)?;
+            format!("{} hook", shell_quote(&executable.to_string_lossy()))
+        }
+        None => return Ok(command.to_string()),
+    };
+    Ok(format!(
+        "(printf '%s' '{{\"hook_event_name\":\"AgentProcessStart\",\"agent_adapter\":\"{}\"}}' | {} >/dev/null 2>&1 || true; {}; luna_mux_agent_exit_code=$?; printf '%s' '{{\"hook_event_name\":\"AgentProcessExit\",\"agent_adapter\":\"{}\"}}' | {} >/dev/null 2>&1 || true; exit \"$luna_mux_agent_exit_code\")",
+        GROK_BUILD_ADAPTER_ID, hook, command, GROK_BUILD_ADAPTER_ID, hook,
+    ))
 }
 
 pub fn requires_remote_hook_helper() -> bool {
@@ -153,7 +166,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn managed_command_preserves_the_user_grok_home() {
+    fn managed_command_tracks_lifecycle_without_injecting_mcp_or_grok_home() {
         let context = crate::terminal_runtime_contract::TerminalManagedAgentContext {
             mux_session_id: "session".into(),
             pane_id: "pane".into(),
@@ -182,8 +195,12 @@ mod tests {
         })
         .unwrap();
 
-        assert_eq!(command, "grok");
+        assert!(command.contains("AgentProcessStart"), "{command}");
+        assert!(command.contains("AgentProcessExit"), "{command}");
+        assert!(command.contains("remote-agent hook"), "{command}");
+        assert!(command.contains("; grok;"), "{command}");
         assert!(!command.contains("GROK_HOME"));
+        assert!(!command.contains("43128"));
     }
 
     #[cfg(windows)]

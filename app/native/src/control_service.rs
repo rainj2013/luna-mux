@@ -1478,6 +1478,13 @@ impl LunaControlService for InProcessControlService {
                             .unwrap_or_default()
                             .into_iter()
                             .filter_map(|runtime| {
+                                let mcp_expected =
+                                    runtime.managed_agent.as_ref().and_then(|agent| {
+                                        crate::agent_adapters::adapter_id_for_profile(
+                                            &agent.launch_profile_id,
+                                        )
+                                        .map(crate::agent_adapters::supports_managed_mcp)
+                                    });
                                 let context = runtime.context.clone().or_else(|| {
                                     runtime.managed_agent.as_ref().map(|agent| {
                                         crate::terminal_runtime_contract::TerminalRuntimeContext {
@@ -1517,6 +1524,7 @@ impl LunaControlService for InProcessControlService {
                                         || self
                                             .database
                                             .get_setting("remoteAgentIntegrationEnabled", false),
+                                    mcp_expected,
                                     browser_runtime: None,
                                 })
                             })

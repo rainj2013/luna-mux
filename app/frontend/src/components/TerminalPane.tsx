@@ -215,6 +215,7 @@ interface TerminalPaneProps {
   runtimeId?: string
   connected: boolean
   connecting: boolean
+  focused: boolean
   visible: boolean
   settings: TerminalSettings
   backgroundImage: string
@@ -232,7 +233,7 @@ interface TerminalPaneProps {
   onOpenSettings?: () => void
 }
 
-export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function TerminalPane({ paneId, targetId, activeAgentAdapterId, runtimeId, connected, connecting, visible, settings, backgroundImage, stoppedState, onAgentAction, onRuntimeError, onStart, onClose, onOpenSettings }, ref): React.JSX.Element {
+export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(function TerminalPane({ paneId, targetId, activeAgentAdapterId, runtimeId, connected, connecting, focused, visible, settings, backgroundImage, stoppedState, onAgentAction, onRuntimeError, onStart, onClose, onOpenSettings }, ref): React.JSX.Element {
   const { t } = useI18n()
   const container = useRef<HTMLDivElement>(null)
   const terminal = useRef<Terminal | null>(null)
@@ -255,6 +256,8 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
   const reportedInputErrorRuntimeId = useRef('')
   const connectedRef = useRef(connected)
   const connectingRef = useRef(connecting)
+  const focusedRef = useRef(focused)
+  focusedRef.current = focused
   const visibleRef = useRef(visible)
   visibleRef.current = visible
   const pendingRuntimeInput = useRef(new Map<string, string[]>())
@@ -265,6 +268,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
   // The recorder closes over per-mount state, so effects outside the terminal
   // effect reach it through a ref instead of duplicating its payload.
   const diagnosticRecorder = useRef<DiagnosticRecorder | null>(null)
+  const catchUpOutputRef = useRef<(() => void) | null>(null)
   const [started, setStarted] = useState(Boolean(runtimeId))
   const [searchOpen, setSearchOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -285,15 +289,14 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     onRuntimeErrorRef.current?.(failedRuntimeId, describeError(error))
   }
 
-  const focusTerminalIfVisible = (term: Terminal): void => {
-    if (visibleRef.current && terminal.current === term) term.focus()
+  const focusTerminalIfFocused = (term: Terminal): void => {
+    if (focusedRef.current && terminal.current === term) term.focus()
   }
 
   const resizeRuntimeIfVisible = (term: Terminal, targetRuntimeId = runtimeIdRef.current): void => {
     // A split can remount a terminal while its DOM is between layout sizes.
-    // Keep inactive panes visually fitted, but defer the native PTY resize
-    // until that pane is active so ConPTY/SSH cannot stall the agent on a
-    // transient resize during layout reconciliation.
+    // A pane in the current split remains visible even when another pane owns
+    // keyboard focus. Only panes without a layout box defer their PTY resize.
     if (!visibleRef.current || !targetRuntimeId) return
     const next = { runtimeId: targetRuntimeId, cols: term.cols, rows: term.rows }
     const previous = lastRuntimeSize.current
@@ -348,10 +351,10 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
       if (!term) return
       fitAddon.current?.fit()
       resizeRuntimeIfVisible(term, runtimeId)
-      focusTerminalIfVisible(term)
+      focusTerminalIfFocused(term)
     })
     return () => cancelAnimationFrame(frame)
-  }, [connected, visible, runtimeId])
+  }, [connected, focused, visible, runtimeId])
 
   useEffect(() => {
     if (!shouldRenderTerminal || !container.current || terminal.current) return
@@ -489,7 +492,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
       } catch (error) {
         console.warn('Failed to paste into terminal', error)
       } finally {
-        if (!disposed) focusTerminalIfVisible(term)
+        if (!disposed) focusTerminalIfFocused(term)
       }
     }
     pasteClipboardRef.current = pasteClipboard
@@ -629,14 +632,11 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     textarea?.addEventListener('blur', recordBlur)
     term.element?.addEventListener('pointerdown', recordPointerDown)
     term.element?.addEventListener('wheel', recordWheel, { passive: true })
-    const diagnosticHeartbeat = window.setInterval(() => {
-      // Not gated on visibility: an inactive pane must still prove it is alive,
-      // otherwise silence cannot be told apart from a broken pane.
-      recordUiDiagnostic('heartbeat')
-    }, 10_000)
     const resize = term.onResize(() => resizeRuntimeIfVisible(term))
-    let catchingUp = true
+    let catchingUp = false
+    let needsCatchUp = true
     const queuedOutput: Array<Extract<TerminalRuntimeEvent, { type: 'output' }>['payload']> = []
+    let queuedOutputSize = 0
     type TerminalOutputPayload = Extract<TerminalRuntimeEvent, { type: 'output' }>['payload']
     const outputFromCursor = (payload: TerminalOutputPayload, cursor: number): TerminalOutputPayload | undefined => {
       if (payload.endCursor <= cursor) return undefined
@@ -693,48 +693,84 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
         }
       })
     }
-    const stop = window.api.onTerminalRuntimeEvent((event: TerminalRuntimeEvent) => {
-      if (event.type !== 'output' || event.payload.runtimeId !== runtimeIdRef.current) return
-      if (catchingUp) queuedOutput.push(event.payload)
-      else writeOutput(event.payload)
-    })
-    const catchUp = (async (): Promise<void> => {
+    const catchUpOutput = (): void => {
+      if (disposed || catchingUp || !needsCatchUp || !visibleRef.current) return
       const catchUpRuntimeId = runtimeIdRef.current
-      try {
-        if (catchUpRuntimeId) {
+      if (!catchUpRuntimeId) return
+      catchingUp = true
+      needsCatchUp = false
+      let catchUpFailed = false
+      void (async (): Promise<void> => {
+        try {
           while (!disposed && catchUpRuntimeId === runtimeIdRef.current) {
+            if (!visibleRef.current) {
+              needsCatchUp = true
+              break
+            }
             const before = outputCursor.current
             const result = await window.api.terminalRuntimes.readOutput(catchUpRuntimeId, before, terminalHighWaterMark)
-            if (result.runtimeId !== runtimeIdRef.current || !result.data || result.nextCursor <= before) {
-              // A stalled cursor means the replay starts behind where this pane
-              // believes it is, and live output will be skipped from here on.
+            if (result.runtimeId !== runtimeIdRef.current) {
+              needsCatchUp = true
               recordUiDiagnostic('outputSkipped', undefined, 0, {
-                reason: result.runtimeId !== runtimeIdRef.current ? 'runtime-changed' : !result.data ? 'no-data' : 'catch-up-stalled'
+                reason: 'runtime-changed'
               })
               break
             }
+            if (!result.data || result.nextCursor <= before) break
             outputCursor.current = result.nextCursor
             writer.write(result.data, () => {
               if (userScrolled) term.scrollToLine(scrollAnchor)
               if (runtimeIdRef.current === result.runtimeId) renderedOutputCursor.current = Math.max(renderedOutputCursor.current, result.nextCursor)
             })
           }
+        } catch (error) {
+          catchUpFailed = true
+          needsCatchUp = true
+          recordUiDiagnostic('outputSkipped', undefined, 0, { reason: `catch-up-failed: ${describeError(error)}` })
+        } finally {
+          catchingUp = false
+          if (disposed) {
+            queuedOutput.length = 0
+            return
+          }
+          if (!visibleRef.current) needsCatchUp = true
+          if (catchUpRuntimeId !== runtimeIdRef.current) needsCatchUp = true
+          if (!needsCatchUp) {
+            queuedOutput.sort((left, right) => left.startCursor - right.startCursor)
+            for (const output of queuedOutput) {
+              if (output.runtimeId === runtimeIdRef.current) writeOutput(output)
+            }
+          }
+          queuedOutput.length = 0
+          queuedOutputSize = 0
+          if (needsCatchUp && visibleRef.current && !catchUpFailed) {
+            queueMicrotask(catchUpOutput)
+          }
         }
-      } catch (error) {
-        // This loop runs once per mount and never retries, so a failure here
-        // ends the replay for the life of the mount. The reason is the only
-        // record of that; live events cannot cover for it when the backend
-        // stopped emitting them.
-        recordUiDiagnostic('outputSkipped', undefined, 0, { reason: `catch-up-failed: ${describeError(error)}` })
-      } finally {
-        catchingUp = false
-        if (!disposed) {
-          queuedOutput.sort((left, right) => left.startCursor - right.startCursor)
-          for (const output of queuedOutput) writeOutput(output)
-        }
-        queuedOutput.length = 0
+      })()
+    }
+    catchUpOutputRef.current = catchUpOutput
+    const stop = window.api.onTerminalRuntimeEvent((event: TerminalRuntimeEvent) => {
+      if (event.type !== 'output' || event.payload.runtimeId !== runtimeIdRef.current) return
+      if (!visibleRef.current) {
+        needsCatchUp = true
+        return
       }
-    })()
+      if (catchingUp || needsCatchUp) {
+        queuedOutputSize += event.payload.data.length
+        if (queuedOutputSize > terminalHighWaterMark) {
+          queuedOutput.length = 0
+          queuedOutputSize = 0
+          needsCatchUp = true
+        } else {
+          queuedOutput.push(event.payload)
+        }
+        if (!catchingUp) catchUpOutput()
+        return
+      }
+      writeOutput(event.payload)
+    })
+    catchUpOutput()
     const observer = new ResizeObserver(() => {
       const element = container.current
       if (element?.offsetParent) requestAnimationFrame(() => {
@@ -753,7 +789,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
         resyncRendererDefaultSpacing(term, element)
         if (visibleRef.current) {
           term.refresh(0, Math.max(0, term.rows - 1))
-          focusTerminalIfVisible(term)
+          focusTerminalIfFocused(term)
         }
       })
     })
@@ -764,7 +800,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
       recordUiDiagnostic('scroll', undefined, 250)
     })
     observer.observe(container.current)
-    focusTerminalIfVisible(term)
+    focusTerminalIfFocused(term)
     return () => {
       recordUiDiagnostic('dispose')
       disposed = true
@@ -805,15 +841,18 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
       term.element?.removeEventListener('wheel', recordWheel)
       term.element?.removeEventListener('paste', captureCodexMultilinePaste, true)
       cancelImeComposition()
-      window.clearInterval(diagnosticHeartbeat)
       stop(); observer.disconnect(); input.dispose(); resize.dispose(); scroll.dispose(); writer.dispose(); webglAddon.current?.dispose(); term.dispose()
-      void catchUp
       webglAddon.current = null; outputWriter.current = null; terminal.current = null; fitAddon.current = null
       // The recorder closes over this mount's refs; leaving it reachable after
       // dispose would let an outside effect report against a dead terminal.
       if (diagnosticRecorder.current === recordUiDiagnostic) diagnosticRecorder.current = null
+      if (catchUpOutputRef.current === catchUpOutput) catchUpOutputRef.current = null
     }
   }, [paneId, shouldRenderTerminal])
+
+  useEffect(() => {
+    if (visible && runtimeId) catchUpOutputRef.current?.()
+  }, [visible, runtimeId])
 
   useEffect(() => {
     const term = terminal.current
@@ -828,14 +867,12 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     const term = terminal.current
     const element = container.current
     if (!term || !element) return
-    if (!visible) {
+    if (!focused) {
       webglAddon.current?.dispose()
       webglAddon.current = null
       element.dataset.renderer = 'dom'
       outputWriter.current?.wrapRenderer()
-      return
-    }
-    if (!webglAddon.current) {
+    } else if (!webglAddon.current) {
       try {
         const webgl = new WebglAddon()
         webgl.onContextLoss(() => {
@@ -853,6 +890,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
         element.dataset.renderer = 'dom'
       }
     }
+    if (!visible) return
     requestAnimationFrame(() => {
       if (terminal.current !== term) return
       fitAddon.current?.fit()
@@ -860,7 +898,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
       // now and the repaint below already uses the repaired value.
       resyncRendererDefaultSpacing(term, element)
       term.refresh(0, Math.max(0, term.rows - 1))
-      focusTerminalIfVisible(term)
+      focusTerminalIfFocused(term)
       // The WebGL addon can finish attaching after the first frame when a
       // session was hidden for a while. Refresh again once its cell metrics
       // have been committed by the browser.
@@ -869,10 +907,10 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
         fitAddon.current?.fit()
         resyncRendererDefaultSpacing(term, element)
         term.refresh(0, Math.max(0, term.rows - 1))
-        focusTerminalIfVisible(term)
+        focusTerminalIfFocused(term)
       })
     })
-  }, [visible, shouldRenderTerminal])
+  }, [focused, visible, shouldRenderTerminal])
 
   useEffect(() => {
     // If a visible pane was flow-paused just before it became inactive, do not
@@ -896,7 +934,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
   }, [searchOpen])
 
   useEffect(() => {
-    if (!visible) return
+    if (!focused) return
     const interceptFind = (event: KeyboardEvent): void => {
       const commandKey = window.api.platform === 'darwin' ? event.metaKey : event.ctrlKey
       if (!commandKey || event.key.toLowerCase() !== 'f') return
@@ -906,7 +944,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     }
     window.addEventListener('keydown', interceptFind, true)
     return () => window.removeEventListener('keydown', interceptFind, true)
-  }, [visible])
+  }, [focused])
 
   useEffect(() => {
     if (!contextMenu) return

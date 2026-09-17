@@ -3052,6 +3052,7 @@ mod tests {
         std::fs::remove_file(path).unwrap();
     }
 
+    #[test]
     fn sqlite_page_budgets_and_optional_column_comments() {
         let path = temp_db();
         let manager = DatabaseRuntimeManager::new();

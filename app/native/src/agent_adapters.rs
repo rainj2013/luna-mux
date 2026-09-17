@@ -37,6 +37,9 @@ trait AgentAdapter: Sync {
         resolved_command: Option<&Path>,
     ) -> Result<Option<PathBuf>, String>;
     fn managed_command(&self, launch: &ManagedAgentLaunch<'_>) -> Result<String, String>;
+    fn supports_managed_mcp(&self) -> bool {
+        false
+    }
     fn requires_remote_hook_helper(&self) -> bool {
         false
     }
@@ -88,6 +91,14 @@ impl AgentAdapter for CodexAdapter {
             launch.existing_developer_instructions,
         )
     }
+
+    fn supports_managed_mcp(&self) -> bool {
+        true
+    }
+
+    fn requires_remote_hook_helper(&self) -> bool {
+        true
+    }
 }
 
 impl AgentAdapter for ClaudeCodeAdapter {
@@ -121,6 +132,10 @@ impl AgentAdapter for ClaudeCodeAdapter {
 
     fn managed_command(&self, launch: &ManagedAgentLaunch<'_>) -> Result<String, String> {
         crate::claude_code_adapter::managed_command(launch)
+    }
+
+    fn supports_managed_mcp(&self) -> bool {
+        true
     }
 }
 
@@ -157,6 +172,10 @@ impl AgentAdapter for GrokBuildAdapter {
         crate::grok_build_adapter::managed_command(launch)
     }
 
+    fn supports_managed_mcp(&self) -> bool {
+        false
+    }
+
     fn requires_remote_hook_helper(&self) -> bool {
         crate::grok_build_adapter::requires_remote_hook_helper()
     }
@@ -180,6 +199,12 @@ pub fn command_names() -> Vec<String> {
 pub fn requires_remote_hook_helper(adapter_id: &str) -> bool {
     resolve(adapter_id)
         .map(|adapter| adapter.requires_remote_hook_helper())
+        .unwrap_or(false)
+}
+
+pub fn supports_managed_mcp(adapter_id: &str) -> bool {
+    resolve(adapter_id)
+        .map(|adapter| adapter.supports_managed_mcp())
         .unwrap_or(false)
 }
 
@@ -291,6 +316,12 @@ mod tests {
             automatic_profile_id(GROK_BUILD_ADAPTER_ID),
             "grok-build.auto"
         );
+        assert!(supports_managed_mcp(CODEX_ADAPTER_ID));
+        assert!(supports_managed_mcp(CLAUDE_CODE_ADAPTER_ID));
+        assert!(!supports_managed_mcp(GROK_BUILD_ADAPTER_ID));
+        assert!(requires_remote_hook_helper(CODEX_ADAPTER_ID));
+        assert!(!requires_remote_hook_helper(CLAUDE_CODE_ADAPTER_ID));
+        assert!(requires_remote_hook_helper(GROK_BUILD_ADAPTER_ID));
     }
 
     #[test]
@@ -366,9 +397,12 @@ mod tests {
             })
             .unwrap();
             if profile.adapter == GROK_BUILD_ADAPTER_ID {
-                assert_eq!(command, "grok");
+                assert!(command.contains("AgentProcessStart"), "{command}");
+                assert!(command.contains("AgentProcessExit"), "{command}");
+                assert!(command.contains("remote-agent"), "{command}");
                 assert!(!command.contains("GROK_HOME"), "{command}");
                 assert!(!command.contains("base64"), "{command}");
+                assert!(!command.contains("127.0.0.1:43128"), "{command}");
             } else {
                 assert!(command.contains("remote-agent"), "{command}");
                 assert!(!command.contains("browser-bridge.json"), "{command}");

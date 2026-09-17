@@ -24,6 +24,7 @@ const MAX_ROTATED_FILES: u8 = 3;
 const DUPLICATE_WINDOW: Duration = Duration::from_millis(250);
 const DIAGNOSTIC_QUEUE_CAPACITY: usize = 2048;
 const MAX_PANIC_MESSAGE_CHARS: usize = 512;
+const DETAILED_DIAGNOSTICS_ENV: &str = "LUNA_MUX_TERMINAL_DIAGNOSTICS";
 
 /// Records every panic and then defers to the previously installed hook.
 ///
@@ -49,6 +50,7 @@ pub struct TerminalInputDiagnostics {
     timeline_sequence: Arc<AtomicU64>,
     dropped_events: Arc<AtomicU64>,
     writer_error_reported: Arc<AtomicBool>,
+    detailed: bool,
 }
 
 struct InputObservationState {
@@ -163,6 +165,15 @@ pub enum TerminalUiKeyCategory {
 
 impl TerminalInputDiagnostics {
     pub fn new(log_dir: PathBuf) -> Self {
+        Self::new_with_detail(log_dir, detailed_diagnostics_enabled())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_detailed(log_dir: PathBuf) -> Self {
+        Self::new_with_detail(log_dir, true)
+    }
+
+    fn new_with_detail(log_dir: PathBuf, detailed: bool) -> Self {
         let log_path = log_dir.join(LOG_FILE_NAME);
         let _ = fs::create_dir_all(&log_dir);
         let bytes_written = fs::metadata(&log_path)
@@ -209,6 +220,7 @@ impl TerminalInputDiagnostics {
             timeline_sequence,
             dropped_events,
             writer_error_reported,
+            detailed,
         }
     }
 
@@ -221,7 +233,8 @@ impl TerminalInputDiagnostics {
         data: &str,
         client_input_id: Option<u64>,
     ) -> Option<DuplicateObservation> {
-        if data.is_empty()
+        if !self.detailed
+            || data.is_empty()
             || !data
                 .chars()
                 .any(|character| !character.is_ascii() && !character.is_control())
@@ -271,6 +284,9 @@ impl TerminalInputDiagnostics {
     }
 
     pub fn record_observation(&self, observation: DuplicateObservation, status: &'static str) {
+        if !self.detailed {
+            return;
+        }
         self.append_json(json!({
             "ts": Utc::now().to_rfc3339(),
             "event": "possible_duplicate_input",
@@ -288,6 +304,9 @@ impl TerminalInputDiagnostics {
     }
 
     pub fn record_ui_event(&self, runtime_id: &str, event: TerminalUiDiagnosticEvent) {
+        if !self.detailed {
+            return;
+        }
         self.append_json(json!({
             "ts": Utc::now().to_rfc3339(),
             "event": "terminal_ui",
@@ -321,6 +340,9 @@ impl TerminalInputDiagnostics {
         event: &'static str,
         details: serde_json::Value,
     ) {
+        if !self.detailed && !is_critical_runtime_event(event, &details) {
+            return;
+        }
         self.append_json(json!({
             "ts": Utc::now().to_rfc3339(),
             "event": event,
@@ -369,13 +391,16 @@ fn diagnostic_writer_loop(
             #[cfg(test)]
             Ok(WriterMessage::Flush(sender)) => {
                 record_dropped_events(&mut state, &timeline_sequence, &dropped_events);
+                flush_log_file(&mut state);
                 let _ = sender.send(());
             }
             Err(RecvTimeoutError::Timeout) => {
                 record_dropped_events(&mut state, &timeline_sequence, &dropped_events);
+                flush_log_file(&mut state);
             }
             Err(RecvTimeoutError::Disconnected) => {
                 record_dropped_events(&mut state, &timeline_sequence, &dropped_events);
+                flush_log_file(&mut state);
                 break;
             }
         }
@@ -421,12 +446,46 @@ fn append_json_line(state: &mut DiagnosticFileState, value: serde_json::Value) {
         report_file_error(state);
         return;
     };
-    if file.write_all(&line).and_then(|_| file.flush()).is_ok() {
+    if file.write_all(&line).is_ok() {
         state.bytes_written = state.bytes_written.saturating_add(line.len() as u64);
     } else {
         state.file.take();
         report_file_error(state);
     }
+}
+
+fn flush_log_file(state: &mut DiagnosticFileState) {
+    let Some(file) = state.file.as_mut() else {
+        return;
+    };
+    if file.flush().is_err() {
+        state.file.take();
+        report_file_error(state);
+    }
+}
+
+fn detailed_diagnostics_enabled() -> bool {
+    std::env::var(DETAILED_DIAGNOSTICS_ENV).is_ok_and(|value| {
+        !matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "" | "0" | "false" | "off"
+        )
+    })
+}
+
+fn is_critical_runtime_event(event: &str, details: &serde_json::Value) -> bool {
+    matches!(
+        event,
+        "output_lock_poisoned"
+            | "screen_recovered"
+            | "pty_reader_abandoned"
+            | "pty_reader_error"
+            | "pty_reader_spawn_failed"
+            | "pty_reader_drain_timeout"
+    ) || matches!(
+        event,
+        "terminal_input_completed" | "pty_write_completed" | "taskkill_completed"
+    ) && details.get("status").and_then(serde_json::Value::as_str) == Some("error")
 }
 
 fn open_log_file(state: &mut DiagnosticFileState) -> bool {
@@ -531,7 +590,7 @@ mod tests {
     #[test]
     fn records_only_repeated_non_ascii_input() {
         let directory = test_log_dir();
-        let diagnostics = TerminalInputDiagnostics::new(directory.clone());
+        let diagnostics = TerminalInputDiagnostics::new_with_detail(directory.clone(), true);
         assert!(
             diagnostics
                 .observe("runtime_command", "runtime-1", "好", Some(7))
@@ -572,7 +631,7 @@ mod tests {
     #[test]
     fn runtime_events_record_metadata_without_terminal_content() {
         let directory = test_log_dir();
-        let diagnostics = TerminalInputDiagnostics::new(directory.clone());
+        let diagnostics = TerminalInputDiagnostics::new_with_detail(directory.clone(), true);
         diagnostics.record_runtime_event(
             "runtime-1",
             "pty_write_completed",
@@ -641,7 +700,7 @@ mod tests {
     #[test]
     fn records_the_silent_discard_input_paths() {
         let directory = test_log_dir();
-        let diagnostics = TerminalInputDiagnostics::new(directory.clone());
+        let diagnostics = TerminalInputDiagnostics::new_with_detail(directory.clone(), true);
         for path in [TerminalUiInputPath::Buffered, TerminalUiInputPath::Dropped] {
             diagnostics.record_ui_event(
                 "unbound",
@@ -725,7 +784,7 @@ mod tests {
     #[test]
     fn rotates_logs_without_exceeding_the_retention_limit() {
         let directory = test_log_dir();
-        let diagnostics = TerminalInputDiagnostics::new(directory.clone());
+        let diagnostics = TerminalInputDiagnostics::new_with_detail(directory.clone(), true);
         for batch in 0..20 {
             for index in 0..1_000 {
                 diagnostics.record_runtime_event(
@@ -761,12 +820,55 @@ mod tests {
         let log_path = directory.join(LOG_FILE_NAME);
         fs::write(&log_path, vec![b'x'; MAX_LOG_BYTES as usize]).unwrap();
         fs::create_dir(rotated_path(&log_path, MAX_ROTATED_FILES)).unwrap();
-        let diagnostics = TerminalInputDiagnostics::new(directory.clone());
+        let diagnostics = TerminalInputDiagnostics::new_with_detail(directory.clone(), true);
 
         diagnostics.record_runtime_event("runtime-1", "rotation_test", json!({}));
         diagnostics.flush();
 
         assert_eq!(fs::metadata(&log_path).unwrap().len(), MAX_LOG_BYTES);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn default_mode_suppresses_verbose_events_but_keeps_runtime_failures() {
+        let directory = test_log_dir();
+        let diagnostics = TerminalInputDiagnostics::new_with_detail(directory.clone(), false);
+        diagnostics.record_runtime_event("runtime-1", "pty_write_completed", json!({}));
+        diagnostics.record_runtime_event(
+            "runtime-1",
+            "terminal_input_completed",
+            json!({ "status": "error" }),
+        );
+        diagnostics.record_ui_event(
+            "runtime-1",
+            TerminalUiDiagnosticEvent {
+                kind: TerminalUiDiagnosticEventKind::Heartbeat,
+                connected: true,
+                connecting: false,
+                visible: true,
+                document_visible: true,
+                focused: true,
+                focus_owner: None,
+                alternate_buffer: false,
+                pending_output: 0,
+                output_cursor: 0,
+                viewport_y: 0,
+                base_y: 0,
+                key_category: None,
+                client_input_id: None,
+                pane_id: None,
+                input_path: None,
+                reason: None,
+            },
+        );
+        diagnostics.record_runtime_event("runtime-1", "pty_reader_error", json!({}));
+        diagnostics.flush();
+
+        let contents = fs::read_to_string(directory.join(LOG_FILE_NAME)).expect("log file");
+        assert!(contents.contains("\"event\":\"pty_reader_error\""));
+        assert!(contents.contains("\"event\":\"terminal_input_completed\""));
+        assert!(!contents.contains("pty_write_completed"));
+        assert!(!contents.contains("terminal_ui"));
         let _ = fs::remove_dir_all(directory);
     }
 }
