@@ -18,7 +18,13 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message};
 use uuid::Uuid;
 
-const AGENT_BROWSER_TOOLS: &str = "core,network,debug,tabs,webmcp";
+const AGENT_BROWSER_TOOLS: &str = "core,network,debug,tabs,webmcp,state";
+/// Pointer movement for MCP-driven sessions.  `human` trades speed for
+/// human-like motion, which keeps recorded runs and sites that reject
+/// instant pointer jumps usable.  This is a global CLI flag; unlike `--tools`
+/// it cannot be expressed as a config-file key, so it must precede the
+/// subcommand.
+const AGENT_BROWSER_INPUT_MODE: &str = "human";
 const AGENT_BROWSER_CONFIG_STALE_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -1017,6 +1023,7 @@ pub fn try_run_mcp_browser(args: &[String]) -> Option<i32> {
     let mut command = Command::new(&agent_browser);
     configure_agent_browser_command(&mut command);
     command
+        .args(["--input-mode", AGENT_BROWSER_INPUT_MODE])
         .arg("mcp")
         .args(["--tools", AGENT_BROWSER_TOOLS])
         .env("AGENT_BROWSER_CONFIG", &config_path)
@@ -1110,6 +1117,7 @@ where
     let mut command = Command::new(binary);
     configure_agent_browser_command(&mut command);
     command
+        .args(["--input-mode", AGENT_BROWSER_INPUT_MODE])
         .arg("mcp")
         .args(["--tools", AGENT_BROWSER_TOOLS])
         .env("AGENT_BROWSER_CONFIG", &config_path)

@@ -114,7 +114,7 @@ Session 同时承载项目上下文与协作授权，避免为每对窗格另建
 
 应用负责浏览器生命周期，`agent_browser` 负责页面自动化。自动化绑定 Session 的现有页面，普通导航复用该页面；网页操作不能自行启动或替换浏览器进程。
 
-Browser Runtime 启动 Chrome 时启用 WebMCP 页面 API 和预览客户端使用的测试接口（`WebMCP,WebMCPTesting`）；本地及远程 Agent 共用的 MCP 工具组包含 `webmcp`，用于发现、调用、查询异步结果和取消网页提供的工具。网页仍须自行注册工具，实际可用性取决于 Chrome 和网页使用的 API 版本。
+Browser Runtime 启动 Chrome 时启用 WebMCP 页面 API 和预览客户端使用的测试接口（`WebMCP,WebMCPTesting`）；本地及远程 Agent 共用的 MCP 工具组包含 `webmcp`，用于发现、调用、查询异步结果和取消网页提供的工具。网页仍须自行注册工具，实际可用性取决于 Chrome 和网页使用的 API 版本。工具组还包含 `state`，向 Agent 开放 cookie、storage 和加密凭据库（`agent_browser_auth_save`/`auth_login` 等），使 Agent 无需在登录表单中键入密码即可完成登录。Luna Mux 启动 MCP 时以全局标志 `--input-mode human` 设置指针移动方式，避免瞬移指针被站点或录屏回放判定为自动化；该标志不是配置文件键，必须置于子命令之前。`--if-changed`、`--delta` 等按次生效的标志无法在会话级强制，改由注入 Agent 的指导文本说明。
 
 CDP 仅绑定本地回环地址，端口和连接信息属于临时运行状态。远程 Agent 通过经认证的 Runtime 通信桥访问 Session 浏览器，原始 CDP 不转发到远端。远程开发服务使用独立 SSH 隧道，浏览器资源不拥有隧道。
 

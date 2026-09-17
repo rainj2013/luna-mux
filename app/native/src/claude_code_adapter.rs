@@ -583,4 +583,15 @@ mod tests {
         assert!(LUNA_MUX_BROWSER_INSTRUCTIONS.contains("General development and host work"));
         assert!(LUNA_MUX_BROWSER_INSTRUCTIONS.contains("settings.theme.set"));
     }
+
+    #[test]
+    fn injected_prompt_teaches_incremental_observation_and_auth_vault() {
+        // Both behaviours are per-call agent-browser flags rather than Luna Mux
+        // defaults, so the prompt is the only place they are communicated.
+        assert!(LUNA_MUX_BROWSER_INSTRUCTIONS.contains(r#"extraArgs ["--delta"]"#));
+        assert!(LUNA_MUX_BROWSER_INSTRUCTIONS.contains(r#"extraArgs ["--delta", "--full"]"#));
+        assert!(LUNA_MUX_BROWSER_INSTRUCTIONS.contains(r#"extraArgs ["--if-changed"]"#));
+        assert!(LUNA_MUX_BROWSER_INSTRUCTIONS.contains("agent_browser_auth_login"));
+        assert!(LUNA_MUX_BROWSER_INSTRUCTIONS.contains(r#"extraArgs ["--no-navigate"]"#));
+    }
 }
