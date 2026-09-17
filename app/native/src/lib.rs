@@ -396,7 +396,7 @@ pub fn run() {
                     let _ = runtime_luna_mcp.refresh_session(mux_session_id);
                 }
                 if let TerminalRuntimeEvent::Exit(exit) = &event {
-                    runtime_agent_hooks.revoke_runtime(&exit.runtime_id);
+                    runtime_agent_hooks.revoke_runtime_after_exit(exit.runtime_id.clone());
                     runtime_luna_mcp.revoke_runtime(&exit.runtime_id);
                     agent_adapters::cleanup(&exit.runtime_id);
                 }

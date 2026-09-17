@@ -35,6 +35,7 @@ const HOOK_FORWARD_ATTEMPTS: usize = 3;
 const HOOK_FORWARD_TIMEOUT: Duration = Duration::from_secs(5);
 const BROWSER_HOOK_FORWARD_TIMEOUT: Duration = Duration::from_secs(25);
 const HOOK_FORWARD_RETRY_DELAY: Duration = Duration::from_millis(150);
+const RUNTIME_EXIT_HOOK_GRACE_PERIOD: Duration = Duration::from_secs(2);
 const AGENT_ADAPTER_HEADER: &str = "x-luna-mux-agent-adapter";
 const AGENT_PROCESS_ID_HEADER: &str = "x-luna-mux-agent-process-id";
 const HOOK_AUTH_FILE_EXTENSION: &str = "json";
@@ -289,6 +290,23 @@ impl AgentHookService {
         if let Ok(mut signals) = self.terminal_signals.lock() {
             signals.retain(|(id, _), _| id != runtime_id);
         }
+    }
+
+    /// Keep hook authorization alive briefly after the PTY reports exit.
+    ///
+    /// Claude can dispatch its final `SessionEnd` HTTP hook concurrently with
+    /// terminal teardown. Revoking synchronously makes that valid in-flight
+    /// request race the runtime exit event and surface an HTTP 401 in Claude.
+    pub fn revoke_runtime_after_exit(self: &Arc<Self>, runtime_id: String) {
+        self.revoke_runtime_after(runtime_id, RUNTIME_EXIT_HOOK_GRACE_PERIOD);
+    }
+
+    fn revoke_runtime_after(self: &Arc<Self>, runtime_id: String, delay: Duration) {
+        let service = self.clone();
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(delay).await;
+            service.revoke_runtime(&runtime_id);
+        });
     }
 
     fn persist_authorization(&self, authorization: PersistedHookAuthorization) {
@@ -1381,6 +1399,58 @@ mod tests {
         restarted.revoke_token(&token);
         assert!(!token_path.exists());
         let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[tokio::test]
+    async fn runtime_exit_grace_accepts_an_in_flight_claude_session_end() {
+        let service = AgentHookService::new();
+        service.start().unwrap();
+        let token = service
+            .issue_token(TerminalManagedAgentContext {
+                mux_session_id: "session-1".into(),
+                pane_id: "pane-1".into(),
+                runtime_id: "runtime-1".into(),
+                agent_id: "agent-1".into(),
+                launch_profile_id: "claude-code.default".into(),
+            })
+            .unwrap();
+        let endpoint = service.endpoint().unwrap();
+        let client = reqwest::Client::new();
+
+        let started = client
+            .post(&endpoint)
+            .bearer_auth(&token)
+            .json(&json!({
+                "hook_event_name": "SessionStart",
+                "session_id": "claude-session-1"
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(started.status(), StatusCode::OK);
+
+        service.revoke_runtime_after("runtime-1".into(), Duration::from_secs(1));
+        let ended = client
+            .post(&endpoint)
+            .bearer_auth(&token)
+            .json(&json!({
+                "hook_event_name": "SessionEnd",
+                "session_id": "claude-session-1"
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(ended.status(), StatusCode::OK);
+
+        tokio::time::sleep(Duration::from_millis(1_100)).await;
+        let expired = client
+            .post(&endpoint)
+            .bearer_auth(&token)
+            .json(&json!({ "hook_event_name": "Stop" }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(expired.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[test]
