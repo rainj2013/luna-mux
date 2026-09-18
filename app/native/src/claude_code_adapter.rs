@@ -588,10 +588,52 @@ mod tests {
     fn injected_prompt_teaches_incremental_observation_and_auth_vault() {
         // Both behaviours are per-call agent-browser flags rather than Luna Mux
         // defaults, so the prompt is the only place they are communicated.
-        assert!(LUNA_MUX_BROWSER_INSTRUCTIONS.contains(r#"extraArgs ["--delta"]"#));
-        assert!(LUNA_MUX_BROWSER_INSTRUCTIONS.contains(r#"extraArgs ["--delta", "--full"]"#));
-        assert!(LUNA_MUX_BROWSER_INSTRUCTIONS.contains(r#"extraArgs ["--if-changed"]"#));
+        assert!(LUNA_MUX_BROWSER_INSTRUCTIONS.contains("delta: true"));
+        assert!(LUNA_MUX_BROWSER_INSTRUCTIONS.contains("full: true"));
+        assert!(LUNA_MUX_BROWSER_INSTRUCTIONS.contains("ifChanged: true"));
         assert!(LUNA_MUX_BROWSER_INSTRUCTIONS.contains("agent_browser_auth_login"));
         assert!(LUNA_MUX_BROWSER_INSTRUCTIONS.contains(r#"extraArgs ["--no-navigate"]"#));
+    }
+
+    #[test]
+    fn injected_prompt_does_not_teach_retired_extra_args_spellings() {
+        // These three were the CLI flags the prompt used to name. The MCP tools
+        // expose typed delta/full/ifChanged fields instead, and an Agent told to
+        // reach for the flags would pass them through extraArgs for no reason.
+        for retired in [
+            r#"extraArgs ["--delta"]"#,
+            r#"extraArgs ["--delta", "--full"]"#,
+            r#"extraArgs ["--if-changed"]"#,
+            r#"extraArgs ["-i"]"#,
+        ] {
+            assert!(
+                !LUNA_MUX_BROWSER_INSTRUCTIONS.contains(retired),
+                "the prompt still teaches the retired spelling {retired}"
+            );
+        }
+    }
+
+    #[test]
+    fn injected_prompt_teaches_the_extended_browser_surface() {
+        for tool in [
+            "agent_browser_batch",
+            "agent_browser_a11y",
+            "agent_browser_diff_snapshot",
+            "agent_browser_diff_screenshot",
+        ] {
+            assert!(
+                LUNA_MUX_BROWSER_INSTRUCTIONS.contains(tool),
+                "the prompt never mentions {tool}"
+            );
+        }
+        // Snapshot narrowing has to name the typed fields, not the CLI letters.
+        assert!(LUNA_MUX_BROWSER_INSTRUCTIONS.contains("interactive: false"));
+        for field in ["selector", "depth", "compact"] {
+            assert!(LUNA_MUX_BROWSER_INSTRUCTIONS.contains(field));
+        }
+        // The react tools need an option Luna Mux cannot supply, so the prompt is
+        // the only place an Agent can learn that it has to ask for them.
+        assert!(LUNA_MUX_BROWSER_INSTRUCTIONS.contains(r#"extraArgs ["--enable", "react-devtools"]"#));
+        assert!(LUNA_MUX_BROWSER_INSTRUCTIONS.contains("installs a document script"));
     }
 }
