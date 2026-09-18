@@ -108,9 +108,13 @@ Output, parsing, and waits have resource limits. Interaction records do not copy
 
 ### 3.5 Browser Resources
 
-Browsers are shared at Session scope so users and Agents working on one project use the same page context. The tradeoff is shared browser state without isolated page permissions between participants. Profiles are isolated by resource and are not reused across Sessions. Each Session shares one active Browser Runtime, which can start on the first automation call.
+Browsers are shared at Session scope so users and Agents working on one project use the same page context. The tradeoff is shared browser state without isolated page permissions between participants. Each Session shares one active Browser Runtime, which can start on the first automation call.
 
 Browsers run in independent desktop Chrome windows outside the terminal layout, keeping web tabs separate from terminal Pane layout, dimensions, and lifecycle.
+
+Profiles are not persisted. Every Runtime gets its own disposable profile directory, deleted when the browser closes; nothing is kept for the next start and nothing is reused across Sessions. An Agent therefore never sees site state a previous browser left behind, and no copy of browser data survives on disk for a later process to read. A crash or a force quit bypasses that deletion, so startup terminates the Chrome processes the last run left behind and then sweeps the whole disposable profile root.
+
+A Browser Resource may optionally seed its disposable profile from the local Chrome profile’s cookie state so the Agent opens pages already signed in. The switch is stored per Resource, off by default, applied only on explicit user confirmation, and reads the source profile without modifying it. The copy is an allowlist and deliberately narrow: the cookie databases (`Cookies`, and `Network` from Chrome 96 on, plus the `Local State` Windows needs to decrypt them). Site storage, extensions, browsing history, saved passwords, and payment data are all excluded. Site storage is not needed to reach a signed-in page and dominates the size — IndexedDB alone runs to hundreds of megabytes in a profile in daily use, and every browser start would have to copy it. Because the directory itself is disposable, each start seeds afresh and the snapshot cannot go stale. Deleting a Browser Resource or a Session removes its download directory, along with any profile directory left at the retired Session-scoped path.
 
 The app owns browser lifecycle; `agent_browser` owns page automation. Automation binds to the Session's existing page and reuses it for ordinary navigation. Page operations cannot independently launch or replace the browser process.
 

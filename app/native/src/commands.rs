@@ -604,6 +604,14 @@ pub async fn browser_runtime_create(
     if resource.mux_session_id != request.mux_session_id {
         return Err("浏览器资源与会话不匹配".into());
     }
+    // Reusing the local profile comes from the stored resource, not from the
+    // request.  The row is where the user's choice lives, and it copies their
+    // site cookies, so a caller must not be able to enable it for a resource
+    // whose saved setting is off.
+    let request = BrowserRuntimeCreateRequest {
+        reuse_local_profile: resource.reuse_local_profile,
+        ..request
+    };
     let runtime = state.browser_runtimes.create(request).await?;
     if let Err(error) = state
         .luna_mcp
@@ -2245,7 +2253,25 @@ pub fn mux_sessions_reorder(state: State<AppState>, ids: Vec<String>) -> Result<
 }
 
 #[tauri::command]
-pub fn mux_sessions_remove(state: State<AppState>, id: String) -> Result<(), String> {
+pub async fn mux_sessions_remove(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    // Deleting the Session row cascades to its browser resources, so the
+    // runtimes have to be closed first: the cascade would otherwise leave
+    // running Chrome processes with no owning row, and their profiles on disk
+    // with nothing left to reference them.
+    let runtime_ids = state
+        .browser_runtimes
+        .list()?
+        .into_iter()
+        .filter(|runtime| runtime.mux_session_id == id)
+        .map(|runtime| runtime.id)
+        .collect::<Vec<_>>();
+    for runtime_id in runtime_ids {
+        state.browser_runtimes.close(&runtime_id).await?;
+    }
+    // Remove the data before the row: if deletion fails, the Session is still
+    // present and the user can retry, rather than being left with an orphaned
+    // directory that nothing points at.
+    state.browser_runtimes.remove_session_data(&id)?;
     state.db.delete_mux_session(&id)
 }
 
@@ -2290,6 +2316,8 @@ pub fn browser_resources_save(
     state: State<AppState>,
     input: BrowserResourceInput,
 ) -> Result<BrowserResource, String> {
+    // Nothing to invalidate here: the profile is seeded at every start, so the
+    // next start copies the user's cookie state again with no extra step.
     state.db.save_browser_resource(input)
 }
 
@@ -2305,6 +2333,8 @@ pub async fn browser_resources_remove(
         .filter(|runtime| runtime.browser_resource_id == id)
         .map(|runtime| runtime.id)
         .collect::<Vec<_>>();
+    // Closing the runtime is what deletes the profile, since the profile belongs
+    // to the Runtime and lives only as long as it does.
     for runtime_id in runtime_ids {
         state.browser_runtimes.close(&runtime_id).await?;
     }

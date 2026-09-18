@@ -121,8 +121,6 @@ struct BrowserRuntimeRegistryEntry {
     status: BrowserRuntimeStatus,
     #[serde(default)]
     profile_path: String,
-    #[serde(default)]
-    temporary_profile: bool,
 }
 
 #[derive(Serialize)]
@@ -176,8 +174,13 @@ pub struct BrowserRuntimeCreateRequest {
     pub browser_resource_id: String,
     #[serde(default = "default_url")]
     pub url: String,
+    /// Seed this resource's profile from a copy of the user's own Chrome
+    /// cookie state so the Agent starts already signed in.
+    ///
+    /// Per Resource, and off unless the user turns it on: it copies their site
+    /// cookies onto a second path on disk.
     #[serde(default)]
-    pub temporary_profile: bool,
+    pub reuse_local_profile: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -234,7 +237,6 @@ fn default_url() -> String {
 struct ManagedBrowserRuntime {
     summary: BrowserRuntime,
     child: Child,
-    temporary_profile: bool,
     cdp_tx: mpsc::UnboundedSender<CdpCommand>,
 }
 
@@ -320,11 +322,13 @@ impl BrowserRuntimeManager {
         self.registry_path.to_string_lossy().into_owned()
     }
 
-    fn resource_profile_path(&self, mux_session_id: &str, browser_resource_id: &str) -> PathBuf {
-        self.profiles_root
-            .join("sessions")
-            .join(mux_session_id)
-            .join(browser_resource_id)
+    /// Where a Runtime's Chrome profile lives.
+    ///
+    /// Named by Runtime rather than by Resource, and disposable: nothing is
+    /// kept for the next start, so a Resource never sees the directory it saw
+    /// last time and no login state outlives the browser it came from.
+    fn disposable_profile_path(&self, runtime_id: &str) -> PathBuf {
+        self.profiles_root.join("temporary").join(runtime_id)
     }
 
     pub fn session_cdp_port(&self, mux_session_id: &str) -> Result<u16, String> {
@@ -395,9 +399,7 @@ impl BrowserRuntimeManager {
                 None => None,
             }
         };
-        if let Some(runtime) = stale_runtime
-            && runtime.temporary_profile
-        {
+        if let Some(runtime) = stale_runtime {
             let _ = std::fs::remove_dir_all(runtime.summary.profile_path);
         }
         let another_runtime = self
@@ -423,17 +425,28 @@ impl BrowserRuntimeManager {
         })?;
         let url = normalize_url(&request.url)?;
         let runtime_id = Uuid::new_v4().to_string();
-        let profile_path = if request.temporary_profile {
-            self.profiles_root.join("temporary").join(&runtime_id)
-        } else {
-            self.resource_profile_path(&mux_session_id, &browser_resource_id)
-        };
+        let profile_path = self.disposable_profile_path(&runtime_id);
         std::fs::create_dir_all(&profile_path).map_err(|error| {
             format!(
                 "无法创建 Chrome 配置目录 {}: {error}",
                 profile_path.display()
             )
         })?;
+        // Every start seeds from scratch, which is what keeps the snapshot the
+        // user asked for from going stale: the directory it lands in was created
+        // a few lines above and is deleted when this Runtime closes, so there is
+        // never an earlier copy to reconcile with.  Seeding runs before
+        // `mark_chrome_profile_clean` so the cookies are in place before Chrome's
+        // own preferences are written beside them.
+        if request.reuse_local_profile {
+            match seed_profile_from_local_chrome(&profile_path) {
+                Ok(outcome) => eprintln!(
+                    "Luna Mux 已复用本机 Chrome 登录态：复制 {} 个文件，跳过 {} 个。",
+                    outcome.copied, outcome.skipped
+                ),
+                Err(error) => eprintln!("Luna Mux 无法复用本机 Chrome 登录态：{error}"),
+            }
+        }
         mark_chrome_profile_clean(&profile_path)?;
         // The agent-browser config only carries the download directory, so it
         // must exist before the Agent can trigger a download.  Failing here is
@@ -489,7 +502,7 @@ impl BrowserRuntimeManager {
             error: None,
         };
         if let Err(error) = wait_for_cdp(port, Duration::from_secs(8)).await {
-            cleanup_failed_browser_start(&mut child, &profile_path, request.temporary_profile);
+            cleanup_failed_browser_start(&mut child, &profile_path);
             summary.status = BrowserRuntimeStatus::Error;
             summary.error = Some(error.clone());
             self.reserve_session_cdp_port(&mux_session_id, port);
@@ -498,7 +511,7 @@ impl BrowserRuntimeManager {
         let websocket_url = match page_websocket_url(port, &url).await {
             Ok(websocket_url) => websocket_url,
             Err(error) => {
-                cleanup_failed_browser_start(&mut child, &profile_path, request.temporary_profile);
+                cleanup_failed_browser_start(&mut child, &profile_path);
                 self.reserve_session_cdp_port(&mux_session_id, port);
                 return Err(error);
             }
@@ -506,7 +519,7 @@ impl BrowserRuntimeManager {
         let cdp_socket = match connect_async(&websocket_url).await {
             Ok((socket, _)) => socket,
             Err(error) => {
-                cleanup_failed_browser_start(&mut child, &profile_path, request.temporary_profile);
+                cleanup_failed_browser_start(&mut child, &profile_path);
                 self.reserve_session_cdp_port(&mux_session_id, port);
                 return Err(format!("无法连接 Chrome CDP: {error}"));
             }
@@ -521,7 +534,6 @@ impl BrowserRuntimeManager {
                 ManagedBrowserRuntime {
                     summary: summary.clone(),
                     child,
-                    temporary_profile: request.temporary_profile,
                     cdp_tx,
                 },
             );
@@ -591,6 +603,20 @@ impl BrowserRuntimeManager {
         self.write_registry();
     }
 
+    /// Delete the on-disk artifacts a Session owns: its page downloads, and any
+    /// profile directory left behind at the retired per-Session path.
+    ///
+    /// Profiles are disposable and already deleted when their Runtime closes, so
+    /// the profile half is a backstop for directories written by an older build.
+    /// Idempotent, so a Session that never started a browser removes cleanly.
+    pub fn remove_session_data(&self, mux_session_id: &str) -> Result<(), String> {
+        let mux_session_id = validate_id("muxSessionId", mux_session_id)?;
+        let session_root = self.profiles_root.join("sessions").join(&mux_session_id);
+        remove_dir_within(&self.profiles_root, &session_root)?;
+        let download_dir = self.download_dir(&mux_session_id);
+        remove_dir_within(&self.data_root(), &download_dir)
+    }
+
     pub fn force_cleanup_managed_processes(&self) {
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
@@ -614,7 +640,6 @@ impl BrowserRuntimeManager {
                         process_id: runtime.summary.process_id,
                         status: runtime.summary.status.clone(),
                         profile_path: runtime.summary.profile_path.clone(),
-                        temporary_profile: runtime.temporary_profile,
                     })
                     .collect::<Vec<_>>()
             })
@@ -959,11 +984,7 @@ impl Drop for BrowserRuntimeManager {
             }
             let profile_path = PathBuf::from(&runtime.summary.profile_path);
             let _ = runtime.child.wait();
-            if runtime.temporary_profile {
-                let _ = std::fs::remove_dir_all(profile_path);
-            } else {
-                let _ = mark_chrome_profile_clean(&profile_path);
-            }
+            let _ = std::fs::remove_dir_all(profile_path);
         }
     }
 }
@@ -1788,6 +1809,32 @@ fn agent_browser_download_dir(scope: &str) -> PathBuf {
     browser_download_dir_under(&browser_data_root(), scope)
 }
 
+/// Remove `target`, but only when it is a strict descendant of `root`.
+///
+/// The paths handed here are built from Session and resource identifiers, and
+/// `validate_id` only bounds their length, so a value like `../..` survives
+/// validation.  Deletion is irreversible, so containment is enforced at the
+/// point of deletion instead of being assumed from the caller.
+fn remove_dir_within(root: &Path, target: &Path) -> Result<(), String> {
+    if target == root || !target.starts_with(root) {
+        return Err(format!(
+            "拒绝删除浏览器数据目录之外的路径：{}",
+            target.display()
+        ));
+    }
+    match std::fs::remove_dir_all(target) {
+        Ok(()) => Ok(()),
+        // A Session that never started a browser has nothing to remove, and a
+        // sweep has nothing to do on a clean install; treating that as success
+        // keeps the operation idempotent.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "无法删除浏览器数据目录 {}: {error}",
+            target.display()
+        )),
+    }
+}
+
 fn validate_selector(selector: &str) -> Result<&str, String> {
     let selector = selector.trim();
     if selector.is_empty() || selector.len() > 4096 {
@@ -1878,25 +1925,158 @@ async fn close_managed_runtime(mut runtime: ManagedBrowserRuntime) {
     }
     let _ = tokio::task::spawn_blocking(move || {
         let profile_path = PathBuf::from(&runtime.summary.profile_path);
-        let temporary_profile = runtime.temporary_profile;
         let _ = runtime.child.wait();
-        if temporary_profile {
-            let _ = std::fs::remove_dir_all(&profile_path);
-        } else {
-            let _ = mark_chrome_profile_clean(&profile_path);
-        }
+        let _ = std::fs::remove_dir_all(&profile_path);
     })
     .await;
 }
 
-fn cleanup_failed_browser_start(child: &mut Child, profile_path: &Path, temporary_profile: bool) {
+fn cleanup_failed_browser_start(child: &mut Child, profile_path: &Path) {
     close_process_tree(child);
     let _ = child.kill();
     let _ = child.wait();
-    if temporary_profile {
-        let _ = std::fs::remove_dir_all(profile_path);
-    } else {
-        let _ = mark_chrome_profile_clean(profile_path);
+    let _ = std::fs::remove_dir_all(profile_path);
+}
+
+/// Entries inside a Chrome profile directory that carry cookie state.
+///
+/// Deliberately an allowlist, and deliberately narrow. Cookies are what signs a
+/// browser in; the real profile also holds site storage, extensions, browsing
+/// history, saved payment data and `Login Data` (saved passwords), none of which
+/// an Agent needs to reach a signed-in page — and all of which would be a
+/// strictly worse thing to duplicate onto disk. Site storage is excluded on size
+/// as well: IndexedDB alone runs to hundreds of megabytes in a profile in daily
+/// use, which every browser start would have to copy.
+const REUSED_PROFILE_ENTRIES: [&str; 2] = [
+    // Pre-Chrome-96 location for the cookie database.
+    "Cookies",
+    // Where Chrome keeps the cookie database from 96 on, together with the
+    // site network state that belongs to it.
+    "Network",
+];
+
+#[derive(Debug, Default)]
+struct ProfileSeedOutcome {
+    copied: usize,
+    skipped: usize,
+}
+
+/// Copy cookie state out of the user's own Chrome profile into `profile_path`.
+///
+/// Best effort by design: Chrome keeps locks on files of a profile it has open,
+/// and a partial copy still signs the Agent in for most sites, so a single
+/// failed file is counted rather than propagated. The real profile is only ever
+/// read — nothing in this path opens a file under it for writing.
+fn seed_profile_from_local_chrome(profile_path: &Path) -> Result<ProfileSeedOutcome, String> {
+    let user_data_root = local_chrome_user_data_root().ok_or_else(|| {
+        "未找到本机 Chrome 配置目录，无法复用登录态。请确认本机已使用过 Chrome。".to_string()
+    })?;
+    seed_profile_from(&user_data_root, profile_path)
+}
+
+/// The copy itself, with the source directory passed in so it can be exercised
+/// without touching the real Chrome profile.
+fn seed_profile_from(
+    user_data_root: &Path,
+    profile_path: &Path,
+) -> Result<ProfileSeedOutcome, String> {
+    let source_profile = user_data_root.join("Default");
+    if !source_profile.is_dir() {
+        return Err(format!(
+            "本机 Chrome 配置目录 {} 中没有 Default profile，无法复用登录态。",
+            user_data_root.display()
+        ));
+    }
+    let target_profile = profile_path.join("Default");
+    let mut outcome = ProfileSeedOutcome::default();
+    for entry in REUSED_PROFILE_ENTRIES {
+        let source = source_profile.join(entry);
+        if !source.exists() {
+            continue;
+        }
+        copy_profile_entry(&source, &target_profile.join(entry), &mut outcome);
+    }
+    // `Local State` sits beside the profile rather than inside it, and on
+    // Windows it holds the key Chrome needs to decrypt the cookies copied
+    // above; without it those cookies are unreadable on that platform.
+    let local_state = user_data_root.join("Local State");
+    if local_state.is_file() {
+        copy_profile_entry(&local_state, &profile_path.join("Local State"), &mut outcome);
+    }
+    Ok(outcome)
+}
+
+/// Locate the Chrome user data directory of the user running Luna Mux.
+///
+/// This is the profile the *user's* browser uses, which is what makes its
+/// cookies worth copying. It is a separate lookup from `discover_chrome`, which
+/// finds the executable Luna Mux launches, and has no fixed relationship to it.
+fn local_chrome_user_data_root() -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        let local_app_data = std::env::var_os("LOCALAPPDATA")?;
+        let root = PathBuf::from(local_app_data)
+            .join("Google")
+            .join("Chrome")
+            .join("User Data");
+        return root.is_dir().then_some(root);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let home = dirs::home_dir()?;
+        let root = home
+            .join("Library")
+            .join("Application Support")
+            .join("Google")
+            .join("Chrome");
+        return root.is_dir().then_some(root);
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        let home = dirs::home_dir()?;
+        let root = home.join(".config").join("google-chrome");
+        root.is_dir().then_some(root)
+    }
+}
+
+/// Recursively copy one profile entry, counting files that could not be read.
+///
+/// Symlinks are skipped rather than followed: a profile is an untrusted-input
+/// directory as far as this code is concerned, and following one could send the
+/// copy outside the profile entirely.
+fn copy_profile_entry(source: &Path, target: &Path, outcome: &mut ProfileSeedOutcome) {
+    let Ok(metadata) = std::fs::symlink_metadata(source) else {
+        outcome.skipped += 1;
+        return;
+    };
+    if metadata.file_type().is_symlink() {
+        return;
+    }
+    if metadata.is_dir() {
+        if std::fs::create_dir_all(target).is_err() {
+            outcome.skipped += 1;
+            return;
+        }
+        let Ok(entries) = std::fs::read_dir(source) else {
+            outcome.skipped += 1;
+            return;
+        };
+        for entry in entries.filter_map(Result::ok) {
+            copy_profile_entry(&entry.path(), &target.join(entry.file_name()), outcome);
+        }
+        return;
+    }
+    // `fs::copy` writes the file but never its parent, and for a top-level
+    // entry that parent is the profile directory itself.
+    if let Some(parent) = target.parent()
+        && std::fs::create_dir_all(parent).is_err()
+    {
+        outcome.skipped += 1;
+        return;
+    }
+    match std::fs::copy(source, target) {
+        Ok(_) => outcome.copied += 1,
+        Err(_) => outcome.skipped += 1,
     }
 }
 
@@ -1964,6 +2144,25 @@ fn configure_process_group(command: &mut Command) {
 #[cfg(not(unix))]
 fn configure_process_group(_command: &mut Command) {}
 
+/// Delete profile directories a previous run left behind.
+///
+/// A Runtime deletes its own profile when it closes, which covers every ordinary
+/// exit.  It does not cover a crash, a force quit, or a kill — and a leftover
+/// profile holds a copy of the user's site cookies, so "nothing is kept for the
+/// next start" would be false in exactly the case where it matters most.  This
+/// restores it at the one moment it can be known that nothing is using them:
+/// startup, before any Runtime exists, once the Chrome processes the last run
+/// left running have been terminated.
+///
+/// `sessions/` is the retired per-Resource profile path.  Older builds wrote
+/// profiles there and nothing deletes them any more, so this is the only code
+/// path that can.
+fn sweep_stale_browser_profiles(profiles_root: &Path) {
+    for directory in ["temporary", "sessions"] {
+        let _ = remove_dir_within(profiles_root, &profiles_root.join(directory));
+    }
+}
+
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 fn cleanup_stale_managed_chrome(profiles_root: &Path) {
     #[cfg(target_os = "macos")]
@@ -1975,22 +2174,23 @@ fn cleanup_stale_managed_chrome(profiles_root: &Path) {
         managed_chrome_process_ids(&String::from_utf8_lossy(&output.stdout), profiles_root);
     #[cfg(target_os = "windows")]
     let process_ids = windows_runtime_process_ids(profiles_root);
-    if process_ids.is_empty() {
-        return;
-    }
-
-    for process_id in &process_ids {
-        terminate_managed_chrome_process(*process_id);
-    }
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while Instant::now() < deadline && process_ids.iter().any(|pid| process_exists(*pid)) {
-        std::thread::sleep(Duration::from_millis(40));
-    }
-    for process_id in process_ids {
-        if process_exists(process_id) {
-            terminate_managed_chrome_process(process_id);
+    // Terminating first is what makes the sweep below safe: a profile may only
+    // be deleted once the Chrome process that would still be using it is gone.
+    if !process_ids.is_empty() {
+        for process_id in &process_ids {
+            terminate_managed_chrome_process(*process_id);
+        }
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline && process_ids.iter().any(|pid| process_exists(*pid)) {
+            std::thread::sleep(Duration::from_millis(40));
+        }
+        for process_id in process_ids {
+            if process_exists(process_id) {
+                terminate_managed_chrome_process(process_id);
+            }
         }
     }
+    sweep_stale_browser_profiles(profiles_root);
 }
 
 #[cfg(target_os = "macos")]
@@ -2752,20 +2952,45 @@ mod tests {
     }
 
     #[test]
-    fn browser_resources_use_independent_persistent_profiles() {
+    fn browser_profiles_are_named_by_runtime_and_swept_once_stale() {
         let root =
             std::env::temp_dir().join(format!("luna-mux-browser-profile-{}", uuid::Uuid::new_v4()));
         let manager = BrowserRuntimeManager::new_for_test(&root);
-        let first = manager.resource_profile_path("session-1", "resource-1");
-        let second = manager.resource_profile_path("session-2", "resource-2");
+        let first = manager.disposable_profile_path("runtime-1");
+        let second = manager.disposable_profile_path("runtime-2");
         assert_eq!(
             first,
             root.join("browser-profiles")
-                .join("sessions")
-                .join("session-1")
-                .join("resource-1")
+                .join("temporary")
+                .join("runtime-1")
         );
-        assert_ne!(first, second);
+        assert_ne!(
+            first, second,
+            "two runtimes must never share a profile directory"
+        );
+
+        // A profile left behind by a crash, and a directory in the retired
+        // per-Resource shape an older build wrote.  Both have to go: each holds
+        // a copy of the user's cookie state, and a restart is the only moment
+        // that can know nothing is using them.
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::write(first.join("Cookies"), b"cookie-state").unwrap();
+        let retired = root
+            .join("browser-profiles")
+            .join("sessions")
+            .join("session-1")
+            .join("resource-1");
+        std::fs::create_dir_all(&retired).unwrap();
+        std::fs::write(retired.join("Cookies"), b"cookie-state").unwrap();
+
+        super::sweep_stale_browser_profiles(&manager.profiles_root);
+
+        assert!(!first.exists());
+        assert!(!retired.exists());
+        assert!(
+            !root.join("browser-profiles").join("temporary").exists(),
+            "the whole disposable profile root is swept, not just its entries"
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -2838,6 +3063,155 @@ mod tests {
             "downloads escaped the manager data root: {}",
             download_dir.display()
         );
+    }
+
+    /// Every file under `root`, with the bytes and modification time it had.
+    /// Used to show that seeding leaves the real Chrome profile untouched.
+    fn snapshot_tree(
+        root: &std::path::Path,
+    ) -> Vec<(std::path::PathBuf, Vec<u8>, std::time::SystemTime)> {
+        let mut snapshot = Vec::new();
+        let mut pending = vec![root.to_path_buf()];
+        while let Some(directory) = pending.pop() {
+            for entry in std::fs::read_dir(&directory).unwrap().filter_map(Result::ok) {
+                let path = entry.path();
+                if path.is_dir() {
+                    pending.push(path);
+                    continue;
+                }
+                let metadata = entry.metadata().unwrap();
+                snapshot.push((
+                    path.clone(),
+                    std::fs::read(&path).unwrap(),
+                    metadata.modified().unwrap(),
+                ));
+            }
+        }
+        snapshot.sort_by(|left, right| left.0.cmp(&right.0));
+        snapshot
+    }
+
+    #[test]
+    fn seeding_copies_cookie_state_and_nothing_else() {
+        let root = std::env::temp_dir().join(format!("luna-mux-browser-seed-{}", Uuid::new_v4()));
+        let user_data = root.join("chrome-user-data");
+        let source = user_data.join("Default");
+        std::fs::create_dir_all(source.join("Network")).unwrap();
+        std::fs::create_dir_all(source.join("Local Storage").join("leveldb")).unwrap();
+        std::fs::create_dir_all(source.join("IndexedDB").join("https_example.com_0.indexeddb.leveldb"))
+            .unwrap();
+        std::fs::write(source.join("Cookies"), b"legacy cookie database").unwrap();
+        std::fs::write(source.join("Network").join("Cookies"), b"cookie database").unwrap();
+        std::fs::write(
+            source.join("Local Storage").join("leveldb").join("000001.log"),
+            b"local storage",
+        )
+        .unwrap();
+        std::fs::write(
+            source.join("IndexedDB").join("https_example.com_0.indexeddb.leveldb").join("000001.log"),
+            b"site database",
+        )
+        .unwrap();
+        // Present in a real profile, and deliberately not part of the allowlist.
+        std::fs::write(source.join("Login Data"), b"saved passwords").unwrap();
+        std::fs::write(source.join("History"), b"browsing history").unwrap();
+        std::fs::write(user_data.join("Local State"), b"cookie encryption key").unwrap();
+        let before = snapshot_tree(&user_data);
+
+        let profile = root.join("luna-profile");
+        let outcome = super::seed_profile_from(&user_data, &profile).unwrap();
+
+        let seeded = profile.join("Default");
+        assert!(seeded.join("Cookies").is_file());
+        assert!(seeded.join("Network").join("Cookies").is_file());
+        assert!(
+            profile.join("Local State").is_file(),
+            "Windows needs the copied profile's cookie key to decrypt those cookies"
+        );
+        assert_eq!(outcome.copied, 3);
+        assert_eq!(outcome.skipped, 0);
+        // Cookies are what signs a browser in; everything else a real profile
+        // holds is either private or large, and this copies it on every start.
+        assert!(
+            !seeded.join("Local Storage").exists(),
+            "site storage is not needed to reach a signed-in page"
+        );
+        assert!(
+            !seeded.join("IndexedDB").exists(),
+            "site databases run to hundreds of megabytes in a daily-use profile"
+        );
+        assert!(
+            !seeded.join("Login Data").exists(),
+            "saved passwords must never be copied"
+        );
+        assert!(!seeded.join("History").exists(), "history must never be copied");
+        assert_eq!(
+            before,
+            snapshot_tree(&user_data),
+            "seeding must not write to the real Chrome profile"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn seeding_reports_a_profile_that_has_no_default_directory() {
+        let root = std::env::temp_dir().join(format!("luna-mux-browser-seed-{}", Uuid::new_v4()));
+        let user_data = root.join("chrome-user-data");
+        std::fs::create_dir_all(&user_data).unwrap();
+        let error = super::seed_profile_from(&user_data, &root.join("luna-profile")).unwrap_err();
+        assert!(error.contains("没有 Default profile"), "unexpected error: {error}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn profile_deletion_refuses_a_path_outside_the_profiles_root() {
+        let root = std::env::temp_dir().join(format!("luna-mux-browser-remove-{}", Uuid::new_v4()));
+        let profiles_root = root.join("browser-profiles");
+        std::fs::create_dir_all(&profiles_root).unwrap();
+        let outside = root.join("unrelated-data");
+        std::fs::create_dir_all(&outside).unwrap();
+
+        assert!(super::remove_dir_within(&profiles_root, &outside).is_err());
+        assert!(outside.is_dir(), "a path outside the root must survive");
+        assert!(
+            super::remove_dir_within(&profiles_root, &profiles_root).is_err(),
+            "the root itself must never be removed"
+        );
+        assert!(profiles_root.is_dir());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn session_data_removal_is_idempotent_and_leaves_runtime_profiles_alone() {
+        let root = std::env::temp_dir().join(format!("luna-mux-browser-remove-{}", Uuid::new_v4()));
+        let manager = BrowserRuntimeManager::new_for_test(&root);
+        let session_id = "removable-session";
+        // The retired per-Resource profile shape.  Only a build older than the
+        // disposable-profile change could have written one, and nothing else
+        // deletes them, so removing a Session has to.
+        let retired = manager
+            .profiles_root
+            .join("sessions")
+            .join(session_id)
+            .join("removable-resource");
+        std::fs::create_dir_all(retired.join("Default")).unwrap();
+        std::fs::write(retired.join("Default").join("Cookies"), b"cookie database").unwrap();
+        let downloads = manager.download_dir(session_id);
+        std::fs::create_dir_all(&downloads).unwrap();
+        // A live Runtime's profile.  It belongs to the Runtime and is deleted
+        // when that closes, not by removing the Session that spawned it.
+        let live = manager.disposable_profile_path("some-runtime");
+        std::fs::create_dir_all(&live).unwrap();
+
+        manager.remove_session_data(session_id).unwrap();
+        assert!(!manager.profiles_root.join("sessions").join(session_id).exists());
+        assert!(!downloads.exists(), "a deleted Session keeps no download directory");
+        assert!(live.is_dir(), "a Runtime's profile is not a Session's to delete");
+        manager.remove_session_data(session_id).unwrap();
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -3167,7 +3541,7 @@ mod tests {
                 mux_session_id: session_id.clone(),
                 browser_resource_id: "browser-resource".into(),
                 url: "about:blank".into(),
-                temporary_profile: true,
+                reuse_local_profile: false,
             })
             .await
             .unwrap();
@@ -3303,7 +3677,7 @@ mod tests {
                 mux_session_id: "integration-session".into(),
                 browser_resource_id: "browser-resource".into(),
                 url: format!("http://127.0.0.1:{port}"),
-                temporary_profile: false,
+                reuse_local_profile: false,
             })
             .await
             .unwrap();
@@ -3347,7 +3721,7 @@ mod tests {
                 mux_session_id: "integration-session-2".into(),
                 browser_resource_id: "browser-resource-2".into(),
                 url: "about:blank".into(),
-                temporary_profile: false,
+                reuse_local_profile: false,
             })
             .await
             .unwrap();

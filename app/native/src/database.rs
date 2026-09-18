@@ -385,6 +385,25 @@ impl Database {
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             Ok(columns.iter().any(|column| column == "launchProfileId"))
         })?;
+        let has_reuse_local_profile = self.with_conn(|db| {
+            let mut statement = db.prepare("PRAGMA table_info(browser_resources)")?;
+            let columns = statement
+                .query_map([], |row| row.get::<_, String>(1))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(columns.iter().any(|column| column == "reuseLocalProfile"))
+        })?;
+        // Kept only to be dropped: a browser profile is never persisted any
+        // more, so nothing reads this column and a database that still has it is
+        // carrying a setting whose two values now mean the same thing.  It lives
+        // in a distinct flag rather than in `has_reuse_local_profile` so the
+        // drop costs one `PRAGMA` and no change to the migration above.
+        let has_temporary_profile = self.with_conn(|db| {
+            let mut statement = db.prepare("PRAGMA table_info(browser_resources)")?;
+            let columns = statement
+                .query_map([], |row| row.get::<_, String>(1))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(columns.iter().any(|column| column == "temporaryProfile"))
+        })?;
         let has_resource_grants = self.with_conn(|db| {
             let mut statement = db.prepare("PRAGMA table_info(agent_control_grants)")?;
             let columns = statement
@@ -412,7 +431,7 @@ impl Database {
                 CREATE TABLE IF NOT EXISTS browser_resources (
                   id TEXT PRIMARY KEY, muxSessionId TEXT NOT NULL, name TEXT NOT NULL,
                   sourcePaneId TEXT NOT NULL DEFAULT '', bookmarkId TEXT NOT NULL DEFAULT '',
-                  url TEXT NOT NULL DEFAULT 'about:blank', temporaryProfile INTEGER NOT NULL DEFAULT 0,
+                  url TEXT NOT NULL DEFAULT 'about:blank',
                   sortOrder INTEGER NOT NULL DEFAULT 0, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL,
                   FOREIGN KEY(muxSessionId) REFERENCES mux_sessions(id) ON DELETE CASCADE
                 );
@@ -423,6 +442,19 @@ impl Database {
                     "ALTER TABLE mux_panes ADD COLUMN launchProfileId TEXT NOT NULL DEFAULT ''",
                     [],
                 )?;
+            }
+            // Added by ALTER rather than to the CREATE TABLE above so that a
+            // fresh database and an existing one take the same path, and the
+            // migration stays idempotent when run again.
+            if !has_reuse_local_profile {
+                transaction.execute(
+                    "ALTER TABLE browser_resources ADD COLUMN reuseLocalProfile INTEGER NOT NULL DEFAULT 0",
+                    [],
+                )?;
+            }
+            if has_temporary_profile {
+                transaction
+                    .execute("ALTER TABLE browser_resources DROP COLUMN temporaryProfile", [])?;
             }
             if !has_resource_grants {
                 let browser_pane_ids = {
@@ -435,12 +467,12 @@ impl Database {
                 transaction.execute_batch(
                     r#"
                     INSERT OR IGNORE INTO browser_resources(
-                      id,muxSessionId,name,sourcePaneId,bookmarkId,url,temporaryProfile,
+                      id,muxSessionId,name,sourcePaneId,bookmarkId,url,
                       sortOrder,createdAt,updatedAt
                     )
                     SELECT id,muxSessionId,title,targetId,bookmarkId,
                       CASE WHEN trim(command)='' THEN 'about:blank' ELSE command END,
-                      0,sortOrder,createdAt,updatedAt
+                      sortOrder,createdAt,updatedAt
                     FROM mux_panes WHERE kind='browser';
                     CREATE TABLE agent_control_grants_v10 (
                       id TEXT PRIMARY KEY, sourcePaneId TEXT NOT NULL,
@@ -844,9 +876,9 @@ impl Database {
     ) -> Result<Vec<BrowserResource>, String> {
         self.with_conn(|db| {
             let sql = if mux_session_id.is_some() {
-                "SELECT id,muxSessionId,name,sourcePaneId,bookmarkId,url,temporaryProfile,sortOrder,createdAt,updatedAt FROM browser_resources WHERE muxSessionId=? ORDER BY sortOrder ASC,createdAt ASC"
+                "SELECT id,muxSessionId,name,sourcePaneId,bookmarkId,url,reuseLocalProfile,sortOrder,createdAt,updatedAt FROM browser_resources WHERE muxSessionId=? ORDER BY sortOrder ASC,createdAt ASC"
             } else {
-                "SELECT id,muxSessionId,name,sourcePaneId,bookmarkId,url,temporaryProfile,sortOrder,createdAt,updatedAt FROM browser_resources ORDER BY muxSessionId ASC,sortOrder ASC,createdAt ASC"
+                "SELECT id,muxSessionId,name,sourcePaneId,bookmarkId,url,reuseLocalProfile,sortOrder,createdAt,updatedAt FROM browser_resources ORDER BY muxSessionId ASC,sortOrder ASC,createdAt ASC"
             };
             let mut statement = db.prepare(sql)?;
             let read = |row: &rusqlite::Row<'_>| {
@@ -857,7 +889,7 @@ impl Database {
                     source_pane_id: row.get(3)?,
                     bookmark_id: row.get(4)?,
                     url: row.get(5)?,
-                    temporary_profile: row.get::<_, i64>(6)? != 0,
+                    reuse_local_profile: row.get::<_, i64>(6)? != 0,
                     sort_order: row.get(7)?,
                     created_at: row.get(8)?,
                     updated_at: row.get(9)?,
@@ -889,7 +921,7 @@ impl Database {
             source_pane_id: String::new(),
             bookmark_id: String::new(),
             url: String::new(),
-            temporary_profile: false,
+            reuse_local_profile: false,
         })
     }
 
@@ -962,7 +994,7 @@ impl Database {
             source_pane_id: source_pane_id.into(),
             bookmark_id: bookmark_id.into(),
             url: url.into(),
-            temporary_profile: input.temporary_profile,
+            reuse_local_profile: input.reuse_local_profile,
             sort_order,
             created_at: existing
                 .as_ref()
@@ -971,12 +1003,14 @@ impl Database {
             updated_at: now,
         };
         self.with_conn(|db| db.execute(
-            "INSERT INTO browser_resources(id,muxSessionId,name,sourcePaneId,bookmarkId,url,temporaryProfile,sortOrder,createdAt,updatedAt) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET muxSessionId=excluded.muxSessionId,name=excluded.name,sourcePaneId=excluded.sourcePaneId,bookmarkId=excluded.bookmarkId,url=excluded.url,temporaryProfile=excluded.temporaryProfile,updatedAt=excluded.updatedAt",
-            params![resource.id,resource.mux_session_id,resource.name,resource.source_pane_id,resource.bookmark_id,resource.url,resource.temporary_profile as i64,resource.sort_order,resource.created_at,resource.updated_at],
+            "INSERT INTO browser_resources(id,muxSessionId,name,sourcePaneId,bookmarkId,url,reuseLocalProfile,sortOrder,createdAt,updatedAt) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET muxSessionId=excluded.muxSessionId,name=excluded.name,sourcePaneId=excluded.sourcePaneId,bookmarkId=excluded.bookmarkId,url=excluded.url,reuseLocalProfile=excluded.reuseLocalProfile,updatedAt=excluded.updatedAt",
+            params![resource.id,resource.mux_session_id,resource.name,resource.source_pane_id,resource.bookmark_id,resource.url,resource.reuse_local_profile as i64,resource.sort_order,resource.created_at,resource.updated_at],
         ).map(|_| ()))?;
         Ok(resource)
     }
 
+    /// Delete the resource and report the Session it belonged to, which is what
+    /// scopes its on-disk profile directory. `None` means no such row.
     pub fn delete_browser_resource(&self, id: &str) -> Result<(), String> {
         self.with_conn(|db| {
             db.execute("DELETE FROM browser_resources WHERE id=?", [id])?;
@@ -2113,7 +2147,7 @@ mod tests {
                 source_pane_id: String::new(),
                 bookmark_id: String::new(),
                 url: String::new(),
-                temporary_profile: false,
+                reuse_local_profile: false,
             })
             .unwrap();
         assert!(browser.url.is_empty());
@@ -2126,7 +2160,7 @@ mod tests {
                     source_pane_id: String::new(),
                     bookmark_id: String::new(),
                     url: String::new(),
-                    temporary_profile: false,
+                    reuse_local_profile: false,
                 })
                 .unwrap_err()
                 .contains("只能关联一个浏览器资源")
@@ -2139,7 +2173,7 @@ mod tests {
                 source_pane_id: String::new(),
                 bookmark_id: String::new(),
                 url: String::new(),
-                temporary_profile: false,
+                reuse_local_profile: false,
             })
             .unwrap();
         assert_eq!(renamed.id, browser.id);
@@ -2150,6 +2184,88 @@ mod tests {
         );
         drop(database);
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn reads_a_browser_resource_row_written_before_the_reuse_local_profile_column() {
+        let path = std::env::temp_dir().join(format!(
+            "{}-browser-reuse-column-{}.db",
+            crate::product::PRODUCT_KEY,
+            Uuid::new_v4()
+        ));
+        let connection = rusqlite::Connection::open(&path).expect("create old database");
+        connection
+            .execute_batch(
+                r#"
+                CREATE TABLE mux_sessions (
+                  id TEXT PRIMARY KEY, name TEXT NOT NULL, rootPath TEXT NOT NULL DEFAULT '',
+                  layoutJson TEXT NOT NULL DEFAULT '', sortOrder INTEGER NOT NULL DEFAULT 0,
+                  createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL
+                );
+                CREATE TABLE browser_resources (
+                  id TEXT PRIMARY KEY, muxSessionId TEXT NOT NULL, name TEXT NOT NULL,
+                  sourcePaneId TEXT NOT NULL DEFAULT '', bookmarkId TEXT NOT NULL DEFAULT '',
+                  url TEXT NOT NULL DEFAULT 'about:blank', temporaryProfile INTEGER NOT NULL DEFAULT 0,
+                  sortOrder INTEGER NOT NULL DEFAULT 0, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL,
+                  FOREIGN KEY(muxSessionId) REFERENCES mux_sessions(id) ON DELETE CASCADE
+                );
+                INSERT INTO mux_sessions (id,name,createdAt,updatedAt)
+                  VALUES ('session','Session','2026-01-01','2026-01-01');
+                INSERT INTO browser_resources (id,muxSessionId,name,temporaryProfile,sortOrder,createdAt,updatedAt)
+                  VALUES ('browser','session','Browser',1,0,'2026-01-01','2026-01-01');
+                "#,
+            )
+            .expect("create pre-column schema");
+        drop(connection);
+
+        let database = Database::open(
+            &path,
+            &format!("{}.reuse-column-test", crate::product::CREDENTIAL_SERVICE),
+        )
+        .expect("migrate database");
+        let resources = database.list_browser_resources(None).unwrap();
+        assert_eq!(resources.len(), 1);
+        assert!(
+            !resources[0].reuse_local_profile,
+            "an upgraded row must default to not copying the local Chrome profile"
+        );
+
+        let saved = database
+            .save_browser_resource(BrowserResourceInput {
+                id: Some("browser".into()),
+                mux_session_id: "session".into(),
+                name: "Browser".into(),
+                source_pane_id: String::new(),
+                bookmark_id: String::new(),
+                url: "about:blank".into(),
+                reuse_local_profile: true,
+            })
+            .unwrap();
+        assert!(saved.reuse_local_profile);
+        assert!(database.list_browser_resources(None).unwrap()[0].reuse_local_profile);
+        drop(database);
+
+        // The dropped column is the other half of the migration, and it is only
+        // observable from outside the crate's own row reader.
+        let connection = rusqlite::Connection::open(&path).expect("reopen database");
+        let mut statement = connection
+            .prepare("PRAGMA table_info(browser_resources)")
+            .expect("read migrated schema");
+        let columns = statement
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        drop(statement);
+        drop(connection);
+        assert!(
+            !columns.iter().any(|column| column == "temporaryProfile"),
+            "the retired profile column must be dropped, since nothing reads it: {columns:?}"
+        );
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("db-wal"));
+        let _ = std::fs::remove_file(path.with_extension("db-shm"));
     }
 
     #[test]
