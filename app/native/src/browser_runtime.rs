@@ -183,6 +183,19 @@ pub struct BrowserRuntimeCreateRequest {
     pub reuse_local_profile: bool,
 }
 
+impl BrowserRuntimeCreateRequest {
+    /// Take the switch from the stored Resource instead of from the request.
+    ///
+    /// The row is where the user's choice lives, so a caller that sends the
+    /// field — the frontend builds a request from the Resource in front of it,
+    /// and older callers send a default — cannot turn on a copy of their site
+    /// cookies for a Resource whose saved setting is off.
+    pub fn with_reuse_local_profile_from(mut self, reuse_local_profile: bool) -> Self {
+        self.reuse_local_profile = reuse_local_profile;
+        self
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(
     tag = "type",
@@ -3180,6 +3193,30 @@ mod tests {
         }
         snapshot.sort_by(|left, right| left.0.cmp(&right.0));
         snapshot
+    }
+
+    #[test]
+    fn the_request_cannot_turn_on_reuse_for_a_resource_that_has_it_off() {
+        let requested = super::BrowserRuntimeCreateRequest {
+            mux_session_id: "session".into(),
+            browser_resource_id: "resource".into(),
+            url: "about:blank".into(),
+            // A caller asking for it: the field is on the wire, so this is what
+            // a forged or out-of-date request looks like.
+            reuse_local_profile: true,
+        };
+        let applied = requested.with_reuse_local_profile_from(false);
+        assert!(
+            !applied.reuse_local_profile,
+            "the stored resource decides whether the user's cookies are copied"
+        );
+
+        // And the other direction, so the row is a source rather than a veto.
+        assert!(
+            applied
+                .with_reuse_local_profile_from(true)
+                .reuse_local_profile
+        );
     }
 
     #[test]

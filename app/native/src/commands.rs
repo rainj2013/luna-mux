@@ -604,14 +604,7 @@ pub async fn browser_runtime_create(
     if resource.mux_session_id != request.mux_session_id {
         return Err("浏览器资源与会话不匹配".into());
     }
-    // Reusing the local profile comes from the stored resource, not from the
-    // request.  The row is where the user's choice lives, and it copies their
-    // site cookies, so a caller must not be able to enable it for a resource
-    // whose saved setting is off.
-    let request = BrowserRuntimeCreateRequest {
-        reuse_local_profile: resource.reuse_local_profile,
-        ..request
-    };
+    let request = request.with_reuse_local_profile_from(resource.reuse_local_profile);
     let runtime = state.browser_runtimes.create(request).await?;
     if let Err(error) = state
         .luna_mcp

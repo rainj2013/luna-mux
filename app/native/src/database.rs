@@ -2265,6 +2265,22 @@ mod tests {
             "the retired profile column must be dropped, since nothing reads it: {columns:?}"
         );
 
+        // Running the migration again on the already-migrated file, which is what
+        // every start after the first one does: the column is gone, so the drop
+        // must be skipped rather than attempted and the row must survive.
+        let reopened = Database::open(
+            &path,
+            &format!("{}.reuse-column-test", crate::product::CREDENTIAL_SERVICE),
+        )
+        .expect("reopen an already-migrated database");
+        let resources = reopened.list_browser_resources(None).unwrap();
+        assert_eq!(resources.len(), 1);
+        assert!(
+            resources[0].reuse_local_profile,
+            "a second migration run must not discard the saved choice"
+        );
+        drop(reopened);
+
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("db-wal"));
         let _ = std::fs::remove_file(path.with_extension("db-shm"));
