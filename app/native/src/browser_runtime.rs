@@ -278,6 +278,9 @@ impl BrowserRuntimeManager {
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
             cleanup_stale_managed_chrome(&profiles_root);
+            // Safe here and only here without checking: nothing has been started
+            // yet, so no profile in this tree can belong to a live browser.
+            sweep_stale_browser_profiles(&profiles_root);
             let _ = std::fs::remove_file(&registry_path);
         }
         Arc::new(Self {
@@ -432,6 +435,10 @@ impl BrowserRuntimeManager {
                 profile_path.display()
             )
         })?;
+        // Held until the Runtime is registered below: every step between here and
+        // there can fail after the directory has been seeded with a copy of the
+        // user's cookies, and none of them should have to remember to clean up.
+        let profile_guard = ProfileCleanupGuard::new(profile_path.clone());
         // Every start seeds from scratch, which is what keeps the snapshot the
         // user asked for from going stale: the directory it lands in was created
         // a few lines above and is deleted when this Runtime closes, so there is
@@ -502,7 +509,7 @@ impl BrowserRuntimeManager {
             error: None,
         };
         if let Err(error) = wait_for_cdp(port, Duration::from_secs(8)).await {
-            cleanup_failed_browser_start(&mut child, &profile_path);
+            cleanup_failed_browser_start(&mut child);
             summary.status = BrowserRuntimeStatus::Error;
             summary.error = Some(error.clone());
             self.reserve_session_cdp_port(&mux_session_id, port);
@@ -511,7 +518,7 @@ impl BrowserRuntimeManager {
         let websocket_url = match page_websocket_url(port, &url).await {
             Ok(websocket_url) => websocket_url,
             Err(error) => {
-                cleanup_failed_browser_start(&mut child, &profile_path);
+                cleanup_failed_browser_start(&mut child);
                 self.reserve_session_cdp_port(&mux_session_id, port);
                 return Err(error);
             }
@@ -519,7 +526,7 @@ impl BrowserRuntimeManager {
         let cdp_socket = match connect_async(&websocket_url).await {
             Ok((socket, _)) => socket,
             Err(error) => {
-                cleanup_failed_browser_start(&mut child, &profile_path);
+                cleanup_failed_browser_start(&mut child);
                 self.reserve_session_cdp_port(&mux_session_id, port);
                 return Err(format!("无法连接 Chrome CDP: {error}"));
             }
@@ -537,6 +544,9 @@ impl BrowserRuntimeManager {
                     cdp_tx,
                 },
             );
+        // Past this point the profile belongs to the Runtime, which deletes it
+        // when it closes, so the guard must not.
+        let _ = profile_guard.keep();
         self.write_registry();
         (self.event_sink)(BrowserRuntimeEvent::Started {
             runtime: summary.clone(),
@@ -621,6 +631,21 @@ impl BrowserRuntimeManager {
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
             cleanup_stale_managed_chrome(&self.profiles_root);
+            // The sweep deletes the directory a live Chrome is using, so it runs
+            // only once the map is empty.  `close_all` waits before this is
+            // called, but it waits with a timeout, and a runtime that outlived
+            // that timeout still owns its profile.  The process enumeration is
+            // not evidence either way: it reports nothing both when nothing is
+            // running and when the platform command that lists processes is
+            // missing, and only the map distinguishes those.
+            let drained = self
+                .runtimes
+                .lock()
+                .map(|runtimes| runtimes.is_empty())
+                .unwrap_or(false);
+            if drained {
+                sweep_stale_browser_profiles(&self.profiles_root);
+            }
             let _ = std::fs::remove_file(&self.registry_path);
         }
     }
@@ -1816,7 +1841,7 @@ fn agent_browser_download_dir(scope: &str) -> PathBuf {
 /// validation.  Deletion is irreversible, so containment is enforced at the
 /// point of deletion instead of being assumed from the caller.
 fn remove_dir_within(root: &Path, target: &Path) -> Result<(), String> {
-    if target == root || !target.starts_with(root) {
+    if target == root || !target.starts_with(root) || has_unresolved_component(target) {
         return Err(format!(
             "拒绝删除浏览器数据目录之外的路径：{}",
             target.display()
@@ -1832,6 +1857,55 @@ fn remove_dir_within(root: &Path, target: &Path) -> Result<(), String> {
             "无法删除浏览器数据目录 {}: {error}",
             target.display()
         )),
+    }
+}
+
+/// Whether a path holds a component that only resolves once the OS reads it.
+///
+/// `Path::starts_with` compares components lexically and `Path::join` does not
+/// normalize, so `<root>/sessions/../..` passes a containment check that is
+/// written in terms of them — while `remove_dir_all` hands the same string to
+/// the kernel, which resolves `..` for real and deletes `<root>`'s parent.  A
+/// component that would move the target after the check has been trusted is
+/// refused rather than resolved.
+fn has_unresolved_component(path: &Path) -> bool {
+    path.components().any(|component| {
+        matches!(
+            component,
+            std::path::Component::ParentDir | std::path::Component::CurDir
+        )
+    })
+}
+
+/// Deletes a profile directory unless the Runtime that owns it takes it over.
+///
+/// `create` has several steps that can fail after the directory exists and has
+/// been seeded with a copy of the user's cookies — writing Chrome's preferences,
+/// preparing the download directory, reserving the session's CDP port, spawning
+/// the process — and each of those used to return with the copy still on disk.
+/// A guard makes deletion the default, so a step added later cannot forget it.
+struct ProfileCleanupGuard {
+    path: Option<PathBuf>,
+}
+
+impl ProfileCleanupGuard {
+    fn new(path: PathBuf) -> Self {
+        Self { path: Some(path) }
+    }
+
+    /// Hand the directory to the Runtime that will own and delete it.
+    fn keep(mut self) -> PathBuf {
+        self.path
+            .take()
+            .expect("a profile guard is only ever released once")
+    }
+}
+
+impl Drop for ProfileCleanupGuard {
+    fn drop(&mut self) {
+        if let Some(path) = self.path.take() {
+            let _ = std::fs::remove_dir_all(path);
+        }
     }
 }
 
@@ -1931,14 +2005,17 @@ async fn close_managed_runtime(mut runtime: ManagedBrowserRuntime) {
     .await;
 }
 
-fn cleanup_failed_browser_start(child: &mut Child, profile_path: &Path) {
+/// Kill a Chrome that never became a Runtime.
+///
+/// Its profile is removed by the caller's `ProfileCleanupGuard`, which owns that
+/// decision for every way `create` can fail.
+fn cleanup_failed_browser_start(child: &mut Child) {
     close_process_tree(child);
     let _ = child.kill();
     let _ = child.wait();
-    let _ = std::fs::remove_dir_all(profile_path);
 }
 
-/// Entries inside a Chrome profile directory that carry cookie state.
+/// Files inside a Chrome profile directory that carry cookie state.
 ///
 /// Deliberately an allowlist, and deliberately narrow. Cookies are what signs a
 /// browser in; the real profile also holds site storage, extensions, browsing
@@ -1947,12 +2024,15 @@ fn cleanup_failed_browser_start(child: &mut Child, profile_path: &Path) {
 /// strictly worse thing to duplicate onto disk. Site storage is excluded on size
 /// as well: IndexedDB alone runs to hundreds of megabytes in a profile in daily
 /// use, which every browser start would have to copy.
-const REUSED_PROFILE_ENTRIES: [&str; 2] = [
+///
+/// Entries are given as path components rather than as a directory name so the
+/// copy stays this narrow: `Network` also holds HSTS, trust-token and reporting
+/// state, none of which is cookie state and none of which is copied.
+const REUSED_PROFILE_ENTRIES: [&[&str]; 2] = [
     // Pre-Chrome-96 location for the cookie database.
-    "Cookies",
-    // Where Chrome keeps the cookie database from 96 on, together with the
-    // site network state that belongs to it.
-    "Network",
+    &["Cookies"],
+    // Where Chrome keeps the cookie database from 96 on.
+    &["Network", "Cookies"],
 ];
 
 #[derive(Debug, Default)]
@@ -1990,15 +2070,16 @@ fn seed_profile_from(
     let target_profile = profile_path.join("Default");
     let mut outcome = ProfileSeedOutcome::default();
     for entry in REUSED_PROFILE_ENTRIES {
-        let source = source_profile.join(entry);
+        let source = join_components(&source_profile, entry);
         if !source.exists() {
             continue;
         }
-        copy_profile_entry(&source, &target_profile.join(entry), &mut outcome);
+        copy_profile_entry(&source, &join_components(&target_profile, entry), &mut outcome);
     }
     // `Local State` sits beside the profile rather than inside it, and on
-    // Windows it holds the key Chrome needs to decrypt the cookies copied
-    // above; without it those cookies are unreadable on that platform.
+    // Windows it holds the DPAPI-wrapped key Chrome needs to decrypt the
+    // cookies copied above; without it those cookies are unreadable on that
+    // platform, so the copy necessarily carries that key too.
     let local_state = user_data_root.join("Local State");
     if local_state.is_file() {
         copy_profile_entry(&local_state, &profile_path.join("Local State"), &mut outcome);
@@ -2037,6 +2118,13 @@ fn local_chrome_user_data_root() -> Option<PathBuf> {
         let root = home.join(".config").join("google-chrome");
         root.is_dir().then_some(root)
     }
+}
+
+/// Build a path from a base and the components of an allowlist entry.
+fn join_components(base: &Path, components: &[&str]) -> PathBuf {
+    components.iter().fold(base.to_path_buf(), |path, part| {
+        path.join(part)
+    })
 }
 
 /// Recursively copy one profile entry, counting files that could not be read.
@@ -2157,6 +2245,10 @@ fn configure_process_group(_command: &mut Command) {}
 /// `sessions/` is the retired per-Resource profile path.  Older builds wrote
 /// profiles there and nothing deletes them any more, so this is the only code
 /// path that can.
+///
+/// Only the two callers that can prove nothing is live may use this: startup,
+/// before any Runtime exists, and exit once the runtime map has drained.
+/// Killing processes is not a substitute for that proof.
 fn sweep_stale_browser_profiles(profiles_root: &Path) {
     for directory in ["temporary", "sessions"] {
         let _ = remove_dir_within(profiles_root, &profiles_root.join(directory));
@@ -2190,7 +2282,6 @@ fn cleanup_stale_managed_chrome(profiles_root: &Path) {
             }
         }
     }
-    sweep_stale_browser_profiles(profiles_root);
 }
 
 #[cfg(target_os = "macos")]
@@ -3102,6 +3193,13 @@ mod tests {
             .unwrap();
         std::fs::write(source.join("Cookies"), b"legacy cookie database").unwrap();
         std::fs::write(source.join("Network").join("Cookies"), b"cookie database").unwrap();
+        // Sits in the same directory as the cookie database and is not cookie
+        // state, which is why the allowlist names files rather than directories.
+        std::fs::write(
+            source.join("Network").join("TransportSecurity"),
+            b"hsts state",
+        )
+        .unwrap();
         std::fs::write(
             source.join("Local Storage").join("leveldb").join("000001.log"),
             b"local storage",
@@ -3129,9 +3227,16 @@ mod tests {
             "Windows needs the copied profile's cookie key to decrypt those cookies"
         );
         assert_eq!(outcome.copied, 3);
-        assert_eq!(outcome.skipped, 0);
+        assert_eq!(
+            outcome.skipped, 0,
+            "every file in the copy set was readable"
+        );
         // Cookies are what signs a browser in; everything else a real profile
         // holds is either private or large, and this copies it on every start.
+        assert!(
+            !seeded.join("Network").join("TransportSecurity").exists(),
+            "only the cookie database is copied out of Network, not the rest of it"
+        );
         assert!(
             !seeded.join("Local Storage").exists(),
             "site storage is not needed to reach a signed-in page"
@@ -3179,6 +3284,41 @@ mod tests {
             "the root itself must never be removed"
         );
         assert!(profiles_root.is_dir());
+
+        // `<profiles_root>/sessions/../..` passes a lexical `starts_with` and
+        // resolves to the data directory itself once the kernel reads it, which
+        // is what makes this the case the guard exists for.
+        let climbing = profiles_root.join("sessions").join("..").join("..");
+        assert!(
+            super::remove_dir_within(&profiles_root, &climbing).is_err(),
+            "a path that only leaves the root when the OS resolves it must be refused"
+        );
+        assert!(outside.is_dir(), "nothing above the root may be deleted");
+        assert!(profiles_root.is_dir());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_profile_guard_deletes_the_directory_unless_a_runtime_claims_it() {
+        let root = std::env::temp_dir().join(format!("luna-mux-browser-guard-{}", Uuid::new_v4()));
+        let abandoned = root.join("abandoned");
+        std::fs::create_dir_all(abandoned.join("Default")).unwrap();
+        std::fs::write(abandoned.join("Default").join("Cookies"), b"cookie database").unwrap();
+        drop(super::ProfileCleanupGuard::new(abandoned.clone()));
+        assert!(
+            !abandoned.exists(),
+            "a start that fails after seeding must not leave the cookie copy behind"
+        );
+
+        let claimed = root.join("claimed");
+        std::fs::create_dir_all(&claimed).unwrap();
+        let returned = super::ProfileCleanupGuard::new(claimed.clone()).keep();
+        assert_eq!(returned, claimed);
+        assert!(
+            claimed.is_dir(),
+            "a directory handed to a runtime outlives the guard"
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -3731,12 +3871,20 @@ mod tests {
         assert_eq!(manager.list().unwrap().len(), 2);
 
         let profile = runtime.profile_path.clone();
+        let second_profile = second_runtime.profile_path.clone();
         manager.close(&runtime.id).await.unwrap();
         assert_eq!(manager.list().unwrap().len(), 1);
-        assert!(std::path::Path::new(&profile).exists());
+        assert!(
+            !std::path::Path::new(&profile).exists(),
+            "closing a runtime deletes the profile it was using"
+        );
+        assert!(
+            std::path::Path::new(&second_profile).exists(),
+            "one runtime closing must not delete another runtime's profile"
+        );
         manager.close(&second_runtime.id).await.unwrap();
         assert!(manager.list().unwrap().is_empty());
-        assert!(std::path::Path::new(&profile).exists());
+        assert!(!std::path::Path::new(&second_profile).exists());
         server.abort();
         let _ = std::fs::remove_dir_all(root);
     }

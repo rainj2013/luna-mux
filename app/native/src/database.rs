@@ -1009,8 +1009,10 @@ impl Database {
         Ok(resource)
     }
 
-    /// Delete the resource and report the Session it belonged to, which is what
-    /// scopes its on-disk profile directory. `None` means no such row.
+    /// Delete the resource row.
+    ///
+    /// Nothing on disk is scoped by a Resource any more: its profile belongs to
+    /// the Runtime that created it and is deleted when that Runtime closes.
     pub fn delete_browser_resource(&self, id: &str) -> Result<(), String> {
         self.with_conn(|db| {
             db.execute("DELETE FROM browser_resources WHERE id=?", [id])?;
