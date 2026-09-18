@@ -1114,6 +1114,7 @@ pub fn try_run_mcp_browser(args: &[String]) -> Option<i32> {
             return Some(1);
         }
     };
+    ensure_agent_browser_skills_dir();
     let mut command = Command::new(&agent_browser);
     configure_agent_browser_command(&mut command);
     command
@@ -1208,6 +1209,7 @@ where
         "starting agent-browser MCP: session={mux_session_id}, cdp_port={cdp_port}, binary={}",
         binary.display()
     ));
+    ensure_agent_browser_skills_dir();
     let mut command = Command::new(binary);
     configure_agent_browser_command(&mut command);
     command
@@ -1522,16 +1524,49 @@ fn agent_browser_sidecar_source_name() -> &'static str {
     "agent-browser"
 }
 
+/// Directory agent-browser reads its bundled skills from.
+///
+/// Luna Mux bundles none, and the directory exists so the three `state`-profile
+/// skills tools report that plainly instead of failing with the sidecar's advice
+/// to "reinstall via npm", which nothing in a packaged app can act on.  Upstream
+/// ships what would go here: a core skill that teaches the `agent-browser`
+/// command line and a named session per task, both of which the Luna Mux browser
+/// contract forbids because Luna Mux owns the browser process and pins every call
+/// to the injected default session, plus a set of Vercel-internal workflows that
+/// mean nothing to this product.  Installing them would answer the skills tools
+/// by handing Agents guidance that contradicts the contract they were given.
+fn agent_browser_skills_root() -> PathBuf {
+    browser_data_root().join("agent-browser-skills")
+}
+
+/// Create the skills root before a `mcp` spawn.  Only an MCP server reads
+/// skills, so only the two MCP launch paths call this, and a failure is not
+/// fatal: agent-browser then reports a missing skills directory, which is what
+/// leaving the tools exposed without this call would have done anyway.
+fn ensure_agent_browser_skills_dir() {
+    let root = agent_browser_skills_root();
+    if let Err(error) = std::fs::create_dir_all(&root) {
+        eprintln!(
+            "Luna Mux 无法创建 Browser skills 目录 {}：{error}",
+            root.display()
+        );
+    }
+}
+
 #[cfg(not(windows))]
 fn configure_agent_browser_command(command: &mut Command) {
-    command.env("AGENT_BROWSER_SOCKET_DIR", AGENT_BROWSER_SOCKET_DIR);
+    command
+        .env("AGENT_BROWSER_SOCKET_DIR", AGENT_BROWSER_SOCKET_DIR)
+        .env("AGENT_BROWSER_SKILLS_DIR", agent_browser_skills_root());
 }
 
 #[cfg(windows)]
 fn configure_agent_browser_command(command: &mut Command) {
     use std::os::windows::process::CommandExt;
 
-    command.creation_flags(CREATE_NO_WINDOW);
+    command
+        .creation_flags(CREATE_NO_WINDOW)
+        .env("AGENT_BROWSER_SKILLS_DIR", agent_browser_skills_root());
 }
 
 fn agent_browser_scope(mux_session_id: &str) -> String {
@@ -2980,6 +3015,26 @@ mod tests {
 
         assert!(output.status.success());
         assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "luna-mux");
+    }
+
+    #[test]
+    fn agent_browser_commands_point_skills_at_the_product_directory() {
+        // The skills tools are only as good as this variable: without it
+        // agent-browser looks next to a binary that never shipped a skills
+        // directory and answers every call with install advice a packaged app
+        // cannot follow.
+        let mut command = std::process::Command::new("agent-browser");
+        super::configure_agent_browser_command(&mut command);
+        let skills = command
+            .get_envs()
+            .find(|(name, _)| *name == "AGENT_BROWSER_SKILLS_DIR")
+            .and_then(|(_, value)| value)
+            .map(std::path::PathBuf::from)
+            .expect("agent-browser is told where its skills live");
+
+        assert_eq!(skills, super::agent_browser_skills_root());
+        assert_eq!(skills.file_name().unwrap(), "agent-browser-skills");
+        assert!(skills.is_absolute());
     }
 
     #[test]
