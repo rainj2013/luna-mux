@@ -443,6 +443,7 @@ impl Database {
                     [],
                 )?;
             }
+            // Retained as an inert compatibility column; no API exposes or uses it.
             // Added by ALTER rather than to the CREATE TABLE above so that a
             // fresh database and an existing one take the same path, and the
             // migration stays idempotent when run again.
@@ -889,7 +890,6 @@ impl Database {
                     source_pane_id: row.get(3)?,
                     bookmark_id: row.get(4)?,
                     url: row.get(5)?,
-                    reuse_local_profile: row.get::<_, i64>(6)? != 0,
                     sort_order: row.get(7)?,
                     created_at: row.get(8)?,
                     updated_at: row.get(9)?,
@@ -921,7 +921,6 @@ impl Database {
             source_pane_id: String::new(),
             bookmark_id: String::new(),
             url: String::new(),
-            reuse_local_profile: false,
         })
     }
 
@@ -994,7 +993,6 @@ impl Database {
             source_pane_id: source_pane_id.into(),
             bookmark_id: bookmark_id.into(),
             url: url.into(),
-            reuse_local_profile: input.reuse_local_profile,
             sort_order,
             created_at: existing
                 .as_ref()
@@ -1004,7 +1002,7 @@ impl Database {
         };
         self.with_conn(|db| db.execute(
             "INSERT INTO browser_resources(id,muxSessionId,name,sourcePaneId,bookmarkId,url,reuseLocalProfile,sortOrder,createdAt,updatedAt) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET muxSessionId=excluded.muxSessionId,name=excluded.name,sourcePaneId=excluded.sourcePaneId,bookmarkId=excluded.bookmarkId,url=excluded.url,reuseLocalProfile=excluded.reuseLocalProfile,updatedAt=excluded.updatedAt",
-            params![resource.id,resource.mux_session_id,resource.name,resource.source_pane_id,resource.bookmark_id,resource.url,resource.reuse_local_profile as i64,resource.sort_order,resource.created_at,resource.updated_at],
+            params![resource.id,resource.mux_session_id,resource.name,resource.source_pane_id,resource.bookmark_id,resource.url,0_i64,resource.sort_order,resource.created_at,resource.updated_at],
         ).map(|_| ()))?;
         Ok(resource)
     }
@@ -2149,7 +2147,6 @@ mod tests {
                 source_pane_id: String::new(),
                 bookmark_id: String::new(),
                 url: String::new(),
-                reuse_local_profile: false,
             })
             .unwrap();
         assert!(browser.url.is_empty());
@@ -2162,7 +2159,6 @@ mod tests {
                     source_pane_id: String::new(),
                     bookmark_id: String::new(),
                     url: String::new(),
-                    reuse_local_profile: false,
                 })
                 .unwrap_err()
                 .contains("只能关联一个浏览器资源")
@@ -2175,7 +2171,6 @@ mod tests {
                 source_pane_id: String::new(),
                 bookmark_id: String::new(),
                 url: String::new(),
-                reuse_local_profile: false,
             })
             .unwrap();
         assert_eq!(renamed.id, browser.id);
@@ -2228,8 +2223,10 @@ mod tests {
         let resources = database.list_browser_resources(None).unwrap();
         assert_eq!(resources.len(), 1);
         assert!(
-            !resources[0].reuse_local_profile,
-            "an upgraded row must default to not copying the local Chrome profile"
+            serde_json::to_value(&resources[0])
+                .unwrap()
+                .get("reuseLocalProfile")
+                .is_none()
         );
 
         let saved = database
@@ -2240,11 +2237,17 @@ mod tests {
                 source_pane_id: String::new(),
                 bookmark_id: String::new(),
                 url: "about:blank".into(),
-                reuse_local_profile: true,
             })
             .unwrap();
-        assert!(saved.reuse_local_profile);
-        assert!(database.list_browser_resources(None).unwrap()[0].reuse_local_profile);
+        assert!(
+            serde_json::to_value(&saved)
+                .unwrap()
+                .get("reuseLocalProfile")
+                .is_none()
+        );
+        database
+            .with_conn(|db| db.execute("UPDATE browser_resources SET reuseLocalProfile=1", []))
+            .unwrap();
         drop(database);
 
         // The dropped column is the other half of the migration, and it is only
@@ -2276,8 +2279,11 @@ mod tests {
         let resources = reopened.list_browser_resources(None).unwrap();
         assert_eq!(resources.len(), 1);
         assert!(
-            resources[0].reuse_local_profile,
-            "a second migration run must not discard the saved choice"
+            serde_json::to_value(&resources[0])
+                .unwrap()
+                .get("reuseLocalProfile")
+                .is_none(),
+            "a retired saved choice must not reappear after reopening"
         );
         drop(reopened);
 

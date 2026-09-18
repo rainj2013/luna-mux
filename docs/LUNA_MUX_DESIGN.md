@@ -112,13 +112,15 @@ Session 同时承载项目上下文与协作授权，避免为每对窗格另建
 
 浏览器在桌面独立 Chrome 窗口中运行，不参与终端布局，避免把网页标签与终端 Pane 的布局、尺寸和生命周期混为一体。
 
-配置目录不做持久化：每个 Runtime 使用自己的临时配置目录，浏览器关闭时连同目录一起删除，不保留到下次启动，也不跨 Session 复用。因此 Agent 不会看到上一次留下的站点状态，磁盘上也不会留下任何一份可被后续进程读到的浏览器数据。崩溃或强制退出会让删除路径不生效，启动时因此在终止上一轮残留的 Chrome 进程后统一清扫整个临时配置根目录。
+每个 Runtime 使用独立的临时配置目录，关闭浏览器时删除，不跨启动或 Session 复用，也不复制本机 Chrome 的 Cookie。用户可在临时浏览器内登录。启动时清理崩溃残留的受管进程和配置目录；删除 Session 时清理其下载及历史配置目录。删除操作须限制在产品数据目录内。
 
-Browser Resource 可以选择在启动前把本机 Chrome 的 cookie 状态复制进这个临时目录，使 Agent 打开网页时已处于登录状态。该开关按资源保存、默认关闭、由用户显式开启并确认，来源配置只读。复制是白名单且刻意收窄到文件名：只取 `Cookies`、`Network/Cookies`（Chrome 96 起），以及 Windows 上解密所需的 `Local State`（其中含被 DPAPI 包裹的 cookie 密钥，因此该平台必须一并复制）。同为 cookie 状态的邻居不在此列——`Network` 目录下的 HSTS、trust token 与 reporting 状态不复制；站点存储、扩展、浏览历史、已保存的密码与支付数据也都不复制。站点存储既非到达登录页面所必需，又构成主要体积——日常使用的配置中 IndexedDB 单项即可达数百 MB，而每次启动都要复制一遍。因为目录本身是临时的，每次启动都重新复制，快照不存在过期问题。删除 Browser Resource 或 Session 会删除其下载目录，并删除 Session 级的历史遗留配置目录。
+BrowserRuntimeManager 通过 CDP 让绑定页面的配色跟随应用主题，选择“跟随系统”时由 Chrome 跟随操作系统。截图默认开启元素标注。
 
 应用负责浏览器生命周期，`agent_browser` 负责页面自动化。自动化绑定 Session 的现有页面，普通导航复用该页面；网页操作不能自行启动或替换浏览器进程。
 
-Browser Runtime 启动 Chrome 时启用 WebMCP 页面 API 和预览客户端使用的测试接口（`WebMCP,WebMCPTesting`）；本地及远程 Agent 共用的 MCP 工具组包含 `webmcp`，用于发现、调用、查询异步结果和取消网页提供的工具。网页仍须自行注册工具，实际可用性取决于 Chrome 和网页使用的 API 版本。工具组还包含 `state`，向 Agent 开放 cookie、storage 和加密凭据库（`agent_browser_auth_save`/`auth_login` 等），使 Agent 无需在登录表单中键入密码即可完成登录。该工具组还带出三个读取内置技能的 `skills` 工具，而 Luna Mux 不随附任何技能：上游那份核心技能教的是 `agent-browser` 命令行和「每个任务一个具名会话」，这直接违背 Luna Mux 拥有浏览器进程、且把每次调用钉在注入的默认会话上的契约，其余技能则是 Vercel 内部工作流。安装它们等于用一段与自己发给 Agent 的契约相矛盾的说明来回答这些工具。因此 `AGENT_BROWSER_SKILLS_DIR` 指向产品数据目录下一个空目录，工具如实报告没有技能，而不是给出打包应用无法执行的「用 npm 重装」建议。`react` 与 `mobile` 补充组件树检查与设备模拟。React 相关工具在页面以 `--enable react-devtools` 打开前不可用；这是 agent-browser 的选项而非 Chrome 参数——Chrome 由 Luna Mux 启动，无法接收该参数，因此改由注入 Agent 的指导文本说明。该选项注册的是文档脚本，一次打开即可在整个浏览器会话内生效，不会重启浏览器。Luna Mux 不提供忽略 HTTPS 证书错误的设置。`--ignore-https-errors`（环境变量 `AGENT_BROWSER_IGNORE_HTTPS_ERRORS`）是守护进程级选项：实测在 MCP 连接已经建立之后按次传入 `extraArgs` 不改变证书处理，导航仍以 `net::ERR_CERT_AUTHORITY_INVALID` 失败。二进制中存在 `Security.setIgnoreCertificateErrors`，说明该策略是经 CDP 下发而非只在启动 Chrome 时决定，因此把标志加进 `mcp` 的启动参数应该可行；但这需要实机验证，所以本次不带这个设置。Luna Mux 启动 MCP 时以全局标志 `--input-mode human` 设置指针移动方式，避免瞬移指针被站点或录屏回放判定为自动化；该标志不是配置文件键，必须置于子命令之前。加载工具组本身不会告诉 Agent 哪些能力值得用：视觉与结构回归（`diff screenshot` / `diff snapshot`）、axe-core 无障碍审计、`batch` 批量调用，以及 snapshot 的 `interactive`/`selector`/`depth`/`compact` 收窄参数，都由注入 Agent 的指导文本介绍。`ifChanged`、`delta`、`full` 这类按次生效的字段无法在会话级强制，只能由 Agent 每次自行选择。
+Browser Runtime 启用 Chrome WebMCP 接口，页面须自行注册工具。本地和远程 Agent 共用的 MCP 工具组覆盖页面操作、网络调试、标签页、WebMCP、cookie 与 storage、加密凭据库、React 检查和设备模拟。React 检查须在打开页面时启用 `react-devtools`。Luna Mux 不附带上游 skills，以免其 CLI 和具名会话指引与受管浏览器契约冲突。
+
+Agent 注入指引说明批量调用、无障碍审计、截图与快照差异比较，以及增量观察和输出收窄的用法；这些能力由 Agent 按任务选择。
 
 CDP 仅绑定本地回环地址，端口和连接信息属于临时运行状态。远程 Agent 通过经认证的 Runtime 通信桥访问 Session 浏览器，原始 CDP 不转发到远端。远程开发服务使用独立 SSH 隧道，浏览器资源不拥有隧道。
 

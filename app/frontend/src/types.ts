@@ -52,7 +52,6 @@ export interface BrowserRuntimeCreateRequest {
   muxSessionId: string
   browserResourceId: string
   url?: string
-  reuseLocalProfile?: boolean
 }
 
 export type BrowserRuntimeEvent =
@@ -112,8 +111,6 @@ export interface BrowserResource {
   sourcePaneId: string
   bookmarkId: string
   url: string
-  /** Seed the profile from a copy of the local Chrome profile to start signed in. */
-  reuseLocalProfile: boolean
   sortOrder: number
   createdAt: string
   updatedAt: string
@@ -126,7 +123,6 @@ export interface BrowserResourceInput {
   sourcePaneId?: string
   bookmarkId?: string
   url?: string
-  reuseLocalProfile?: boolean
 }
 
 export type {

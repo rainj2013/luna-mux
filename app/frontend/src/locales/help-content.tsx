@@ -145,7 +145,7 @@ export function createChineseHelpSections(commandKey: string): HelpSection[] {
     },
     {
       id: 'browser', group: 'Agent 与自动化', title: '浏览器自动化', icon: Globe2,
-      searchText: '浏览器 browser chrome cdp profile agent-browser mcp 自动 按需 启动 停止 重启 打开 tab 页面 可用 agent 退出 profile 临时 复用登录态',
+      searchText: '浏览器 browser chrome cdp profile agent-browser mcp 自动 按需 启动 停止 重启 打开 tab 页面 可用 agent 退出 profile 临时',
       content: <>
         <h2>受管浏览器与网页验证</h2>
         <p>每个项目会话自动拥有一个 Browser Resource。它为同会话中支持 Browser MCP 的 Codex 和 Claude Code 提供独立 Chrome 进程、临时 Profile 和 agent-browser MCP 连接；Grok Build 当前不会注入该连接。</p>
@@ -155,13 +155,12 @@ export function createChineseHelpSections(commandKey: string): HelpSection[] {
           <li>Chrome 处于停止状态时，Luna Mux 会按需启动独立 Chrome 进程并连接 CDP。</li>
           <li>普通导航复用当前绑定页面；需要并行页面上下文时，Agent 可以创建额外标签页。</li>
           <li>停止浏览器或退出 Luna Mux 会关闭 Chrome 进程，并删除本次的 Profile 目录：登录状态和站点数据都不保留到下次启动。</li>
-          <li>需要 Agent 一启动就处于登录状态时，在“浏览器”页打开该资源的“复用本机 Chrome 登录态”；每次启动都会重新复制一份 cookie，关闭时随 Profile 一并删除。</li>
         </ol>
         <h3>浏览器页操作</h3>
         <table className="help-detail-table"><tbody>
           <tr><th scope="row">启动</th><td>立即启动当前会话的 Chrome，适合先登录网站或预热验证环境。</td></tr>
           <tr><th scope="row">打开</th><td>把已运行的受管 Chrome 窗口切到前台。</td></tr>
-          <tr><th scope="row">重启</th><td>关闭当前进程后，使用新建的临时 Profile 和同一会话 CDP 配置重新启动；开启“复用本机 Chrome 登录态”时会重新复制一次 cookie。</td></tr>
+          <tr><th scope="row">重启</th><td>关闭当前进程后，使用新建的临时 Profile 和同一会话 CDP 配置重新启动。</td></tr>
           <tr><th scope="row">停止</th><td>关闭 Chrome 进程，并删除本次的 Profile 目录，不保留给下次启动。</td></tr>
         </tbody></table>
         <p>诊断区显示运行状态、PID、CDP 地址、Profile 路径和启动错误。安装 Chrome 后，可点击重新检测刷新可用状态。</p>
@@ -324,7 +323,6 @@ export function createChineseHelpSections(commandKey: string): HelpSection[] {
           <li>密码、私钥口令和 AI API Key 使用 macOS Keychain 或 Windows Credential Manager；私钥文件本身由文件系统管理。</li>
           <li>每个 Agent 运行时获得临时身份。Codex 与 Claude Code 的 Hook、Luna MCP 和 Browser MCP 都绑定到当前会话与窗格，运行时退出后撤销；Grok Build 只使用生命周期 Hook。</li>
           <li>Browser Resource 使用随浏览器创建、随浏览器删除的临时 Profile。Profile 目录和 CDP 端点适合交给 Luna Mux 与 agent-browser 管理。</li>
-          <li>“复用本机 Chrome 登录态”会把本机 Chrome 的 cookie 复制一份到该临时目录。它按资源控制、默认关闭、需要确认，本机 Chrome 只读取不修改，且不复制站点存储、历史记录和已保存的密码。</li>
         </ul>
         <h3>Agent 状态诊断</h3>
         <ul>
@@ -484,7 +482,7 @@ export function createEnglishHelpSections(commandKey: string): HelpSection[] {
     },
     {
       id: 'browser', group: 'Agents and automation', title: 'Browser automation', icon: Globe2,
-      searchText: 'browser chrome cdp profile agent-browser mcp automatic on demand start stop restart focus tab page available agent exit profile disposable reuse local login state',
+      searchText: 'browser chrome cdp profile agent-browser mcp automatic on demand start stop restart focus tab page available agent exit profile disposable',
       content: <>
         <h2>Managed browser and web verification</h2>
         <p>Every Session automatically owns one Browser Resource. It gives Codex and Claude Code runtimes with Browser MCP an isolated Chrome process, disposable Profile, and agent-browser MCP connection; Grok Build does not currently receive that connection.</p>
@@ -494,13 +492,12 @@ export function createEnglishHelpSections(commandKey: string): HelpSection[] {
           <li>When Chrome is stopped, Luna Mux starts an isolated Chrome process and connects its CDP endpoint.</li>
           <li>Normal navigation reuses the bound page. Agents can create extra tabs when parallel page context is needed.</li>
           <li>Stopping Chrome or exiting Luna Mux closes the process and deletes the Profile directory: neither login state nor site data survives to the next start.</li>
-          <li>To have the Agent start signed in, turn on Reuse local Chrome login state for that Resource in the Browser view. Every start copies the cookies again, and closing the browser deletes them with the Profile.</li>
         </ol>
         <h3>Browser view controls</h3>
         <table className="help-detail-table"><tbody>
           <tr><th scope="row">Start</th><td>Starts Chrome immediately, useful for signing in or warming up the verification environment.</td></tr>
           <tr><th scope="row">Focus</th><td>Brings the running managed Chrome window to the foreground.</td></tr>
-          <tr><th scope="row">Restart</th><td>Relaunches with a newly created disposable Profile and the Session CDP configuration; with login-state reuse on, the cookies are copied again.</td></tr>
+          <tr><th scope="row">Restart</th><td>Relaunches with a newly created disposable Profile and the Session CDP configuration.</td></tr>
           <tr><th scope="row">Stop</th><td>Closes the Chrome process and deletes the Profile directory rather than keeping it for the next start.</td></tr>
         </tbody></table>
         <p>Diagnostics show runtime state, PID, CDP endpoint, Profile path, and startup errors. After installing Chrome, use the refresh button to update availability.</p>
@@ -663,7 +660,6 @@ export function createEnglishHelpSections(commandKey: string): HelpSection[] {
           <li>Passwords, private-key passphrases, and AI API Keys use macOS Keychain or Windows Credential Manager. Private-key files are managed by the filesystem.</li>
           <li>Each Agent runtime receives an ephemeral identity. Codex and Claude Code Hooks, Luna MCP, and Browser MCP are scoped to its Session and Pane and revoked on exit; Grok Build uses only the lifecycle Hook.</li>
           <li>Browser Resources use a disposable Profile created with the browser and deleted with it. Profile directories and CDP endpoints are best managed through Luna Mux and agent-browser.</li>
-          <li>Reuse local Chrome login state copies the local Chrome cookies into that disposable directory. It is per Resource, off by default, confirmed before it turns on, reads the local Chrome profile without modifying it, and never copies site storage, history, or saved passwords.</li>
         </ul>
         <h3>Agent state diagnostics</h3>
         <ul>

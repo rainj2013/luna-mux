@@ -274,10 +274,6 @@ pub struct BrowserResource {
     pub source_pane_id: String,
     pub bookmark_id: String,
     pub url: String,
-    /// Seed this Resource's profile from a copy of the real Chrome profile so
-    /// the Agent starts already signed in.  Defaults to off: this copies the
-    /// user's site cookies out of their everyday browser profile.
-    pub reuse_local_profile: bool,
     pub sort_order: i64,
     pub created_at: String,
     pub updated_at: String,
@@ -296,10 +292,6 @@ pub struct BrowserResourceInput {
     pub bookmark_id: String,
     #[serde(default)]
     pub url: String,
-    /// Off unless the user asks for it, so a caller that omits the field cannot
-    /// turn a copy of their site cookies on by accident.
-    #[serde(default)]
-    pub reuse_local_profile: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

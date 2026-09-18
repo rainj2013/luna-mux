@@ -312,17 +312,6 @@ export function App(): React.JSX.Element {
       setActiveKey(saved.id); setPaneLauncher(null); setDatabaseLibraryDialog(false); setWorkspaceView('terminal')
     } catch (error) { showError(errorMessage(error)) }
   }
-  const changeBrowserResourceProfile = async (resource: BrowserResourceState, patch: { reuseLocalProfile?: boolean }): Promise<void> => {
-    // Enabling this copies every site cookie out of the user's own browser, so
-    // it is confirmed rather than applied on toggle, and it defaults to off.
-    // Per Resource: one browser in a project can start signed in while another
-    // starts clean.
-    if (patch.reuseLocalProfile === true && !await confirmAction({ title: t('app.reuseLocalProfile'), message: t('app.reuseLocalProfileWarning'), kind: 'warning', confirmLabel: t('app.reuseLocalProfile') })) return
-    try {
-      const saved = await window.api.browserResources.save({ id: resource.id, muxSessionId: resource.muxSessionId, name: resource.name, sourcePaneId: resource.sourcePaneId, bookmarkId: resource.bookmarkId, url: resource.url, reuseLocalProfile: patch.reuseLocalProfile ?? resource.reuseLocalProfile })
-      setBrowserResources((current) => current.map((item) => item.id === resource.id ? { ...item, reuseLocalProfile: saved.reuseLocalProfile } : item))
-    } catch (error) { showError(errorMessage(error)) }
-  }
   const startBrowserResource = async (resource: BrowserResourceState): Promise<void> => {
     if (browserResourceStartInFlightRef.current.has(resource.id)) return
     const activeResource = browserResources.find((item) => item.id !== resource.id && item.muxSessionId === resource.muxSessionId && (item.status === 'running' || item.status === 'starting'))
@@ -342,7 +331,7 @@ export function App(): React.JSX.Element {
         tunnel = await window.api.tunnels.startBrowser(sourcePane.sessionId, resource.id, sourcePane.id, resource.url)
         launchUrl = tunnel.localUrl
       }
-      const runtime = await window.api.browserRuntimes.create({ muxSessionId: resource.muxSessionId, browserResourceId: resource.id, url: launchUrl, reuseLocalProfile: resource.reuseLocalProfile })
+      const runtime = await window.api.browserRuntimes.create({ muxSessionId: resource.muxSessionId, browserResourceId: resource.id, url: launchUrl })
       setBrowserResources((current) => current.map((item) => item.id === resource.id ? { ...item, runtime, tunnel, status: runtime.status, error: runtime.error } : item))
       await window.api.browserRuntimes.focusExternal(runtime.id).catch((error) => showError(errorMessage(error)))
     } catch (error) {
@@ -1614,7 +1603,7 @@ export function App(): React.JSX.Element {
             : sessionTabs.length === 0 && sessionBrowserResources.length === 0 ? <div className="welcome-state"><div className="welcome-icon"><SquareTerminal size={30} /></div><h2>{activeMuxSession.name}</h2>{activeMuxSession.rootPath && <p>{activeMuxSession.rootPath}</p>}<div className="welcome-actions"><button className="primary-button" onClick={() => void openPaneLauncher()}><CirclePlus size={16} />{t('app.addFirstPane')}</button></div></div>
             : workspaceView === 'terminal' && visibleSessionTabs.length === 0 ? <div className="welcome-state pane-empty-state"><div className="welcome-icon"><Minus size={30} /></div><h2>{t('app.minimizedPanes')}</h2><p>{t('app.restoreMinimizedPaneDescription')}</p><div className="welcome-actions">{sessionTabs.filter((pane) => minimizedPaneIds.has(pane.id)).map((pane) => <button key={pane.id} className="secondary-button" onClick={() => void restorePane(pane)}><Eye size={15} />{pane.title}</button>)}</div></div>
                 : workspaceView === 'agents' ? <AgentEnvironmentPanel agents={allAgents} panes={sessionTabs} bookmarks={bookmarks} agentAttentionByPane={agentAttentionByPane} onOpenPane={(agent) => { setActiveKey(agent.paneId); setWorkspaceView('terminal'); markAgentRead(agent.agentId) }} onDismissWaiting={dismissAgentWaitingAttention} />
-                  : workspaceView === 'browser' ? <BrowserResourceManager resources={sessionBrowserResources} panes={sessionTabs} chromeInstallation={chromeInstallation} onRefreshChrome={refreshChromeInstallation} onStart={(resource) => void startBrowserResource(resource)} onFocus={(resource) => { if (resource.runtime) void window.api.browserRuntimes.focusExternal(resource.runtime.id).catch((error) => showError(errorMessage(error))) }} onRestart={(resource) => void restartBrowserResource(resource)} onStop={(resource) => void stopBrowserResource(resource)} onProfileChange={(resource, patch) => void changeBrowserResourceProfile(resource, patch)} />
+                  : workspaceView === 'browser' ? <BrowserResourceManager resources={sessionBrowserResources} panes={sessionTabs} chromeInstallation={chromeInstallation} onRefreshChrome={refreshChromeInstallation} onStart={(resource) => void startBrowserResource(resource)} onFocus={(resource) => { if (resource.runtime) void window.api.browserRuntimes.focusExternal(resource.runtime.id).catch((error) => showError(errorMessage(error))) }} onRestart={(resource) => void restartBrowserResource(resource)} onStop={(resource) => void stopBrowserResource(resource)} />
                     : workspaceView === 'files' && activeTab && activeBookmark ? <div className="session-view active files"><div className="sftp-region"><SftpPane sessionId={activeSshRuntimeId} bookmarkId={activeTab.bookmarkId} connected={activeTab.status === 'connected'} visible onError={showError} onConnect={() => reconnectPane(activeTab)} /></div></div>
                       : null}
         </div>
@@ -2175,7 +2164,7 @@ function MuxLayout({ node, panes, bookmarks, activePaneId, settings, backgroundI
   </div>
 }
 
-function BrowserResourceManager({ resources, panes, chromeInstallation, onRefreshChrome, onStart, onFocus, onRestart, onStop, onProfileChange }: { resources: BrowserResourceState[]; panes: WorkspaceTab[]; chromeInstallation: ChromeInstallation | null | undefined; onRefreshChrome(): void; onStart(resource: BrowserResourceState): void; onFocus(resource: BrowserResourceState): void; onRestart(resource: BrowserResourceState): void; onStop(resource: BrowserResourceState): void; onProfileChange(resource: BrowserResourceState, patch: { reuseLocalProfile?: boolean }): void }): React.JSX.Element {
+function BrowserResourceManager({ resources, panes, chromeInstallation, onRefreshChrome, onStart, onFocus, onRestart, onStop }: { resources: BrowserResourceState[]; panes: WorkspaceTab[]; chromeInstallation: ChromeInstallation | null | undefined; onRefreshChrome(): void; onStart(resource: BrowserResourceState): void; onFocus(resource: BrowserResourceState): void; onRestart(resource: BrowserResourceState): void; onStop(resource: BrowserResourceState): void }): React.JSX.Element {
   const { t } = useI18n()
   const paneMap = new Map(panes.map((pane) => [pane.id, pane]))
   if (!resources.length) return <div className="browser-resource-manager empty"><Globe2 size={30} /><strong>{t('app.noBrowserResources')}</strong></div>
@@ -2206,7 +2195,6 @@ function BrowserResourceManager({ resources, panes, chromeInstallation, onRefres
         <div className="browser-resource-profile">
           <div className="browser-resource-profile-heading">{t('app.browserProfileSettings')}</div>
           <div className="browser-resource-profile-note">{t('app.browserProfileDisposable')}</div>
-          <div className="settings-option-row"><div><strong>{t('app.reuseLocalProfile')}</strong><span>{t('app.reuseLocalProfileDescription')}</span></div><label className="switch-control"><input type="checkbox" checked={resource.reuseLocalProfile} disabled={live} onChange={(event) => onProfileChange(resource, { reuseLocalProfile: event.target.checked })} /><span aria-hidden="true" /></label></div>
         </div>
       </section>
     })}</div>

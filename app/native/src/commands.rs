@@ -604,7 +604,6 @@ pub async fn browser_runtime_create(
     if resource.mux_session_id != request.mux_session_id {
         return Err("浏览器资源与会话不匹配".into());
     }
-    let request = request.with_reuse_local_profile_from(resource.reuse_local_profile);
     let runtime = state.browser_runtimes.create(request).await?;
     if let Err(error) = state
         .luna_mcp
@@ -2309,8 +2308,6 @@ pub fn browser_resources_save(
     state: State<AppState>,
     input: BrowserResourceInput,
 ) -> Result<BrowserResource, String> {
-    // Nothing to invalidate here: the profile is seeded at every start, so the
-    // next start copies the user's cookie state again with no extra step.
     state.db.save_browser_resource(input)
 }
 
@@ -3267,6 +3264,9 @@ pub(crate) fn save_ui_theme(
     theme: UiTheme,
 ) -> Result<UiTheme, String> {
     database.set_setting("uiTheme", &theme)?;
+    if let Some(state) = window.app_handle().try_state::<AppState>() {
+        state.browser_runtimes.refresh_color_scheme();
+    }
     window
         .set_theme(match &theme {
             UiTheme::System => None,

@@ -137,6 +137,7 @@ struct AgentBrowserMcpConfig {
     content_boundaries: bool,
     max_output: u32,
     pin_tab: bool,
+    annotate: bool,
     /// Keep page-initiated downloads inside the product data directory instead
     /// of the user's default Downloads folder, so browser downloads stay
     /// isolated with the rest of the Session's browser state.
@@ -181,26 +182,6 @@ pub struct BrowserRuntimeCreateRequest {
     pub browser_resource_id: String,
     #[serde(default = "default_url")]
     pub url: String,
-    /// Seed this resource's profile from a copy of the user's own Chrome
-    /// cookie state so the Agent starts already signed in.
-    ///
-    /// Per Resource, and off unless the user turns it on: it copies their site
-    /// cookies onto a second path on disk.
-    #[serde(default)]
-    pub reuse_local_profile: bool,
-}
-
-impl BrowserRuntimeCreateRequest {
-    /// Take the switch from the stored Resource instead of from the request.
-    ///
-    /// The row is where the user's choice lives, so a caller that sends the
-    /// field — the frontend builds a request from the Resource in front of it,
-    /// and older callers send a default — cannot turn on a copy of their site
-    /// cookies for a Resource whose saved setting is off.
-    pub fn with_reuse_local_profile_from(mut self, reuse_local_profile: bool) -> Self {
-        self.reuse_local_profile = reuse_local_profile;
-        self
-    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -280,6 +261,7 @@ struct ReservedCdpEndpoint {
 
 pub struct BrowserRuntimeManager {
     event_sink: BrowserRuntimeEventSink,
+    color_scheme: Arc<dyn Fn() -> &'static str + Send + Sync>,
     profiles_root: PathBuf,
     runtimes: Mutex<HashMap<String, ManagedBrowserRuntime>>,
     start_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
@@ -288,7 +270,20 @@ pub struct BrowserRuntimeManager {
 }
 
 impl BrowserRuntimeManager {
-    pub fn new(app_handle: tauri::AppHandle, data_dir: &Path) -> Arc<Self> {
+    pub fn new(
+        app_handle: tauri::AppHandle,
+        data_dir: &Path,
+        database: Arc<crate::database::Database>,
+    ) -> Arc<Self> {
+        let color_scheme = Arc::new(move || {
+            let theme = database.get_setting("uiTheme", crate::models::UiTheme::default());
+            match theme {
+                crate::models::UiTheme::Dark => "dark",
+                crate::models::UiTheme::Light => "light",
+                // Empty value removes the override; Chrome follows the OS itself.
+                crate::models::UiTheme::System => "",
+            }
+        });
         let event_sink: BrowserRuntimeEventSink = Arc::new(move |event| {
             let _ = app_handle.emit("browser-runtime:event", event);
         });
@@ -305,6 +300,7 @@ impl BrowserRuntimeManager {
         }
         Arc::new(Self {
             event_sink,
+            color_scheme,
             profiles_root,
             runtimes: Mutex::new(HashMap::new()),
             start_locks: Mutex::new(HashMap::new()),
@@ -317,6 +313,7 @@ impl BrowserRuntimeManager {
     fn new_for_test(data_dir: &Path) -> Arc<Self> {
         Arc::new(Self {
             event_sink: Arc::new(|_| {}),
+            color_scheme: Arc::new(|| ""),
             profiles_root: data_dir.join("browser-profiles"),
             runtimes: Mutex::new(HashMap::new()),
             start_locks: Mutex::new(HashMap::new()),
@@ -335,6 +332,20 @@ impl BrowserRuntimeManager {
 
     fn download_dir(&self, mux_session_id: &str) -> PathBuf {
         browser_download_dir_under(&self.data_root(), &agent_browser_scope(mux_session_id))
+    }
+
+    /// Read the persisted application setting each time; no parallel theme state.
+    /// A system theme clears emulation so Chrome follows OS changes natively.
+    pub fn refresh_color_scheme(&self) {
+        let scheme = (self.color_scheme)();
+        if let Ok(runtimes) = self.runtimes.lock() {
+            for runtime in runtimes.values() {
+                let _ = runtime.cdp_tx.send(CdpCommand {
+                    payload: color_scheme_command(scheme),
+                    response: None,
+                });
+            }
+        }
     }
 
     pub fn discover_chrome(&self) -> Option<ChromeInstallation> {
@@ -456,24 +467,8 @@ impl BrowserRuntimeManager {
             )
         })?;
         // Held until the Runtime is registered below: every step between here and
-        // there can fail after the directory has been seeded with a copy of the
-        // user's cookies, and none of them should have to remember to clean up.
+        // there can fail after the directory has been prepared, and none of them should have to remember to clean up.
         let profile_guard = ProfileCleanupGuard::new(profile_path.clone());
-        // Every start seeds from scratch, which is what keeps the snapshot the
-        // user asked for from going stale: the directory it lands in was created
-        // a few lines above and is deleted when this Runtime closes, so there is
-        // never an earlier copy to reconcile with.  Seeding runs before
-        // `mark_chrome_profile_clean` so the cookies are in place before Chrome's
-        // own preferences are written beside them.
-        if request.reuse_local_profile {
-            match seed_profile_from_local_chrome(&profile_path) {
-                Ok(outcome) => eprintln!(
-                    "Luna Mux 已复用本机 Chrome 登录态：复制 {} 个文件，跳过 {} 个。",
-                    outcome.copied, outcome.skipped
-                ),
-                Err(error) => eprintln!("Luna Mux 无法复用本机 Chrome 登录态：{error}"),
-            }
-        }
         mark_chrome_profile_clean(&profile_path)?;
         // The agent-browser config only carries the download directory, so it
         // must exist before the Agent can trigger a download.  Failing here is
@@ -1610,7 +1605,10 @@ fn write_agent_browser_mcp_config(path: &Path, scope: &str, cdp_port: u16) -> Re
         content_boundaries: true,
         max_output: 50_000,
         pin_tab: true,
-        download_path: agent_browser_download_dir(scope).to_string_lossy().into_owned(),
+        annotate: true,
+        download_path: agent_browser_download_dir(scope)
+            .to_string_lossy()
+            .into_owned(),
     };
     let contents = serde_json::to_vec_pretty(&config).map_err(|error| error.to_string())?;
     let parent = path
@@ -1889,6 +1887,18 @@ fn agent_browser_download_dir(scope: &str) -> PathBuf {
     browser_download_dir_under(&browser_data_root(), scope)
 }
 
+fn is_redirected_directory(metadata: &std::fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        metadata.file_attributes() & 0x400 != 0 // FILE_ATTRIBUTE_REPARSE_POINT
+    }
+    #[cfg(not(windows))]
+    {
+        metadata.file_type().is_symlink()
+    }
+}
+
 /// Remove `target`, but only when it is a strict descendant of `root`.
 ///
 /// The paths handed here are built from Session and resource identifiers, and
@@ -1901,6 +1911,43 @@ fn remove_dir_within(root: &Path, target: &Path) -> Result<(), String> {
             "拒绝删除浏览器数据目录之外的路径：{}",
             target.display()
         ));
+    }
+    match std::fs::symlink_metadata(root) {
+        Ok(metadata) if is_redirected_directory(&metadata) => {
+            return Err(format!(
+                "拒绝删除重定向的浏览器数据根目录：{}",
+                root.display()
+            ));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.to_string()),
+    }
+    let canonical_root = match root.canonicalize() {
+        Ok(path) => path,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.to_string()),
+    };
+    let mut current = root.to_path_buf();
+    for component in target
+        .strip_prefix(root)
+        .map_err(|error| error.to_string())?
+        .components()
+    {
+        current.push(component);
+        let metadata = match std::fs::symlink_metadata(&current) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error.to_string()),
+        };
+        let redirected = is_redirected_directory(&metadata);
+        let resolved = current.canonicalize().map_err(|error| error.to_string())?;
+        if redirected || resolved == canonical_root || !resolved.starts_with(&canonical_root) {
+            return Err(format!(
+                "拒绝删除重定向的浏览器数据路径：{}",
+                current.display()
+            ));
+        }
     }
     match std::fs::remove_dir_all(target) {
         Ok(()) => Ok(()),
@@ -1934,10 +1981,10 @@ fn has_unresolved_component(path: &Path) -> bool {
 
 /// Deletes a profile directory unless the Runtime that owns it takes it over.
 ///
-/// `create` has several steps that can fail after the directory exists and has
-/// been seeded with a copy of the user's cookies — writing Chrome's preferences,
+/// `create` has several steps that can fail after the directory exists:
+/// writing Chrome's preferences,
 /// preparing the download directory, reserving the session's CDP port, spawning
-/// the process — and each of those used to return with the copy still on disk.
+/// the process. Each failure must remove the abandoned directory.
 /// A guard makes deletion the default, so a step added later cannot forget it.
 struct ProfileCleanupGuard {
     path: Option<PathBuf>,
@@ -2068,159 +2115,6 @@ fn cleanup_failed_browser_start(child: &mut Child) {
     close_process_tree(child);
     let _ = child.kill();
     let _ = child.wait();
-}
-
-/// Files inside a Chrome profile directory that carry cookie state.
-///
-/// Deliberately an allowlist, and deliberately narrow. Cookies are what signs a
-/// browser in; the real profile also holds site storage, extensions, browsing
-/// history, saved payment data and `Login Data` (saved passwords), none of which
-/// an Agent needs to reach a signed-in page — and all of which would be a
-/// strictly worse thing to duplicate onto disk. Site storage is excluded on size
-/// as well: IndexedDB alone runs to hundreds of megabytes in a profile in daily
-/// use, which every browser start would have to copy.
-///
-/// Entries are given as path components rather than as a directory name so the
-/// copy stays this narrow: `Network` also holds HSTS, trust-token and reporting
-/// state, none of which is cookie state and none of which is copied.
-const REUSED_PROFILE_ENTRIES: [&[&str]; 2] = [
-    // Pre-Chrome-96 location for the cookie database.
-    &["Cookies"],
-    // Where Chrome keeps the cookie database from 96 on.
-    &["Network", "Cookies"],
-];
-
-#[derive(Debug, Default)]
-struct ProfileSeedOutcome {
-    copied: usize,
-    skipped: usize,
-}
-
-/// Copy cookie state out of the user's own Chrome profile into `profile_path`.
-///
-/// Best effort by design: Chrome keeps locks on files of a profile it has open,
-/// and a partial copy still signs the Agent in for most sites, so a single
-/// failed file is counted rather than propagated. The real profile is only ever
-/// read — nothing in this path opens a file under it for writing.
-fn seed_profile_from_local_chrome(profile_path: &Path) -> Result<ProfileSeedOutcome, String> {
-    let user_data_root = local_chrome_user_data_root().ok_or_else(|| {
-        "未找到本机 Chrome 配置目录，无法复用登录态。请确认本机已使用过 Chrome。".to_string()
-    })?;
-    seed_profile_from(&user_data_root, profile_path)
-}
-
-/// The copy itself, with the source directory passed in so it can be exercised
-/// without touching the real Chrome profile.
-fn seed_profile_from(
-    user_data_root: &Path,
-    profile_path: &Path,
-) -> Result<ProfileSeedOutcome, String> {
-    let source_profile = user_data_root.join("Default");
-    if !source_profile.is_dir() {
-        return Err(format!(
-            "本机 Chrome 配置目录 {} 中没有 Default profile，无法复用登录态。",
-            user_data_root.display()
-        ));
-    }
-    let target_profile = profile_path.join("Default");
-    let mut outcome = ProfileSeedOutcome::default();
-    for entry in REUSED_PROFILE_ENTRIES {
-        let source = join_components(&source_profile, entry);
-        if !source.exists() {
-            continue;
-        }
-        copy_profile_entry(&source, &join_components(&target_profile, entry), &mut outcome);
-    }
-    // `Local State` sits beside the profile rather than inside it, and on
-    // Windows it holds the DPAPI-wrapped key Chrome needs to decrypt the
-    // cookies copied above; without it those cookies are unreadable on that
-    // platform, so the copy necessarily carries that key too.
-    let local_state = user_data_root.join("Local State");
-    if local_state.is_file() {
-        copy_profile_entry(&local_state, &profile_path.join("Local State"), &mut outcome);
-    }
-    Ok(outcome)
-}
-
-/// Locate the Chrome user data directory of the user running Luna Mux.
-///
-/// This is the profile the *user's* browser uses, which is what makes its
-/// cookies worth copying. It is a separate lookup from `discover_chrome`, which
-/// finds the executable Luna Mux launches, and has no fixed relationship to it.
-fn local_chrome_user_data_root() -> Option<PathBuf> {
-    #[cfg(target_os = "windows")]
-    {
-        let local_app_data = std::env::var_os("LOCALAPPDATA")?;
-        let root = PathBuf::from(local_app_data)
-            .join("Google")
-            .join("Chrome")
-            .join("User Data");
-        return root.is_dir().then_some(root);
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let home = dirs::home_dir()?;
-        let root = home
-            .join("Library")
-            .join("Application Support")
-            .join("Google")
-            .join("Chrome");
-        return root.is_dir().then_some(root);
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    {
-        let home = dirs::home_dir()?;
-        let root = home.join(".config").join("google-chrome");
-        root.is_dir().then_some(root)
-    }
-}
-
-/// Build a path from a base and the components of an allowlist entry.
-fn join_components(base: &Path, components: &[&str]) -> PathBuf {
-    components.iter().fold(base.to_path_buf(), |path, part| {
-        path.join(part)
-    })
-}
-
-/// Recursively copy one profile entry, counting files that could not be read.
-///
-/// Symlinks are skipped rather than followed: a profile is an untrusted-input
-/// directory as far as this code is concerned, and following one could send the
-/// copy outside the profile entirely.
-fn copy_profile_entry(source: &Path, target: &Path, outcome: &mut ProfileSeedOutcome) {
-    let Ok(metadata) = std::fs::symlink_metadata(source) else {
-        outcome.skipped += 1;
-        return;
-    };
-    if metadata.file_type().is_symlink() {
-        return;
-    }
-    if metadata.is_dir() {
-        if std::fs::create_dir_all(target).is_err() {
-            outcome.skipped += 1;
-            return;
-        }
-        let Ok(entries) = std::fs::read_dir(source) else {
-            outcome.skipped += 1;
-            return;
-        };
-        for entry in entries.filter_map(Result::ok) {
-            copy_profile_entry(&entry.path(), &target.join(entry.file_name()), outcome);
-        }
-        return;
-    }
-    // `fs::copy` writes the file but never its parent, and for a top-level
-    // entry that parent is the profile directory itself.
-    if let Some(parent) = target.parent()
-        && std::fs::create_dir_all(parent).is_err()
-    {
-        outcome.skipped += 1;
-        return;
-    }
-    match std::fs::copy(source, target) {
-        Ok(_) => outcome.copied += 1,
-        Err(_) => outcome.skipped += 1,
-    }
 }
 
 fn mark_chrome_profile_clean(profile_path: &Path) -> Result<(), String> {
@@ -2691,6 +2585,14 @@ fn select_page_websocket_url(targets: &[Value], preferred_url: &str) -> Option<S
         .map(|(_, websocket)| websocket.to_string())
 }
 
+fn color_scheme_command(scheme: &str) -> Value {
+    json!({
+        "id": next_command_id(),
+        "method": "Emulation.setEmulatedMedia",
+        "params": {"features": [{"name": "prefers-color-scheme", "value": scheme}]}
+    })
+}
+
 fn start_cdp_runtime(
     manager: Weak<BrowserRuntimeManager>,
     event_sink: BrowserRuntimeEventSink,
@@ -2701,6 +2603,12 @@ fn start_cdp_runtime(
     tauri::async_runtime::spawn(async move {
         let mut socket = initial_socket;
         loop {
+            // Emulation belongs to a page target. Reapply when a closed/replaced
+            // tab causes the CDP socket to bind to another target.
+            if let Some(manager) = manager.upgrade() {
+                let payload = color_scheme_command((manager.color_scheme)());
+                let _ = socket.send(Message::Text(payload.to_string().into())).await;
+            }
             let connection_closed = drive_cdp_page(&mut commands, socket).await;
             if !connection_closed {
                 return;
@@ -3169,6 +3077,7 @@ mod tests {
         assert_eq!(config["contentBoundaries"], true);
         assert_eq!(config["maxOutput"], 50_000);
         assert_eq!(config["pinTab"], true);
+        assert_eq!(config["annotate"], true);
         assert!(
             config["downloadPath"]
                 .as_str()
@@ -3231,141 +3140,35 @@ mod tests {
         );
     }
 
-    /// Every file under `root`, with the bytes and modification time it had.
-    /// Used to show that seeding leaves the real Chrome profile untouched.
-    fn snapshot_tree(
-        root: &std::path::Path,
-    ) -> Vec<(std::path::PathBuf, Vec<u8>, std::time::SystemTime)> {
-        let mut snapshot = Vec::new();
-        let mut pending = vec![root.to_path_buf()];
-        while let Some(directory) = pending.pop() {
-            for entry in std::fs::read_dir(&directory).unwrap().filter_map(Result::ok) {
-                let path = entry.path();
-                if path.is_dir() {
-                    pending.push(path);
-                    continue;
-                }
-                let metadata = entry.metadata().unwrap();
-                snapshot.push((
-                    path.clone(),
-                    std::fs::read(&path).unwrap(),
-                    metadata.modified().unwrap(),
-                ));
-            }
-        }
-        snapshot.sort_by(|left, right| left.0.cmp(&right.0));
-        snapshot
+    #[test]
+    fn retired_cookie_reuse_request_is_ignored() {
+        let request: super::BrowserRuntimeCreateRequest = serde_json::from_value(json!({
+            "muxSessionId": "session", "browserResourceId": "resource",
+            "reuseLocalProfile": true, "temporaryProfile": false
+        }))
+        .unwrap();
+        let serialized = serde_json::to_value(request).unwrap();
+        assert!(serialized.get("reuseLocalProfile").is_none());
+        assert_eq!(serialized["url"], "about:blank");
     }
 
     #[test]
-    fn the_request_cannot_turn_on_reuse_for_a_resource_that_has_it_off() {
-        let requested = super::BrowserRuntimeCreateRequest {
-            mux_session_id: "session".into(),
-            browser_resource_id: "resource".into(),
-            url: "about:blank".into(),
-            // A caller asking for it: the field is on the wire, so this is what
-            // a forged or out-of-date request looks like.
-            reuse_local_profile: true,
-        };
-        let applied = requested.with_reuse_local_profile_from(false);
-        assert!(
-            !applied.reuse_local_profile,
-            "the stored resource decides whether the user's cookies are copied"
-        );
-
-        // And the other direction, so the row is a source rather than a veto.
-        assert!(
-            applied
-                .with_reuse_local_profile_from(true)
-                .reuse_local_profile
-        );
+    fn fresh_profile_contains_no_imported_cookie_state() {
+        let root = std::env::temp_dir().join(format!("luna-clean-profile-{}", Uuid::new_v4()));
+        super::mark_chrome_profile_clean(&root).unwrap();
+        assert!(!root.join("Local State").exists());
+        assert!(!root.join("Default/Cookies").exists());
+        assert!(!root.join("Default/Network/Cookies").exists());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn seeding_copies_cookie_state_and_nothing_else() {
-        let root = std::env::temp_dir().join(format!("luna-mux-browser-seed-{}", Uuid::new_v4()));
-        let user_data = root.join("chrome-user-data");
-        let source = user_data.join("Default");
-        std::fs::create_dir_all(source.join("Network")).unwrap();
-        std::fs::create_dir_all(source.join("Local Storage").join("leveldb")).unwrap();
-        std::fs::create_dir_all(source.join("IndexedDB").join("https_example.com_0.indexeddb.leveldb"))
-            .unwrap();
-        std::fs::write(source.join("Cookies"), b"legacy cookie database").unwrap();
-        std::fs::write(source.join("Network").join("Cookies"), b"cookie database").unwrap();
-        // Sits in the same directory as the cookie database and is not cookie
-        // state, which is why the allowlist names files rather than directories.
-        std::fs::write(
-            source.join("Network").join("TransportSecurity"),
-            b"hsts state",
-        )
-        .unwrap();
-        std::fs::write(
-            source.join("Local Storage").join("leveldb").join("000001.log"),
-            b"local storage",
-        )
-        .unwrap();
-        std::fs::write(
-            source.join("IndexedDB").join("https_example.com_0.indexeddb.leveldb").join("000001.log"),
-            b"site database",
-        )
-        .unwrap();
-        // Present in a real profile, and deliberately not part of the allowlist.
-        std::fs::write(source.join("Login Data"), b"saved passwords").unwrap();
-        std::fs::write(source.join("History"), b"browsing history").unwrap();
-        std::fs::write(user_data.join("Local State"), b"cookie encryption key").unwrap();
-        let before = snapshot_tree(&user_data);
-
-        let profile = root.join("luna-profile");
-        let outcome = super::seed_profile_from(&user_data, &profile).unwrap();
-
-        let seeded = profile.join("Default");
-        assert!(seeded.join("Cookies").is_file());
-        assert!(seeded.join("Network").join("Cookies").is_file());
-        assert!(
-            profile.join("Local State").is_file(),
-            "Windows needs the copied profile's cookie key to decrypt those cookies"
-        );
-        assert_eq!(outcome.copied, 3);
-        assert_eq!(
-            outcome.skipped, 0,
-            "every file in the copy set was readable"
-        );
-        // Cookies are what signs a browser in; everything else a real profile
-        // holds is either private or large, and this copies it on every start.
-        assert!(
-            !seeded.join("Network").join("TransportSecurity").exists(),
-            "only the cookie database is copied out of Network, not the rest of it"
-        );
-        assert!(
-            !seeded.join("Local Storage").exists(),
-            "site storage is not needed to reach a signed-in page"
-        );
-        assert!(
-            !seeded.join("IndexedDB").exists(),
-            "site databases run to hundreds of megabytes in a daily-use profile"
-        );
-        assert!(
-            !seeded.join("Login Data").exists(),
-            "saved passwords must never be copied"
-        );
-        assert!(!seeded.join("History").exists(), "history must never be copied");
-        assert_eq!(
-            before,
-            snapshot_tree(&user_data),
-            "seeding must not write to the real Chrome profile"
-        );
-
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn seeding_reports_a_profile_that_has_no_default_directory() {
-        let root = std::env::temp_dir().join(format!("luna-mux-browser-seed-{}", Uuid::new_v4()));
-        let user_data = root.join("chrome-user-data");
-        std::fs::create_dir_all(&user_data).unwrap();
-        let error = super::seed_profile_from(&user_data, &root.join("luna-profile")).unwrap_err();
-        assert!(error.contains("没有 Default profile"), "unexpected error: {error}");
-        let _ = std::fs::remove_dir_all(&root);
+    fn fresh_profile_does_not_require_a_local_chrome_profile() {
+        let root = std::env::temp_dir().join(format!("luna-clean-profile-{}", Uuid::new_v4()));
+        super::mark_chrome_profile_clean(&root).unwrap();
+        assert!(root.join("Default/Preferences").is_file());
+        super::mark_chrome_profile_clean(&root).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -3398,6 +3201,99 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn profile_deletion_refuses_redirected_roots_ancestors_and_leaf() {
+        let root = std::env::temp_dir().join(format!("luna-delete-link-{}", Uuid::new_v4()));
+        let profiles = root.join("profiles");
+        let outside = root.join("outside");
+        std::fs::create_dir_all(&profiles).unwrap();
+        std::fs::create_dir_all(outside.join("session")).unwrap();
+        std::fs::write(outside.join("session/sentinel"), b"keep").unwrap();
+        let link = profiles.join("sessions");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        #[cfg(windows)]
+        {
+            let status = crate::local_pty_backend::windows_no_window_command("cmd.exe")
+                .args(["/D", "/C", "mklink", "/J"])
+                .arg(&link)
+                .arg(&outside)
+                .status()
+                .unwrap();
+            assert!(status.success(), "create fixture junction");
+        }
+        assert!(super::remove_dir_within(&link, &link.join("session")).is_err());
+        assert!(super::remove_dir_within(&profiles, &profiles.join("sessions/session")).is_err());
+        assert!(super::remove_dir_within(&profiles, &profiles.join("sessions")).is_err());
+        assert!(outside.join("session/sentinel").is_file());
+        #[cfg(windows)]
+        std::fs::remove_dir(&link).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn browser_connection_applies_theme_before_page_commands() {
+        use futures::StreamExt;
+        use std::sync::Arc;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let first = socket.next().await.unwrap().unwrap();
+            let payload: Value = serde_json::from_str(first.to_text().unwrap()).unwrap();
+            assert_eq!(payload["method"], "Emulation.setEmulatedMedia");
+            assert_eq!(payload["params"]["features"][0]["value"], "dark");
+            let next = socket.next().await.unwrap().unwrap();
+            let payload: Value = serde_json::from_str(next.to_text().unwrap()).unwrap();
+            assert_eq!(payload["method"], "Page.enable");
+        });
+        let root = std::env::temp_dir().join(format!("luna-cdp-theme-{}", Uuid::new_v4()));
+        let mut manager = BrowserRuntimeManager::new_for_test(&root);
+        Arc::get_mut(&mut manager).unwrap().color_scheme = Arc::new(|| "dark");
+        let (socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}"))
+            .await
+            .unwrap();
+        let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let runtime = super::BrowserRuntime {
+            id: "test".into(),
+            mux_session_id: "session".into(),
+            browser_resource_id: "resource".into(),
+            url: "about:blank".into(),
+            cdp_port: address.port(),
+            profile_path: root.to_string_lossy().into_owned(),
+            process_id: 0,
+            status: super::BrowserRuntimeStatus::Running,
+            error: None,
+        };
+        super::start_cdp_runtime(
+            Arc::downgrade(&manager),
+            Arc::new(|_| {}),
+            runtime,
+            socket,
+            rx,
+        );
+        tokio::time::timeout(Duration::from_secs(3), server)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[test]
+    fn browser_theme_emulates_explicit_themes_and_clears_for_system() {
+        for scheme in ["dark", "light", ""] {
+            let command = super::color_scheme_command(scheme);
+            assert_eq!(command["method"], "Emulation.setEmulatedMedia");
+            assert_eq!(
+                command["params"]["features"],
+                json!([{
+                    "name": "prefers-color-scheme", "value": scheme
+                }])
+            );
+        }
+    }
+
     #[test]
     fn a_profile_guard_deletes_the_directory_unless_a_runtime_claims_it() {
         let root = std::env::temp_dir().join(format!("luna-mux-browser-guard-{}", Uuid::new_v4()));
@@ -3407,7 +3303,7 @@ mod tests {
         drop(super::ProfileCleanupGuard::new(abandoned.clone()));
         assert!(
             !abandoned.exists(),
-            "a start that fails after seeding must not leave the cookie copy behind"
+            "a failed start must not leave its profile behind"
         );
 
         let claimed = root.join("claimed");
@@ -3909,7 +3805,6 @@ mod tests {
                 mux_session_id: session_id.clone(),
                 browser_resource_id: "browser-resource".into(),
                 url: "about:blank".into(),
-                reuse_local_profile: false,
             })
             .await
             .unwrap();
@@ -4045,7 +3940,6 @@ mod tests {
                 mux_session_id: "integration-session".into(),
                 browser_resource_id: "browser-resource".into(),
                 url: format!("http://127.0.0.1:{port}"),
-                reuse_local_profile: false,
             })
             .await
             .unwrap();
@@ -4089,7 +3983,6 @@ mod tests {
                 mux_session_id: "integration-session-2".into(),
                 browser_resource_id: "browser-resource-2".into(),
                 url: "about:blank".into(),
-                reuse_local_profile: false,
             })
             .await
             .unwrap();
