@@ -18,7 +18,14 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message};
 use uuid::Uuid;
 
-const AGENT_BROWSER_TOOLS: &str = "core,network,debug,tabs,webmcp,state";
+/// MCP tool groups exposed to Agents.
+///
+/// Discovery is paginated at 64 tools per page, so anything counting this
+/// surface has to follow `nextCursor` to the end; the first page alone reports
+/// a pass for whatever was added last.  `react` yields working tools only after
+/// something opens a page with `--enable react-devtools` (an agent-browser
+/// option, not a Chrome one), which is why the injected instructions say so.
+const AGENT_BROWSER_TOOLS: &str = "core,network,debug,tabs,webmcp,state,react,mobile";
 /// Pointer movement for MCP-driven sessions.  `human` trades speed for
 /// human-like motion, which keeps recorded runs and sites that reject
 /// instant pointer jumps usable.  This is a global CLI flag; unlike `--tools`
@@ -3477,6 +3484,135 @@ mod tests {
             super::managed_chrome_process_ids(processes, profiles_root),
             vec![101]
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires the bundled agent-browser sidecar"]
+    async fn the_shared_tool_profile_exposes_every_enabled_group() {
+        // Tool discovery is paginated at 64 per page.  Reading only the first
+        // page would fit inside `core` alone and report a pass for any profile,
+        // so every cursor is followed and the total is asserted to exceed one
+        // page.
+        use std::{io::Write, sync::mpsc as std_mpsc};
+
+        let binary = resolve_agent_browser_binary().expect("bundled agent-browser sidecar");
+        let mut mcp = std::process::Command::new(binary)
+            // No browser is needed: the tool surface is static and the server
+            // answers discovery before anything is attached.
+            .args(["mcp", "--tools", super::AGENT_BROWSER_TOOLS])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut stdin = mcp.stdin.take().unwrap();
+        let stdout = mcp.stdout.take().unwrap();
+        let (line_tx, line_rx) = std_mpsc::channel();
+        std::thread::spawn(move || {
+            for line in std::io::BufReader::new(stdout)
+                .lines()
+                .map_while(Result::ok)
+            {
+                if line_tx.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+
+        writeln!(
+            stdin,
+            "{}",
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {},
+                    "clientInfo": { "name": "luna-mux-test", "version": "1.0" }
+                }
+            })
+        )
+        .unwrap();
+        stdin.flush().unwrap();
+        assert!(
+            line_rx.recv_timeout(Duration::from_secs(10)).is_ok(),
+            "agent-browser must answer initialize"
+        );
+
+        let mut names = Vec::new();
+        let mut cursor: Option<String> = None;
+        let mut pages = 0;
+        loop {
+            let mut params = json!({});
+            if let Some(cursor) = &cursor {
+                params = json!({ "cursor": cursor });
+            }
+            writeln!(
+                stdin,
+                "{}",
+                json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": params })
+            )
+            .unwrap();
+            stdin.flush().unwrap();
+            let page: Value = serde_json::from_str(
+                &line_rx
+                    .recv_timeout(Duration::from_secs(10))
+                    .expect("tools/list response"),
+            )
+            .expect("valid tools/list JSON");
+            pages += 1;
+            let tools = page["result"]["tools"].as_array().expect("tools array");
+            for tool in tools {
+                names.push(tool["name"].as_str().expect("tool name").to_string());
+            }
+            match page["result"]["nextCursor"].as_str() {
+                Some(next) if !next.is_empty() => cursor = Some(next.to_string()),
+                _ => break,
+            }
+        }
+
+        let _ = stdin.write_all(b"");
+        drop(stdin);
+        let _ = mcp.kill();
+        let _ = mcp.wait();
+
+        let has = |name: &str| names.iter().any(|tool| tool == name);
+        assert!(
+            pages > 1 && names.len() > 64,
+            "discovery must be read to the end: {pages} page(s), {} tool(s)",
+            names.len()
+        );
+        // The react group exists but stays inert until a page is opened with
+        // `--enable react-devtools`; it is listed here so the injected
+        // instructions can name tools that are actually reachable.
+        for tool in [
+            "agent_browser_react_tree",
+            "agent_browser_react_inspect",
+            "agent_browser_react_renders_start",
+            "agent_browser_react_suspense",
+        ] {
+            assert!(has(tool), "{tool} is missing from {names:?}");
+        }
+        for tool in [
+            "agent_browser_set_device",
+            "agent_browser_set_viewport",
+            "agent_browser_tap",
+            "agent_browser_swipe",
+        ] {
+            assert!(has(tool), "{tool} is missing from {names:?}");
+        }
+        // Adding groups must not displace what earlier groups already exposed.
+        for tool in [
+            "agent_browser_open",
+            "agent_browser_snapshot",
+            "agent_browser_a11y",
+            "agent_browser_webmcp_list",
+            "agent_browser_auth_save",
+            "agent_browser_network_requests",
+        ] {
+            assert!(has(tool), "{tool} disappeared from the tool list");
+        }
     }
 
     #[tokio::test]
