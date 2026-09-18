@@ -45,7 +45,7 @@ export function createChineseHelpSections(commandKey: string): HelpSection[] {
         <ul>
           <li><strong>名称和项目根目录：</strong>名称显示在侧栏；项目根目录会作为新建本地终端和本地 Agent 的初始工作目录。</li>
           <li><strong>窗格和布局：</strong>窗格名称、目标、Agent 启动类型、拆分方向和比例会随会话保存，应用重启后恢复工作区结构。</li>
-          <li><strong>浏览器环境：</strong>每个会话自动配备一个独立 Browser Resource 和临时 Profile，用于同会话 Agent 的网页验证。Profile 在浏览器关闭时删除，不随会话保存。</li>
+          <li><strong>浏览器环境：</strong>每个会话自动配备一个独立 Browser Resource，用于同会话 Agent 的网页验证。Profile 默认随浏览器关闭而删除，也可在浏览器页选择跨多次启动保留。</li>
         </ul>
         <h3>侧栏操作</h3>
         <ul>
@@ -145,23 +145,24 @@ export function createChineseHelpSections(commandKey: string): HelpSection[] {
     },
     {
       id: 'browser', group: 'Agent 与自动化', title: '浏览器自动化', icon: Globe2,
-      searchText: '浏览器 browser chrome cdp profile agent-browser mcp 自动 按需 启动 停止 重启 打开 tab 页面 可用 agent 退出 profile 临时',
+      searchText: '浏览器 browser chrome cdp profile agent-browser mcp 自动 按需 启动 停止 重启 打开 tab 页面 可用 agent 退出 profile 临时 保留 cookie 登录状态',
       content: <>
         <h2>受管浏览器与网页验证</h2>
-        <p>每个项目会话自动拥有一个 Browser Resource。它为同会话中支持 Browser MCP 的 Codex 和 Claude Code 提供独立 Chrome 进程、临时 Profile 和 agent-browser MCP 连接；Grok Build 当前不会注入该连接。</p>
+        <p>每个项目会话自动拥有一个 Browser Resource。它为同会话中支持 Browser MCP 的 Codex 和 Claude Code 提供独立 Chrome 进程、可选持久化的 Profile 和 agent-browser MCP 连接；Grok Build 当前不会注入该连接。</p>
         <h3>自动使用</h3>
         <ol>
           <li>Agent 第一次调用注入的 <code>agent_browser</code> 工具时，Luna Mux 会解析当前会话的 Browser Resource。</li>
           <li>Chrome 处于停止状态时，Luna Mux 会按需启动独立 Chrome 进程并连接 CDP。</li>
           <li>普通导航复用当前绑定页面；需要并行页面上下文时，Agent 可以创建额外标签页。</li>
-          <li>停止浏览器或退出 Luna Mux 会关闭 Chrome 进程，并删除本次的 Profile 目录：登录状态和站点数据都不保留到下次启动。</li>
+          <li>“保留浏览器数据”关闭时，停止浏览器会删除本次 Profile；开启时，同一 Browser Resource 下次启动继续使用原 Profile。</li>
         </ol>
         <h3>浏览器页操作</h3>
         <table className="help-detail-table"><tbody>
           <tr><th scope="row">启动</th><td>立即启动当前会话的 Chrome，适合先登录网站或预热验证环境。</td></tr>
           <tr><th scope="row">打开</th><td>把已运行的受管 Chrome 窗口切到前台。</td></tr>
-          <tr><th scope="row">重启</th><td>关闭当前进程后，使用新建的临时 Profile 和同一会话 CDP 配置重新启动。</td></tr>
-          <tr><th scope="row">停止</th><td>关闭 Chrome 进程，并删除本次的 Profile 目录，不保留给下次启动。</td></tr>
+          <tr><th scope="row">重启</th><td>关闭当前进程后重新启动；是否复用 Profile 由“保留浏览器数据”决定。</td></tr>
+          <tr><th scope="row">停止</th><td>关闭 Chrome 进程。未开启保留时同时删除 Profile；开启时保留给下次启动。</td></tr>
+          <tr><th scope="row">保留数据</th><td>只能在浏览器停止时修改。关闭开关会立即删除此前保留的 Cookie、登录状态和站点数据。</td></tr>
         </tbody></table>
         <p>诊断区显示运行状态、PID、CDP 地址、Profile 路径和启动错误。安装 Chrome 后，可点击重新检测刷新可用状态。</p>
         <div className="help-warning"><TriangleAlert size={15} aria-hidden="true" /><div><strong>Agent 浏览器自动化</strong><p>Agent 可以通过注入的 <code>agent_browser</code> 工具按需启动并操作当前会话的受管 Chrome；“浏览器”页提供同一个 Browser Resource 的人工启动、聚焦、重启和诊断入口。</p></div></div>
@@ -322,7 +323,7 @@ export function createChineseHelpSections(commandKey: string): HelpSection[] {
         <ul>
           <li>密码、私钥口令和 AI API Key 使用 macOS Keychain 或 Windows Credential Manager；私钥文件本身由文件系统管理。</li>
           <li>每个 Agent 运行时获得临时身份。Codex 与 Claude Code 的 Hook、Luna MCP 和 Browser MCP 都绑定到当前会话与窗格，运行时退出后撤销；Grok Build 只使用生命周期 Hook。</li>
-          <li>Browser Resource 使用随浏览器创建、随浏览器删除的临时 Profile。Profile 目录和 CDP 端点适合交给 Luna Mux 与 agent-browser 管理。</li>
+          <li>Browser Resource 默认使用随浏览器创建和删除的临时 Profile；用户可显式选择为当前会话保留 Cookie、登录状态和站点数据。Profile 目录和 CDP 端点应交给 Luna Mux 与 agent-browser 管理。</li>
         </ul>
         <h3>Agent 状态诊断</h3>
         <ul>
@@ -382,7 +383,7 @@ export function createEnglishHelpSections(commandKey: string): HelpSection[] {
         <ul>
           <li><strong>Name and project root:</strong> the name appears in the sidebar, and the root becomes the initial directory for new local terminals and local Agents.</li>
           <li><strong>Panes and layout:</strong> Pane names, targets, Agent launch types, split directions, and ratios are saved with the Session and restored on app restart.</li>
-          <li><strong>Browser environment:</strong> every Session receives an isolated Browser Resource and disposable Profile for web verification by Agents in that Session. The Profile is deleted when the browser closes and is not saved with the Session.</li>
+          <li><strong>Browser environment:</strong> every Session receives an isolated Browser Resource for web verification by Agents in that Session. Its Profile is deleted with Chrome by default, or can be retained across starts from the Browser view.</li>
         </ul>
         <h3>Sidebar operations</h3>
         <ul>
@@ -482,23 +483,24 @@ export function createEnglishHelpSections(commandKey: string): HelpSection[] {
     },
     {
       id: 'browser', group: 'Agents and automation', title: 'Browser automation', icon: Globe2,
-      searchText: 'browser chrome cdp profile agent-browser mcp automatic on demand start stop restart focus tab page available agent exit profile disposable',
+      searchText: 'browser chrome cdp profile agent-browser mcp automatic on demand start stop restart focus tab page available agent exit profile disposable retained cookie sign-in',
       content: <>
         <h2>Managed browser and web verification</h2>
-        <p>Every Session automatically owns one Browser Resource. It gives Codex and Claude Code runtimes with Browser MCP an isolated Chrome process, disposable Profile, and agent-browser MCP connection; Grok Build does not currently receive that connection.</p>
+        <p>Every Session automatically owns one Browser Resource. It gives Codex and Claude Code runtimes with Browser MCP an isolated Chrome process, an optionally retained Profile, and an agent-browser MCP connection; Grok Build does not currently receive that connection.</p>
         <h3>Automatic use</h3>
         <ol>
           <li>On the first injected <code>agent_browser</code> tool call, Luna Mux resolves the current Session's Browser Resource.</li>
           <li>When Chrome is stopped, Luna Mux starts an isolated Chrome process and connects its CDP endpoint.</li>
           <li>Normal navigation reuses the bound page. Agents can create extra tabs when parallel page context is needed.</li>
-          <li>Stopping Chrome or exiting Luna Mux closes the process and deletes the Profile directory: neither login state nor site data survives to the next start.</li>
+          <li>With Keep browser data off, stopping Chrome deletes that run's Profile. With it on, the same Browser Resource reuses its Profile on the next start.</li>
         </ol>
         <h3>Browser view controls</h3>
         <table className="help-detail-table"><tbody>
           <tr><th scope="row">Start</th><td>Starts Chrome immediately, useful for signing in or warming up the verification environment.</td></tr>
           <tr><th scope="row">Focus</th><td>Brings the running managed Chrome window to the foreground.</td></tr>
-          <tr><th scope="row">Restart</th><td>Relaunches with a newly created disposable Profile and the Session CDP configuration.</td></tr>
-          <tr><th scope="row">Stop</th><td>Closes the Chrome process and deletes the Profile directory rather than keeping it for the next start.</td></tr>
+          <tr><th scope="row">Restart</th><td>Closes and relaunches Chrome. Keep browser data decides whether it reuses the Profile.</td></tr>
+          <tr><th scope="row">Stop</th><td>Closes Chrome. The Profile is deleted when retention is off and kept for the next start when it is on.</td></tr>
+          <tr><th scope="row">Keep data</th><td>Can change only while Chrome is stopped. Turning it off immediately deletes retained cookies, sign-in state, and site data.</td></tr>
         </tbody></table>
         <p>Diagnostics show runtime state, PID, CDP endpoint, Profile path, and startup errors. After installing Chrome, use the refresh button to update availability.</p>
         <div className="help-warning"><TriangleAlert size={15} /><div><strong>Agent browser automation</strong><p>Agents can use the injected <code>agent_browser</code> tools to start and operate the current Session's managed Chrome on demand. The Browser view provides manual start, focus, restart, and diagnostics for the same Browser Resource.</p></div></div>
@@ -659,7 +661,7 @@ export function createEnglishHelpSections(commandKey: string): HelpSection[] {
         <ul>
           <li>Passwords, private-key passphrases, and AI API Keys use macOS Keychain or Windows Credential Manager. Private-key files are managed by the filesystem.</li>
           <li>Each Agent runtime receives an ephemeral identity. Codex and Claude Code Hooks, Luna MCP, and Browser MCP are scoped to its Session and Pane and revoked on exit; Grok Build uses only the lifecycle Hook.</li>
-          <li>Browser Resources use a disposable Profile created with the browser and deleted with it. Profile directories and CDP endpoints are best managed through Luna Mux and agent-browser.</li>
+          <li>Browser Resources use a disposable Profile by default. Users may explicitly retain cookies, sign-in state, and site data for the current Session. Profile directories and CDP endpoints should remain managed by Luna Mux and agent-browser.</li>
         </ul>
         <h3>Agent state diagnostics</h3>
         <ul>

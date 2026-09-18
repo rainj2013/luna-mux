@@ -274,6 +274,7 @@ pub struct BrowserResource {
     pub source_pane_id: String,
     pub bookmark_id: String,
     pub url: String,
+    pub retain_profile: bool,
     pub sort_order: i64,
     pub created_at: String,
     pub updated_at: String,
@@ -292,6 +293,8 @@ pub struct BrowserResourceInput {
     pub bookmark_id: String,
     #[serde(default)]
     pub url: String,
+    #[serde(default)]
+    pub retain_profile: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

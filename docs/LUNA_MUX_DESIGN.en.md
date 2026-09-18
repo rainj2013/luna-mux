@@ -112,7 +112,7 @@ Browsers are shared at Session scope so users and Agents working on one project 
 
 Browsers run in independent desktop Chrome windows outside the terminal layout, keeping web tabs separate from terminal Pane layout, dimensions, and lifecycle.
 
-Each Runtime uses a separate disposable profile, deleted when the browser closes and never reused across starts or Sessions. Local Chrome cookies are not copied; users can sign in within the disposable browser. Startup cleans up managed processes and profiles left after a crash. Deleting a Session removes its downloads and legacy profiles. Deletion must remain within the product data directory.
+Each Browser Resource owns a Keep browser data setting, off by default. When off, every Runtime uses a separate disposable profile that is deleted after Chrome closes. When on, that Browser Resource reuses one stable profile across Runtime starts in the same Session, retaining cookies, sign-in state, and site storage. The setting can change only while Chrome is stopped; turning it off immediately deletes the retained profile. Neither mode copies cookies from the user's local Chrome. Startup sweeps only disposable profiles left after a crash. Deleting a Browser Resource or Session removes its retained profile and Session downloads. Deletion must remain within the product data directory.
 
 BrowserRuntimeManager uses CDP to make the bound page follow the application theme. With the system theme selected, Chrome follows the OS. Screenshots enable element annotations by default.
 

@@ -111,6 +111,7 @@ export interface BrowserResource {
   sourcePaneId: string
   bookmarkId: string
   url: string
+  retainProfile: boolean
   sortOrder: number
   createdAt: string
   updatedAt: string
@@ -123,6 +124,7 @@ export interface BrowserResourceInput {
   sourcePaneId?: string
   bookmarkId?: string
   url?: string
+  retainProfile?: boolean
 }
 
 export type {

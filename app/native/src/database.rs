@@ -392,11 +392,16 @@ impl Database {
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             Ok(columns.iter().any(|column| column == "reuseLocalProfile"))
         })?;
-        // Kept only to be dropped: a browser profile is never persisted any
-        // more, so nothing reads this column and a database that still has it is
-        // carrying a setting whose two values now mean the same thing.  It lives
-        // in a distinct flag rather than in `has_reuse_local_profile` so the
-        // drop costs one `PRAGMA` and no change to the migration above.
+        let has_retain_profile = self.with_conn(|db| {
+            let mut statement = db.prepare("PRAGMA table_info(browser_resources)")?;
+            let columns = statement
+                .query_map([], |row| row.get::<_, String>(1))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(columns.iter().any(|column| column == "retainProfile"))
+        })?;
+        // Kept only to be dropped: the old request-level temporary choice was
+        // retired. Profile retention now belongs to the Browser Resource through
+        // `retainProfile`, with a safe default for old rows.
         let has_temporary_profile = self.with_conn(|db| {
             let mut statement = db.prepare("PRAGMA table_info(browser_resources)")?;
             let columns = statement
@@ -450,6 +455,12 @@ impl Database {
             if !has_reuse_local_profile {
                 transaction.execute(
                     "ALTER TABLE browser_resources ADD COLUMN reuseLocalProfile INTEGER NOT NULL DEFAULT 0",
+                    [],
+                )?;
+            }
+            if !has_retain_profile {
+                transaction.execute(
+                    "ALTER TABLE browser_resources ADD COLUMN retainProfile INTEGER NOT NULL DEFAULT 0",
                     [],
                 )?;
             }
@@ -877,9 +888,9 @@ impl Database {
     ) -> Result<Vec<BrowserResource>, String> {
         self.with_conn(|db| {
             let sql = if mux_session_id.is_some() {
-                "SELECT id,muxSessionId,name,sourcePaneId,bookmarkId,url,reuseLocalProfile,sortOrder,createdAt,updatedAt FROM browser_resources WHERE muxSessionId=? ORDER BY sortOrder ASC,createdAt ASC"
+                "SELECT id,muxSessionId,name,sourcePaneId,bookmarkId,url,reuseLocalProfile,retainProfile,sortOrder,createdAt,updatedAt FROM browser_resources WHERE muxSessionId=? ORDER BY sortOrder ASC,createdAt ASC"
             } else {
-                "SELECT id,muxSessionId,name,sourcePaneId,bookmarkId,url,reuseLocalProfile,sortOrder,createdAt,updatedAt FROM browser_resources ORDER BY muxSessionId ASC,sortOrder ASC,createdAt ASC"
+                "SELECT id,muxSessionId,name,sourcePaneId,bookmarkId,url,reuseLocalProfile,retainProfile,sortOrder,createdAt,updatedAt FROM browser_resources ORDER BY muxSessionId ASC,sortOrder ASC,createdAt ASC"
             };
             let mut statement = db.prepare(sql)?;
             let read = |row: &rusqlite::Row<'_>| {
@@ -890,9 +901,10 @@ impl Database {
                     source_pane_id: row.get(3)?,
                     bookmark_id: row.get(4)?,
                     url: row.get(5)?,
-                    sort_order: row.get(7)?,
-                    created_at: row.get(8)?,
-                    updated_at: row.get(9)?,
+                    retain_profile: row.get(7)?,
+                    sort_order: row.get(8)?,
+                    created_at: row.get(9)?,
+                    updated_at: row.get(10)?,
                 })
             };
             if let Some(id) = mux_session_id {
@@ -921,6 +933,7 @@ impl Database {
             source_pane_id: String::new(),
             bookmark_id: String::new(),
             url: String::new(),
+            retain_profile: Some(false),
         })
     }
 
@@ -974,6 +987,10 @@ impl Database {
             return Err("每个 Mux Session 只能关联一个浏览器资源".into());
         }
         let existing = existing.into_iter().find(|resource| resource.id == id);
+        let retain_profile = input
+            .retain_profile
+            .or_else(|| existing.as_ref().map(|resource| resource.retain_profile))
+            .unwrap_or(false);
         let sort_order = if let Some(existing) = &existing {
             existing.sort_order
         } else {
@@ -993,6 +1010,7 @@ impl Database {
             source_pane_id: source_pane_id.into(),
             bookmark_id: bookmark_id.into(),
             url: url.into(),
+            retain_profile,
             sort_order,
             created_at: existing
                 .as_ref()
@@ -1001,8 +1019,8 @@ impl Database {
             updated_at: now,
         };
         self.with_conn(|db| db.execute(
-            "INSERT INTO browser_resources(id,muxSessionId,name,sourcePaneId,bookmarkId,url,reuseLocalProfile,sortOrder,createdAt,updatedAt) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET muxSessionId=excluded.muxSessionId,name=excluded.name,sourcePaneId=excluded.sourcePaneId,bookmarkId=excluded.bookmarkId,url=excluded.url,reuseLocalProfile=excluded.reuseLocalProfile,updatedAt=excluded.updatedAt",
-            params![resource.id,resource.mux_session_id,resource.name,resource.source_pane_id,resource.bookmark_id,resource.url,0_i64,resource.sort_order,resource.created_at,resource.updated_at],
+            "INSERT INTO browser_resources(id,muxSessionId,name,sourcePaneId,bookmarkId,url,reuseLocalProfile,retainProfile,sortOrder,createdAt,updatedAt) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET muxSessionId=excluded.muxSessionId,name=excluded.name,sourcePaneId=excluded.sourcePaneId,bookmarkId=excluded.bookmarkId,url=excluded.url,reuseLocalProfile=excluded.reuseLocalProfile,retainProfile=excluded.retainProfile,updatedAt=excluded.updatedAt",
+            params![resource.id,resource.mux_session_id,resource.name,resource.source_pane_id,resource.bookmark_id,resource.url,0_i64,resource.retain_profile as i64,resource.sort_order,resource.created_at,resource.updated_at],
         ).map(|_| ()))?;
         Ok(resource)
     }
@@ -2147,9 +2165,11 @@ mod tests {
                 source_pane_id: String::new(),
                 bookmark_id: String::new(),
                 url: String::new(),
+                retain_profile: Some(false),
             })
             .unwrap();
         assert!(browser.url.is_empty());
+        assert!(!browser.retain_profile);
         assert!(
             database
                 .save_browser_resource(BrowserResourceInput {
@@ -2159,6 +2179,7 @@ mod tests {
                     source_pane_id: String::new(),
                     bookmark_id: String::new(),
                     url: String::new(),
+                    retain_profile: Some(false),
                 })
                 .unwrap_err()
                 .contains("只能关联一个浏览器资源")
@@ -2171,13 +2192,30 @@ mod tests {
                 source_pane_id: String::new(),
                 bookmark_id: String::new(),
                 url: String::new(),
+                retain_profile: Some(true),
             })
             .unwrap();
         assert_eq!(renamed.id, browser.id);
         assert_eq!(renamed.name, "Renamed Browser");
+        assert!(renamed.retain_profile);
+        let preserved = database
+            .save_browser_resource(BrowserResourceInput {
+                id: Some(browser.id.clone()),
+                mux_session_id: session.id.clone(),
+                name: "Renamed Browser".into(),
+                source_pane_id: String::new(),
+                bookmark_id: String::new(),
+                url: String::new(),
+                retain_profile: None,
+            })
+            .unwrap();
+        assert!(
+            preserved.retain_profile,
+            "an older caller that omits retainProfile must preserve the saved choice"
+        );
         assert_eq!(
             database.list_browser_resources(Some(&session.id)).unwrap(),
-            vec![renamed]
+            vec![preserved]
         );
         drop(database);
         let _ = std::fs::remove_file(path);
@@ -2222,6 +2260,7 @@ mod tests {
         .expect("migrate database");
         let resources = database.list_browser_resources(None).unwrap();
         assert_eq!(resources.len(), 1);
+        assert!(!resources[0].retain_profile);
         assert!(
             serde_json::to_value(&resources[0])
                 .unwrap()
@@ -2237,6 +2276,7 @@ mod tests {
                 source_pane_id: String::new(),
                 bookmark_id: String::new(),
                 url: "about:blank".into(),
+                retain_profile: None,
             })
             .unwrap();
         assert!(
@@ -2267,6 +2307,7 @@ mod tests {
             !columns.iter().any(|column| column == "temporaryProfile"),
             "the retired profile column must be dropped, since nothing reads it: {columns:?}"
         );
+        assert!(columns.iter().any(|column| column == "retainProfile"));
 
         // Running the migration again on the already-migrated file, which is what
         // every start after the first one does: the column is gone, so the drop
@@ -2278,6 +2319,7 @@ mod tests {
         .expect("reopen an already-migrated database");
         let resources = reopened.list_browser_resources(None).unwrap();
         assert_eq!(resources.len(), 1);
+        assert!(!resources[0].retain_profile);
         assert!(
             serde_json::to_value(&resources[0])
                 .unwrap()

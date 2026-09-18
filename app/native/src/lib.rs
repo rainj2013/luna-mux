@@ -315,7 +315,7 @@ pub fn run() {
                             mux_session_id: mux_session_id.clone(),
                             browser_resource_id: resource.id.clone(),
                             url: String::new(),
-                        })
+                        }, resource.retain_profile)
                         .await?;
                     if let Err(error) = luna_mcp.refresh_target_resource("browser", &resource.id) {
                         let _ = browser_runtimes.close(&runtime.id).await;

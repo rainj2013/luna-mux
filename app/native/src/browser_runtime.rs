@@ -239,6 +239,7 @@ struct ManagedBrowserRuntime {
     summary: BrowserRuntime,
     child: Child,
     cdp_tx: mpsc::UnboundedSender<CdpCommand>,
+    retain_profile: bool,
 }
 
 struct CdpCommand {
@@ -356,13 +357,31 @@ impl BrowserRuntimeManager {
         self.registry_path.to_string_lossy().into_owned()
     }
 
-    /// Where a Runtime's Chrome profile lives.
-    ///
-    /// Named by Runtime rather than by Resource, and disposable: nothing is
-    /// kept for the next start, so a Resource never sees the directory it saw
-    /// last time and no login state outlives the browser it came from.
+    /// Where a disposable Runtime's Chrome profile lives.
     fn disposable_profile_path(&self, runtime_id: &str) -> PathBuf {
         self.profiles_root.join("temporary").join(runtime_id)
+    }
+
+    /// Stable profile owned by one Browser Resource inside one Mux Session.
+    fn retained_profile_path(&self, mux_session_id: &str, browser_resource_id: &str) -> PathBuf {
+        self.profiles_root
+            .join("sessions")
+            .join(mux_session_id)
+            .join(browser_resource_id)
+    }
+
+    fn profile_path(
+        &self,
+        mux_session_id: &str,
+        browser_resource_id: &str,
+        runtime_id: &str,
+        retain_profile: bool,
+    ) -> PathBuf {
+        if retain_profile {
+            self.retained_profile_path(mux_session_id, browser_resource_id)
+        } else {
+            self.disposable_profile_path(runtime_id)
+        }
     }
 
     pub fn session_cdp_port(&self, mux_session_id: &str) -> Result<u16, String> {
@@ -405,6 +424,7 @@ impl BrowserRuntimeManager {
     pub async fn create(
         self: &Arc<Self>,
         request: BrowserRuntimeCreateRequest,
+        retain_profile: bool,
     ) -> Result<BrowserRuntime, String> {
         let mux_session_id = validate_id("muxSessionId", &request.mux_session_id)?;
         let browser_resource_id = validate_id("browserResourceId", &request.browser_resource_id)?;
@@ -434,7 +454,7 @@ impl BrowserRuntimeManager {
             }
         };
         if let Some(runtime) = stale_runtime {
-            let _ = std::fs::remove_dir_all(runtime.summary.profile_path);
+            cleanup_runtime_profile(&runtime);
         }
         let another_runtime = self
             .runtimes
@@ -459,7 +479,12 @@ impl BrowserRuntimeManager {
         })?;
         let url = normalize_url(&request.url)?;
         let runtime_id = Uuid::new_v4().to_string();
-        let profile_path = self.disposable_profile_path(&runtime_id);
+        let profile_path = self.profile_path(
+            &mux_session_id,
+            &browser_resource_id,
+            &runtime_id,
+            retain_profile,
+        );
         std::fs::create_dir_all(&profile_path).map_err(|error| {
             format!(
                 "无法创建 Chrome 配置目录 {}: {error}",
@@ -468,7 +493,8 @@ impl BrowserRuntimeManager {
         })?;
         // Held until the Runtime is registered below: every step between here and
         // there can fail after the directory has been prepared, and none of them should have to remember to clean up.
-        let profile_guard = ProfileCleanupGuard::new(profile_path.clone());
+        let profile_guard =
+            (!retain_profile).then(|| ProfileCleanupGuard::new(profile_path.clone()));
         mark_chrome_profile_clean(&profile_path)?;
         // The agent-browser config only carries the download directory, so it
         // must exist before the Agent can trigger a download.  Failing here is
@@ -477,10 +503,7 @@ impl BrowserRuntimeManager {
         // land in the product data directory when they do not.
         let download_dir = self.download_dir(&mux_session_id);
         std::fs::create_dir_all(&download_dir).map_err(|error| {
-            format!(
-                "无法创建浏览器下载目录 {}: {error}",
-                download_dir.display()
-            )
+            format!("无法创建浏览器下载目录 {}: {error}", download_dir.display())
         })?;
         let port = self.take_session_cdp_port(&mux_session_id)?;
         let mut command = Command::new(&installation.executable_path);
@@ -557,11 +580,14 @@ impl BrowserRuntimeManager {
                     summary: summary.clone(),
                     child,
                     cdp_tx,
+                    retain_profile,
                 },
             );
-        // Past this point the profile belongs to the Runtime, which deletes it
-        // when it closes, so the guard must not.
-        let _ = profile_guard.keep();
+        // Past this point the profile belongs to the Runtime. A disposable
+        // Runtime deletes it on close; a retained Runtime leaves it for reuse.
+        if let Some(profile_guard) = profile_guard {
+            let _ = profile_guard.keep();
+        }
         self.write_registry();
         (self.event_sink)(BrowserRuntimeEvent::Started {
             runtime: summary.clone(),
@@ -628,18 +654,26 @@ impl BrowserRuntimeManager {
         self.write_registry();
     }
 
-    /// Delete the on-disk artifacts a Session owns: its page downloads, and any
-    /// profile directory left behind at the retired per-Session path.
-    ///
-    /// Profiles are disposable and already deleted when their Runtime closes, so
-    /// the profile half is a backstop for directories written by an older build.
-    /// Idempotent, so a Session that never started a browser removes cleanly.
+    /// Delete every on-disk artifact owned by a Session.
     pub fn remove_session_data(&self, mux_session_id: &str) -> Result<(), String> {
         let mux_session_id = validate_id("muxSessionId", mux_session_id)?;
         let session_root = self.profiles_root.join("sessions").join(&mux_session_id);
         remove_dir_within(&self.profiles_root, &session_root)?;
         let download_dir = self.download_dir(&mux_session_id);
         remove_dir_within(&self.data_root(), &download_dir)
+    }
+
+    /// Delete a stopped Browser Resource's retained profile. Disposable profiles
+    /// belong to their Runtime and are removed when that Runtime closes.
+    pub fn remove_resource_data(
+        &self,
+        mux_session_id: &str,
+        browser_resource_id: &str,
+    ) -> Result<(), String> {
+        let mux_session_id = validate_id("muxSessionId", mux_session_id)?;
+        let browser_resource_id = validate_id("browserResourceId", browser_resource_id)?;
+        let profile = self.retained_profile_path(&mux_session_id, &browser_resource_id);
+        remove_dir_within(&self.profiles_root, &profile)
     }
 
     pub fn force_cleanup_managed_processes(&self) {
@@ -1024,7 +1058,11 @@ impl Drop for BrowserRuntimeManager {
             }
             let profile_path = PathBuf::from(&runtime.summary.profile_path);
             let _ = runtime.child.wait();
-            let _ = std::fs::remove_dir_all(profile_path);
+            if runtime.retain_profile {
+                let _ = mark_chrome_profile_clean(&profile_path);
+            } else {
+                let _ = std::fs::remove_dir_all(profile_path);
+            }
         }
     }
 }
@@ -2102,15 +2140,29 @@ async fn close_managed_runtime(mut runtime: ManagedBrowserRuntime) {
     let _ = tokio::task::spawn_blocking(move || {
         let profile_path = PathBuf::from(&runtime.summary.profile_path);
         let _ = runtime.child.wait();
-        let _ = std::fs::remove_dir_all(&profile_path);
+        if runtime.retain_profile {
+            let _ = mark_chrome_profile_clean(&profile_path);
+        } else {
+            let _ = std::fs::remove_dir_all(&profile_path);
+        }
     })
     .await;
 }
 
+fn cleanup_runtime_profile(runtime: &ManagedBrowserRuntime) {
+    let profile_path = PathBuf::from(&runtime.summary.profile_path);
+    if runtime.retain_profile {
+        let _ = mark_chrome_profile_clean(&profile_path);
+    } else {
+        let _ = std::fs::remove_dir_all(profile_path);
+    }
+}
+
 /// Kill a Chrome that never became a Runtime.
 ///
-/// Its profile is removed by the caller's `ProfileCleanupGuard`, which owns that
-/// decision for every way `create` can fail.
+/// A disposable profile is removed by the caller's `ProfileCleanupGuard`.
+/// A retained profile survives a failed launch so earlier browser data is not
+/// destroyed by a transient Chrome or CDP error.
 fn cleanup_failed_browser_start(child: &mut Child) {
     close_process_tree(child);
     let _ = child.kill();
@@ -2181,27 +2233,20 @@ fn configure_process_group(command: &mut Command) {
 #[cfg(not(unix))]
 fn configure_process_group(_command: &mut Command) {}
 
-/// Delete profile directories a previous run left behind.
+/// Delete disposable profile directories a previous run left behind.
 ///
 /// A Runtime deletes its own profile when it closes, which covers every ordinary
 /// exit.  It does not cover a crash, a force quit, or a kill — and a leftover
-/// profile holds a copy of the user's site cookies, so "nothing is kept for the
-/// next start" would be false in exactly the case where it matters most.  This
-/// restores it at the one moment it can be known that nothing is using them:
+/// disposable profile holds a copy of the user's site cookies. This restores
+/// the non-retention guarantee at the one moment it can be known that nothing is using them:
 /// startup, before any Runtime exists, once the Chrome processes the last run
 /// left running have been terminated.
-///
-/// `sessions/` is the retired per-Resource profile path.  Older builds wrote
-/// profiles there and nothing deletes them any more, so this is the only code
-/// path that can.
 ///
 /// Only the two callers that can prove nothing is live may use this: startup,
 /// before any Runtime exists, and exit once the runtime map has drained.
 /// Killing processes is not a substitute for that proof.
 fn sweep_stale_browser_profiles(profiles_root: &Path) {
-    for directory in ["temporary", "sessions"] {
-        let _ = remove_dir_within(profiles_root, &profiles_root.join(directory));
-    }
+    let _ = remove_dir_within(profiles_root, &profiles_root.join("temporary"));
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -3026,12 +3071,14 @@ mod tests {
     }
 
     #[test]
-    fn browser_profiles_are_named_by_runtime_and_swept_once_stale() {
+    fn disposable_profiles_are_swept_without_touching_retained_profiles() {
         let root =
             std::env::temp_dir().join(format!("luna-mux-browser-profile-{}", uuid::Uuid::new_v4()));
         let manager = BrowserRuntimeManager::new_for_test(&root);
         let first = manager.disposable_profile_path("runtime-1");
         let second = manager.disposable_profile_path("runtime-2");
+        let retained_first = manager.profile_path("session-1", "resource-1", "runtime-1", true);
+        let retained_second = manager.profile_path("session-1", "resource-1", "runtime-2", true);
         assert_eq!(
             first,
             root.join("browser-profiles")
@@ -3042,29 +3089,39 @@ mod tests {
             first, second,
             "two runtimes must never share a profile directory"
         );
+        assert_eq!(retained_first, retained_second);
+        assert_eq!(
+            retained_first,
+            root.join("browser-profiles")
+                .join("sessions")
+                .join("session-1")
+                .join("resource-1")
+        );
+        assert_ne!(
+            manager.profile_path("session-1", "resource-1", "runtime-1", false),
+            manager.profile_path("session-1", "resource-1", "runtime-2", false)
+        );
 
-        // A profile left behind by a crash, and a directory in the retired
-        // per-Resource shape an older build wrote.  Both have to go: each holds
-        // a copy of the user's cookie state, and a restart is the only moment
-        // that can know nothing is using them.
+        // A disposable profile left by a crash must go. A Resource profile is
+        // user-selected persistent state and must survive the same sweep.
         std::fs::create_dir_all(&first).unwrap();
         std::fs::write(first.join("Cookies"), b"cookie-state").unwrap();
-        let retired = root
-            .join("browser-profiles")
-            .join("sessions")
-            .join("session-1")
-            .join("resource-1");
-        std::fs::create_dir_all(&retired).unwrap();
-        std::fs::write(retired.join("Cookies"), b"cookie-state").unwrap();
+        let retained = manager.retained_profile_path("session-1", "resource-1");
+        std::fs::create_dir_all(&retained).unwrap();
+        std::fs::write(retained.join("Cookies"), b"cookie-state").unwrap();
 
         super::sweep_stale_browser_profiles(&manager.profiles_root);
 
         assert!(!first.exists());
-        assert!(!retired.exists());
+        assert!(retained.join("Cookies").is_file());
         assert!(
             !root.join("browser-profiles").join("temporary").exists(),
             "the whole disposable profile root is swept, not just its entries"
         );
+        manager
+            .remove_resource_data("session-1", "resource-1")
+            .unwrap();
+        assert!(!retained.exists());
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -3299,7 +3356,11 @@ mod tests {
         let root = std::env::temp_dir().join(format!("luna-mux-browser-guard-{}", Uuid::new_v4()));
         let abandoned = root.join("abandoned");
         std::fs::create_dir_all(abandoned.join("Default")).unwrap();
-        std::fs::write(abandoned.join("Default").join("Cookies"), b"cookie database").unwrap();
+        std::fs::write(
+            abandoned.join("Default").join("Cookies"),
+            b"cookie database",
+        )
+        .unwrap();
         drop(super::ProfileCleanupGuard::new(abandoned.clone()));
         assert!(
             !abandoned.exists(),
@@ -3323,16 +3384,15 @@ mod tests {
         let root = std::env::temp_dir().join(format!("luna-mux-browser-remove-{}", Uuid::new_v4()));
         let manager = BrowserRuntimeManager::new_for_test(&root);
         let session_id = "removable-session";
-        // The retired per-Resource profile shape.  Only a build older than the
-        // disposable-profile change could have written one, and nothing else
-        // deletes them, so removing a Session has to.
-        let retired = manager
+        // A retained Resource profile belongs to its Session, so removing the
+        // Session must remove it regardless of the saved toggle value.
+        let retained = manager
             .profiles_root
             .join("sessions")
             .join(session_id)
             .join("removable-resource");
-        std::fs::create_dir_all(retired.join("Default")).unwrap();
-        std::fs::write(retired.join("Default").join("Cookies"), b"cookie database").unwrap();
+        std::fs::create_dir_all(retained.join("Default")).unwrap();
+        std::fs::write(retained.join("Default").join("Cookies"), b"cookie database").unwrap();
         let downloads = manager.download_dir(session_id);
         std::fs::create_dir_all(&downloads).unwrap();
         // A live Runtime's profile.  It belongs to the Runtime and is deleted
@@ -3341,9 +3401,21 @@ mod tests {
         std::fs::create_dir_all(&live).unwrap();
 
         manager.remove_session_data(session_id).unwrap();
-        assert!(!manager.profiles_root.join("sessions").join(session_id).exists());
-        assert!(!downloads.exists(), "a deleted Session keeps no download directory");
-        assert!(live.is_dir(), "a Runtime's profile is not a Session's to delete");
+        assert!(
+            !manager
+                .profiles_root
+                .join("sessions")
+                .join(session_id)
+                .exists()
+        );
+        assert!(
+            !downloads.exists(),
+            "a deleted Session keeps no download directory"
+        );
+        assert!(
+            live.is_dir(),
+            "a Runtime's profile is not a Session's to delete"
+        );
         manager.remove_session_data(session_id).unwrap();
 
         let _ = std::fs::remove_dir_all(&root);
@@ -3801,11 +3873,14 @@ mod tests {
         let manager = BrowserRuntimeManager::new_for_test(&root);
         let session_id = format!("managed-browser-rebind-{}", Uuid::new_v4());
         let runtime = manager
-            .create(BrowserRuntimeCreateRequest {
-                mux_session_id: session_id.clone(),
-                browser_resource_id: "browser-resource".into(),
-                url: "about:blank".into(),
-            })
+            .create(
+                BrowserRuntimeCreateRequest {
+                    mux_session_id: session_id.clone(),
+                    browser_resource_id: "browser-resource".into(),
+                    url: "about:blank".into(),
+                },
+                false,
+            )
             .await
             .unwrap();
 
@@ -3936,11 +4011,14 @@ mod tests {
             }
         });
         let runtime = manager
-            .create(BrowserRuntimeCreateRequest {
-                mux_session_id: "integration-session".into(),
-                browser_resource_id: "browser-resource".into(),
-                url: format!("http://127.0.0.1:{port}"),
-            })
+            .create(
+                BrowserRuntimeCreateRequest {
+                    mux_session_id: "integration-session".into(),
+                    browser_resource_id: "browser-resource".into(),
+                    url: format!("http://127.0.0.1:{port}"),
+                },
+                false,
+            )
             .await
             .unwrap();
         manager.focus_external_window(&runtime.id).unwrap();
@@ -3979,11 +4057,14 @@ mod tests {
         assert!(screenshot.len() > 100);
 
         let second_runtime = manager
-            .create(BrowserRuntimeCreateRequest {
-                mux_session_id: "integration-session-2".into(),
-                browser_resource_id: "browser-resource-2".into(),
-                url: "about:blank".into(),
-            })
+            .create(
+                BrowserRuntimeCreateRequest {
+                    mux_session_id: "integration-session-2".into(),
+                    browser_resource_id: "browser-resource-2".into(),
+                    url: "about:blank".into(),
+                },
+                false,
+            )
             .await
             .unwrap();
         assert_ne!(runtime.process_id, second_runtime.process_id);

@@ -604,7 +604,10 @@ pub async fn browser_runtime_create(
     if resource.mux_session_id != request.mux_session_id {
         return Err("浏览器资源与会话不匹配".into());
     }
-    let runtime = state.browser_runtimes.create(request).await?;
+    let runtime = state
+        .browser_runtimes
+        .create(request, resource.retain_profile)
+        .await?;
     if let Err(error) = state
         .luna_mcp
         .refresh_target_resource("browser", &browser_resource_id)
@@ -2308,7 +2311,41 @@ pub fn browser_resources_save(
     state: State<AppState>,
     input: BrowserResourceInput,
 ) -> Result<BrowserResource, String> {
-    state.db.save_browser_resource(input)
+    let existing = if let Some(id) = input.id.as_ref() {
+        state
+            .db
+            .list_browser_resources(None)?
+            .into_iter()
+            .find(|resource| resource.id == *id)
+    } else {
+        None
+    };
+    let requested_retain_profile = input
+        .retain_profile
+        .or_else(|| existing.as_ref().map(|resource| resource.retain_profile))
+        .unwrap_or(false);
+    if existing
+        .as_ref()
+        .is_some_and(|resource| resource.retain_profile != requested_retain_profile)
+        && state
+            .browser_runtimes
+            .list()?
+            .iter()
+            .any(|runtime| input.id.as_deref() == Some(runtime.browser_resource_id.as_str()))
+    {
+        return Err("请先停止浏览器，再更改浏览器数据保留设置".into());
+    }
+    if !requested_retain_profile {
+        if let Some(existing) = existing.as_ref() {
+            // Delete first so a filesystem failure leaves the saved choice on;
+            // the user can retry instead of seeing an off switch with data left.
+            state
+                .browser_runtimes
+                .remove_resource_data(&existing.mux_session_id, &existing.id)?;
+        }
+    }
+    let resource = state.db.save_browser_resource(input)?;
+    Ok(resource)
 }
 
 #[tauri::command]
@@ -2323,10 +2360,18 @@ pub async fn browser_resources_remove(
         .filter(|runtime| runtime.browser_resource_id == id)
         .map(|runtime| runtime.id)
         .collect::<Vec<_>>();
-    // Closing the runtime is what deletes the profile, since the profile belongs
-    // to the Runtime and lives only as long as it does.
     for runtime_id in runtime_ids {
         state.browser_runtimes.close(&runtime_id).await?;
+    }
+    let resource = state
+        .db
+        .list_browser_resources(None)?
+        .into_iter()
+        .find(|resource| resource.id == id);
+    if let Some(resource) = resource {
+        state
+            .browser_runtimes
+            .remove_resource_data(&resource.mux_session_id, &resource.id)?;
     }
     state.db.delete_browser_resource(&id)?;
     state.luna_mcp.refresh_target_resource("browser", &id)

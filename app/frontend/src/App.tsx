@@ -352,6 +352,21 @@ export function App(): React.JSX.Element {
     await stopBrowserResource(resource)
     await startBrowserResource({ ...resource, runtime: undefined, tunnel: undefined, status: 'stopped', error: undefined })
   }
+
+  const setBrowserProfileRetention = async (resource: BrowserResourceState, retainProfile: boolean): Promise<void> => {
+    try {
+      const saved = await window.api.browserResources.save({
+        id: resource.id,
+        muxSessionId: resource.muxSessionId,
+        name: resource.name,
+        sourcePaneId: resource.sourcePaneId,
+        bookmarkId: resource.bookmarkId,
+        url: resource.url,
+        retainProfile
+      })
+      setBrowserResources((current) => current.map((item) => item.id === saved.id ? { ...item, ...saved } : item))
+    } catch (error) { showError(errorMessage(error)) }
+  }
   const startLocalPane = async (pane: WorkspaceTab): Promise<void> => {
     if (pane.kind !== 'terminal') return
     const runtimeId = crypto.randomUUID()
@@ -1603,7 +1618,7 @@ export function App(): React.JSX.Element {
             : sessionTabs.length === 0 && sessionBrowserResources.length === 0 ? <div className="welcome-state"><div className="welcome-icon"><SquareTerminal size={30} /></div><h2>{activeMuxSession.name}</h2>{activeMuxSession.rootPath && <p>{activeMuxSession.rootPath}</p>}<div className="welcome-actions"><button className="primary-button" onClick={() => void openPaneLauncher()}><CirclePlus size={16} />{t('app.addFirstPane')}</button></div></div>
             : workspaceView === 'terminal' && visibleSessionTabs.length === 0 ? <div className="welcome-state pane-empty-state"><div className="welcome-icon"><Minus size={30} /></div><h2>{t('app.minimizedPanes')}</h2><p>{t('app.restoreMinimizedPaneDescription')}</p><div className="welcome-actions">{sessionTabs.filter((pane) => minimizedPaneIds.has(pane.id)).map((pane) => <button key={pane.id} className="secondary-button" onClick={() => void restorePane(pane)}><Eye size={15} />{pane.title}</button>)}</div></div>
                 : workspaceView === 'agents' ? <AgentEnvironmentPanel agents={allAgents} panes={sessionTabs} bookmarks={bookmarks} agentAttentionByPane={agentAttentionByPane} onOpenPane={(agent) => { setActiveKey(agent.paneId); setWorkspaceView('terminal'); markAgentRead(agent.agentId) }} onDismissWaiting={dismissAgentWaitingAttention} />
-                  : workspaceView === 'browser' ? <BrowserResourceManager resources={sessionBrowserResources} panes={sessionTabs} chromeInstallation={chromeInstallation} onRefreshChrome={refreshChromeInstallation} onStart={(resource) => void startBrowserResource(resource)} onFocus={(resource) => { if (resource.runtime) void window.api.browserRuntimes.focusExternal(resource.runtime.id).catch((error) => showError(errorMessage(error))) }} onRestart={(resource) => void restartBrowserResource(resource)} onStop={(resource) => void stopBrowserResource(resource)} />
+                  : workspaceView === 'browser' ? <BrowserResourceManager resources={sessionBrowserResources} panes={sessionTabs} chromeInstallation={chromeInstallation} onRefreshChrome={refreshChromeInstallation} onStart={(resource) => void startBrowserResource(resource)} onFocus={(resource) => { if (resource.runtime) void window.api.browserRuntimes.focusExternal(resource.runtime.id).catch((error) => showError(errorMessage(error))) }} onRestart={(resource) => void restartBrowserResource(resource)} onStop={(resource) => void stopBrowserResource(resource)} onRetainProfile={(resource, retain) => void setBrowserProfileRetention(resource, retain)} />
                     : workspaceView === 'files' && activeTab && activeBookmark ? <div className="session-view active files"><div className="sftp-region"><SftpPane sessionId={activeSshRuntimeId} bookmarkId={activeTab.bookmarkId} connected={activeTab.status === 'connected'} visible onError={showError} onConnect={() => reconnectPane(activeTab)} /></div></div>
                       : null}
         </div>
@@ -2164,7 +2179,7 @@ function MuxLayout({ node, panes, bookmarks, activePaneId, settings, backgroundI
   </div>
 }
 
-function BrowserResourceManager({ resources, panes, chromeInstallation, onRefreshChrome, onStart, onFocus, onRestart, onStop }: { resources: BrowserResourceState[]; panes: WorkspaceTab[]; chromeInstallation: ChromeInstallation | null | undefined; onRefreshChrome(): void; onStart(resource: BrowserResourceState): void; onFocus(resource: BrowserResourceState): void; onRestart(resource: BrowserResourceState): void; onStop(resource: BrowserResourceState): void }): React.JSX.Element {
+function BrowserResourceManager({ resources, panes, chromeInstallation, onRefreshChrome, onStart, onFocus, onRestart, onStop, onRetainProfile }: { resources: BrowserResourceState[]; panes: WorkspaceTab[]; chromeInstallation: ChromeInstallation | null | undefined; onRefreshChrome(): void; onStart(resource: BrowserResourceState): void; onFocus(resource: BrowserResourceState): void; onRestart(resource: BrowserResourceState): void; onStop(resource: BrowserResourceState): void; onRetainProfile(resource: BrowserResourceState, retain: boolean): void }): React.JSX.Element {
   const { t } = useI18n()
   const paneMap = new Map(panes.map((pane) => [pane.id, pane]))
   if (!resources.length) return <div className="browser-resource-manager empty"><Globe2 size={30} /><strong>{t('app.noBrowserResources')}</strong></div>
@@ -2194,7 +2209,10 @@ function BrowserResourceManager({ resources, panes, chromeInstallation, onRefres
         </dl>
         <div className="browser-resource-profile">
           <div className="browser-resource-profile-heading">{t('app.browserProfileSettings')}</div>
-          <div className="browser-resource-profile-note">{t('app.browserProfileDisposable')}</div>
+          <div className="settings-option-row">
+            <div><strong>{t('app.retainBrowserData')}</strong><span>{resource.retainProfile ? t('app.browserProfileRetained') : t('app.browserProfileDisposable')}</span></div>
+            <label className="switch-control" title={resource.runtime || resource.status === 'starting' ? t('app.stopBrowserBeforeProfileChange') : undefined}><input type="checkbox" checked={resource.retainProfile} disabled={Boolean(resource.runtime) || resource.status === 'starting'} onChange={(event) => onRetainProfile(resource, event.target.checked)} /><span aria-hidden="true" /></label>
+          </div>
         </div>
       </section>
     })}</div>
