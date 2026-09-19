@@ -18,14 +18,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message};
 use uuid::Uuid;
 
-/// MCP tool groups exposed to Agents.
-///
-/// Discovery is paginated at 64 tools per page, so anything counting this
-/// surface has to follow `nextCursor` to the end; the first page alone reports
-/// a pass for whatever was added last.  `react` yields working tools only after
-/// something opens a page with `--enable react-devtools` (an agent-browser
-/// option, not a Chrome one), which is why the injected instructions say so.
-const AGENT_BROWSER_TOOLS: &str = "core,network,debug,tabs,webmcp,state,react,mobile";
+const DEFAULT_AGENT_BROWSER_TOOL_PROFILE: &str = "core";
 /// Pointer movement for MCP-driven sessions.  `human` trades speed for
 /// human-like motion, which keeps recorded runs and sites that reject
 /// instant pointer jumps usable.  This is a global CLI flag; unlike `--tools`
@@ -128,6 +121,8 @@ struct BrowserRuntimeRegistryEntry {
     status: BrowserRuntimeStatus,
     #[serde(default)]
     profile_path: String,
+    #[serde(default = "default_agent_browser_tool_profiles")]
+    tool_profiles: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -182,6 +177,8 @@ pub struct BrowserRuntimeCreateRequest {
     pub browser_resource_id: String,
     #[serde(default = "default_url")]
     pub url: String,
+    #[serde(default = "default_agent_browser_tool_profiles")]
+    pub tool_profiles: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -235,11 +232,16 @@ fn default_url() -> String {
     "about:blank".into()
 }
 
+fn default_agent_browser_tool_profiles() -> Vec<String> {
+    vec![DEFAULT_AGENT_BROWSER_TOOL_PROFILE.into()]
+}
+
 struct ManagedBrowserRuntime {
     summary: BrowserRuntime,
     child: Child,
     cdp_tx: mpsc::UnboundedSender<CdpCommand>,
     retain_profile: bool,
+    tool_profiles: Vec<String>,
 }
 
 struct CdpCommand {
@@ -428,6 +430,8 @@ impl BrowserRuntimeManager {
     ) -> Result<BrowserRuntime, String> {
         let mux_session_id = validate_id("muxSessionId", &request.mux_session_id)?;
         let browser_resource_id = validate_id("browserResourceId", &request.browser_resource_id)?;
+        let tool_profiles =
+            crate::models::normalize_agent_browser_tool_profiles(request.tool_profiles)?;
         let start_lock = self
             .start_locks
             .lock()
@@ -581,6 +585,7 @@ impl BrowserRuntimeManager {
                     child,
                     cdp_tx,
                     retain_profile,
+                    tool_profiles,
                 },
             );
         // Past this point the profile belongs to the Runtime. A disposable
@@ -617,6 +622,27 @@ impl BrowserRuntimeManager {
         drop(guard);
         self.write_registry();
         Ok(items)
+    }
+
+    pub fn set_tool_profiles(
+        &self,
+        mux_session_id: &str,
+        profiles: Vec<String>,
+    ) -> Result<(), String> {
+        let profiles = crate::models::normalize_agent_browser_tool_profiles(profiles)?;
+        let mut runtimes = self
+            .runtimes
+            .lock()
+            .map_err(|_| "浏览器 Runtime 状态已损坏".to_string())?;
+        for runtime in runtimes
+            .values_mut()
+            .filter(|runtime| runtime.summary.mux_session_id == mux_session_id)
+        {
+            runtime.tool_profiles.clone_from(&profiles);
+        }
+        drop(runtimes);
+        self.write_registry();
+        Ok(())
     }
 
     pub async fn close(&self, runtime_id: &str) -> Result<(), String> {
@@ -714,6 +740,7 @@ impl BrowserRuntimeManager {
                         process_id: runtime.summary.process_id,
                         status: runtime.summary.status.clone(),
                         profile_path: runtime.summary.profile_path.clone(),
+                        tool_profiles: runtime.tool_profiles.clone(),
                     })
                     .collect::<Vec<_>>()
             })
@@ -1117,6 +1144,11 @@ pub fn try_run_mcp_browser(args: &[String]) -> Option<i32> {
         }
         return Some(1);
     }
+    let tool_profiles = matching
+        .first()
+        .map(|runtime| runtime.tool_profiles.clone())
+        .unwrap_or_else(default_agent_browser_tool_profiles);
+    let tools_arg = agent_browser_tools_arg(&tool_profiles);
     let cdp_port = matching
         .first()
         .map(|runtime| runtime.cdp_port)
@@ -1153,7 +1185,7 @@ pub fn try_run_mcp_browser(args: &[String]) -> Option<i32> {
     command
         .args(["--input-mode", AGENT_BROWSER_INPUT_MODE])
         .arg("mcp")
-        .args(["--tools", AGENT_BROWSER_TOOLS])
+        .args(["--tools", &tools_arg])
         .env("AGENT_BROWSER_CONFIG", &config_path)
         .env("AGENT_BROWSER_SESSION", &scope)
         .env("AGENT_BROWSER_NAMESPACE", &scope)
@@ -1237,6 +1269,7 @@ where
 
     let binary = resolve_agent_browser_binary()?;
     let scope = agent_browser_scope(mux_session_id);
+    let tools_arg = agent_browser_tools_for_runtime(mux_session_id, cdp_port);
     let config_path = create_agent_browser_mcp_config(&scope, cdp_port)?;
     record_remote_bridge_diagnostic(&format!(
         "starting agent-browser MCP: session={mux_session_id}, cdp_port={cdp_port}, binary={}",
@@ -1248,7 +1281,7 @@ where
     command
         .args(["--input-mode", AGENT_BROWSER_INPUT_MODE])
         .arg("mcp")
-        .args(["--tools", AGENT_BROWSER_TOOLS])
+        .args(["--tools", &tools_arg])
         .env("AGENT_BROWSER_CONFIG", &config_path)
         .env("AGENT_BROWSER_SESSION", &scope)
         .env("AGENT_BROWSER_NAMESPACE", &scope)
@@ -1904,6 +1937,28 @@ fn browser_registry_path() -> PathBuf {
         return PathBuf::from(path);
     }
     browser_data_root().join("browser-runtimes.json")
+}
+
+fn agent_browser_tools_arg(profiles: &[String]) -> String {
+    crate::models::normalize_agent_browser_tool_profiles(profiles.iter().cloned())
+        .unwrap_or_else(|_| default_agent_browser_tool_profiles())
+        .join(",")
+}
+
+fn agent_browser_tools_for_runtime(mux_session_id: &str, cdp_port: u16) -> String {
+    let profiles = std::fs::read_to_string(browser_registry_path())
+        .ok()
+        .and_then(|contents| {
+            serde_json::from_str::<Vec<BrowserRuntimeRegistryEntry>>(&contents).ok()
+        })
+        .and_then(|entries| {
+            entries
+                .into_iter()
+                .find(|entry| entry.mux_session_id == mux_session_id && entry.cdp_port == cdp_port)
+                .map(|entry| entry.tool_profiles)
+        })
+        .unwrap_or_else(default_agent_browser_tool_profiles);
+    agent_browser_tools_arg(&profiles)
 }
 
 /// Downloads initiated by a page land here rather than in the user's default
@@ -3207,6 +3262,16 @@ mod tests {
         let serialized = serde_json::to_value(request).unwrap();
         assert!(serialized.get("reuseLocalProfile").is_none());
         assert_eq!(serialized["url"], "about:blank");
+        assert_eq!(serialized["toolProfiles"], json!(["core"]));
+    }
+
+    #[test]
+    fn agent_browser_tool_profiles_are_ordered_and_keep_core() {
+        assert_eq!(
+            super::agent_browser_tools_arg(&["react".into(), "network".into(), "react".into()]),
+            "core,network,react"
+        );
+        assert_eq!(super::agent_browser_tools_arg(&[]), "core");
     }
 
     #[test]
@@ -3519,10 +3584,15 @@ mod tests {
         use std::{io::Write, sync::mpsc as std_mpsc};
 
         let binary = resolve_agent_browser_binary().expect("bundled agent-browser sidecar");
+        let all_profiles = crate::models::AGENT_BROWSER_TOOL_PROFILES
+            .iter()
+            .map(|profile| (*profile).to_string())
+            .collect::<Vec<_>>();
+        let tools_arg = super::agent_browser_tools_arg(&all_profiles);
         let mut mcp = std::process::Command::new(binary)
             // No browser is needed: the tool surface is static and the server
             // answers discovery before anything is attached.
-            .args(["mcp", "--tools", super::AGENT_BROWSER_TOOLS])
+            .args(["mcp", "--tools", &tools_arg])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -3878,6 +3948,7 @@ mod tests {
                     mux_session_id: session_id.clone(),
                     browser_resource_id: "browser-resource".into(),
                     url: "about:blank".into(),
+                    tool_profiles: super::default_agent_browser_tool_profiles(),
                 },
                 false,
             )
@@ -4016,6 +4087,7 @@ mod tests {
                     mux_session_id: "integration-session".into(),
                     browser_resource_id: "browser-resource".into(),
                     url: format!("http://127.0.0.1:{port}"),
+                    tool_profiles: super::default_agent_browser_tool_profiles(),
                 },
                 false,
             )
@@ -4062,6 +4134,7 @@ mod tests {
                     mux_session_id: "integration-session-2".into(),
                     browser_resource_id: "browser-resource-2".into(),
                     url: "about:blank".into(),
+                    tool_profiles: super::default_agent_browser_tool_profiles(),
                 },
                 false,
             )

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowRight, Bookmark as BookmarkIcon, Bot, Check, ChevronDown, ChevronRight, CircleHelp, CirclePlus, Columns2, Columns3, Copy, Database as DatabaseIcon, Download, Edit3, ExternalLink, Eye, EyeOff, FileInput, FileJson2, Folder, FolderOpen, FolderPlus, Globe2, Grid2x2, GripVertical, History as HistoryIcon, Image as ImageIcon, Info, KeyRound, Languages, LayoutGrid, Maximize2, Minimize, Minus, Monitor, Moon, Network, Palette, PanelLeftClose, PanelLeftOpen, Play, Plus, Power, Rocket, RotateCcw, Rows2, Rows3, Search, Send, Server, Settings as SettingsIcon, ShieldAlert, Sparkles, Square, SquareTerminal, Star, Stethoscope, Sun, Trash2, Upload, WandSparkles, X } from 'lucide-react'
 import { BUNDLED_TERMINAL_FONT, DEFAULT_AI_SETTINGS, DEFAULT_TERMINAL_SETTINGS, type AgentLaunchProfile, type AiCommandHistoryEntry, type AiCommandSuggestion, type AiProvider, type AiRawExchange, type AiRiskAssessment, type AiSettings, type AiSettingsInput, type AiShell, type AiThinkingMode, type AppEvent, type AppIconId, type AppIconSettings, type AppLanguage, type Bookmark, type BookmarkArchivePreview, type BookmarkArchiveSource, type BookmarkInput, type BrowserResource, type BrowserRuntime, type BrowserRuntimeStatus, type BrowserTunnel, type ChromeInstallation, type ConflictResolution, type ConnectInput, type DeploymentDiffEntry, type DeploymentProfile, type DoctorCheck, type DoctorCheckStatus, type DoctorManagedAgent, type DoctorReport, type DoctorRuntimeCheck, type HostKeyPrompt, type LunaRemoteImportPreview, type LunaRemoteImportResult, type LunaRemoteSource, type ManagedAgentEvent, type ManagedAgentStatus, type MuxPane, type MuxSession, type MuxSplitNode, type PortForwardProfile, type SessionStatus, type SshConfigPreview, type TerminalRuntime, type TerminalRuntimeEvent, type TerminalSettings, type TerminalTarget, type TransferTask, type TunnelSummary, type UiTheme } from './types'
+import type { AgentBrowserToolProfile } from './types'
 import { discardTerminalSnapshot, TerminalPane, type TerminalPaneHandle } from './components/TerminalPane'
 import { DatabasePane, type DatabasePaneHandle } from './components/DatabasePane'
 import type { DatabaseProfile } from './types'
@@ -18,6 +19,16 @@ import { BUILD_TIME } from 'virtual:build-time'
 interface WorkspaceTab extends MuxPane { databaseRevision?: number; initialDatabaseProfile?: DatabaseProfile; initialDatabaseReadOnly?: boolean; key: string; sessionId?: string; runtimeId?: string; agentId?: string; status: SessionStatus; error?: string }
 interface AiCommandTarget { name: string; detail: string; runtimeId?: string; connected: boolean; remote: boolean; initialShell: AiShell }
 interface BrowserResourceState extends BrowserResource { runtime?: BrowserRuntime; tunnel?: BrowserTunnel; status: BrowserRuntimeStatus | 'stopped'; error?: string }
+const AGENT_BROWSER_TOOL_GROUPS: ReadonlyArray<{ id: AgentBrowserToolProfile; count: number; label: MessageKey; description: MessageKey }> = [
+  { id: 'core', count: 29, label: 'app.browserToolsCore', description: 'app.browserToolsCoreDescription' },
+  { id: 'network', count: 9, label: 'app.browserToolsNetwork', description: 'app.browserToolsNetworkDescription' },
+  { id: 'debug', count: 40, label: 'app.browserToolsDebug', description: 'app.browserToolsDebugDescription' },
+  { id: 'tabs', count: 13, label: 'app.browserToolsTabs', description: 'app.browserToolsTabsDescription' },
+  { id: 'state', count: 27, label: 'app.browserToolsState', description: 'app.browserToolsStateDescription' },
+  { id: 'react', count: 8, label: 'app.browserToolsReact', description: 'app.browserToolsReactDescription' },
+  { id: 'mobile', count: 15, label: 'app.browserToolsMobile', description: 'app.browserToolsMobileDescription' },
+  { id: 'webmcp', count: 4, label: 'app.browserToolsWebmcp', description: 'app.browserToolsWebmcpDescription' }
+]
 interface ManagedAgentSummary { agentId: string; paneId: string; runtimeId: string; status: ManagedAgentStatus | 'starting' | 'stopped'; waitingReason?: string; timestamp?: string; eventCount: number; unread: boolean; hasStructuredEvents: boolean; latest?: ManagedAgentEvent; latestAttention?: ManagedAgentEvent }
 interface DiagnosticsRuntimeEnvironment { runtimeId: string; hook: string; mcp: string; tokens: string }
 type AgentAttentionTone = 'info' | 'warning' | 'error'
@@ -366,6 +377,24 @@ export function App(): React.JSX.Element {
       })
       setBrowserResources((current) => current.map((item) => item.id === saved.id ? { ...item, ...saved } : item))
     } catch (error) { showError(errorMessage(error)) }
+  }
+  const setBrowserToolProfiles = async (resource: BrowserResourceState, toolProfiles: AgentBrowserToolProfile[]): Promise<void> => {
+    setBrowserResources((current) => current.map((item) => item.id === resource.id ? { ...item, toolProfiles } : item))
+    try {
+      const saved = await window.api.browserResources.save({
+        id: resource.id,
+        muxSessionId: resource.muxSessionId,
+        name: resource.name,
+        sourcePaneId: resource.sourcePaneId,
+        bookmarkId: resource.bookmarkId,
+        url: resource.url,
+        toolProfiles
+      })
+      setBrowserResources((current) => current.map((item) => item.id === saved.id ? { ...item, ...saved } : item))
+    } catch (error) {
+      setBrowserResources((current) => current.map((item) => item.id === resource.id ? { ...item, toolProfiles: resource.toolProfiles } : item))
+      showError(errorMessage(error))
+    }
   }
   const startLocalPane = async (pane: WorkspaceTab): Promise<void> => {
     if (pane.kind !== 'terminal') return
@@ -1618,7 +1647,7 @@ export function App(): React.JSX.Element {
             : sessionTabs.length === 0 && sessionBrowserResources.length === 0 ? <div className="welcome-state"><div className="welcome-icon"><SquareTerminal size={30} /></div><h2>{activeMuxSession.name}</h2>{activeMuxSession.rootPath && <p>{activeMuxSession.rootPath}</p>}<div className="welcome-actions"><button className="primary-button" onClick={() => void openPaneLauncher()}><CirclePlus size={16} />{t('app.addFirstPane')}</button></div></div>
             : workspaceView === 'terminal' && visibleSessionTabs.length === 0 ? <div className="welcome-state pane-empty-state"><div className="welcome-icon"><Minus size={30} /></div><h2>{t('app.minimizedPanes')}</h2><p>{t('app.restoreMinimizedPaneDescription')}</p><div className="welcome-actions">{sessionTabs.filter((pane) => minimizedPaneIds.has(pane.id)).map((pane) => <button key={pane.id} className="secondary-button" onClick={() => void restorePane(pane)}><Eye size={15} />{pane.title}</button>)}</div></div>
                 : workspaceView === 'agents' ? <AgentEnvironmentPanel agents={allAgents} panes={sessionTabs} bookmarks={bookmarks} agentAttentionByPane={agentAttentionByPane} onOpenPane={(agent) => { setActiveKey(agent.paneId); setWorkspaceView('terminal'); markAgentRead(agent.agentId) }} onDismissWaiting={dismissAgentWaitingAttention} />
-                  : workspaceView === 'browser' ? <BrowserResourceManager resources={sessionBrowserResources} panes={sessionTabs} chromeInstallation={chromeInstallation} onRefreshChrome={refreshChromeInstallation} onStart={(resource) => void startBrowserResource(resource)} onFocus={(resource) => { if (resource.runtime) void window.api.browserRuntimes.focusExternal(resource.runtime.id).catch((error) => showError(errorMessage(error))) }} onRestart={(resource) => void restartBrowserResource(resource)} onStop={(resource) => void stopBrowserResource(resource)} onRetainProfile={(resource, retain) => void setBrowserProfileRetention(resource, retain)} />
+                  : workspaceView === 'browser' ? <BrowserResourceManager resources={sessionBrowserResources} panes={sessionTabs} chromeInstallation={chromeInstallation} onRefreshChrome={refreshChromeInstallation} onStart={(resource) => void startBrowserResource(resource)} onFocus={(resource) => { if (resource.runtime) void window.api.browserRuntimes.focusExternal(resource.runtime.id).catch((error) => showError(errorMessage(error))) }} onRestart={(resource) => void restartBrowserResource(resource)} onStop={(resource) => void stopBrowserResource(resource)} onRetainProfile={(resource, retain) => void setBrowserProfileRetention(resource, retain)} onToolProfiles={(resource, profiles) => void setBrowserToolProfiles(resource, profiles)} />
                     : workspaceView === 'files' && activeTab && activeBookmark ? <div className="session-view active files"><div className="sftp-region"><SftpPane sessionId={activeSshRuntimeId} bookmarkId={activeTab.bookmarkId} connected={activeTab.status === 'connected'} visible onError={showError} onConnect={() => reconnectPane(activeTab)} /></div></div>
                       : null}
         </div>
@@ -2179,7 +2208,7 @@ function MuxLayout({ node, panes, bookmarks, activePaneId, settings, backgroundI
   </div>
 }
 
-function BrowserResourceManager({ resources, panes, chromeInstallation, onRefreshChrome, onStart, onFocus, onRestart, onStop, onRetainProfile }: { resources: BrowserResourceState[]; panes: WorkspaceTab[]; chromeInstallation: ChromeInstallation | null | undefined; onRefreshChrome(): void; onStart(resource: BrowserResourceState): void; onFocus(resource: BrowserResourceState): void; onRestart(resource: BrowserResourceState): void; onStop(resource: BrowserResourceState): void; onRetainProfile(resource: BrowserResourceState, retain: boolean): void }): React.JSX.Element {
+function BrowserResourceManager({ resources, panes, chromeInstallation, onRefreshChrome, onStart, onFocus, onRestart, onStop, onRetainProfile, onToolProfiles }: { resources: BrowserResourceState[]; panes: WorkspaceTab[]; chromeInstallation: ChromeInstallation | null | undefined; onRefreshChrome(): void; onStart(resource: BrowserResourceState): void; onFocus(resource: BrowserResourceState): void; onRestart(resource: BrowserResourceState): void; onStop(resource: BrowserResourceState): void; onRetainProfile(resource: BrowserResourceState, retain: boolean): void; onToolProfiles(resource: BrowserResourceState, profiles: AgentBrowserToolProfile[]): void }): React.JSX.Element {
   const { t } = useI18n()
   const paneMap = new Map(panes.map((pane) => [pane.id, pane]))
   if (!resources.length) return <div className="browser-resource-manager empty"><Globe2 size={30} /><strong>{t('app.noBrowserResources')}</strong></div>
@@ -2190,6 +2219,7 @@ function BrowserResourceManager({ resources, panes, chromeInstallation, onRefres
       const statusLabel = resource.status === 'starting' ? t('app.connecting') : live ? t('app.browserRunning') : resource.status === 'error' ? t('app.browserRuntimeFailed') : t('app.browserRuntimeStopped')
       const agentAccessLabel = live ? t('app.browserAgentAccessReady') : chromeInstallation ? t('app.browserAgentAccessOnStart') : t('app.browserAgentAccessBlocked')
       const serviceLabel = sourcePane ? `${t('app.viaSshPane')} ${sourcePane.title}` : t('app.localService')
+      const selectedToolUpperBound = AGENT_BROWSER_TOOL_GROUPS.filter((group) => resource.toolProfiles.includes(group.id)).reduce((total, group) => total + group.count, 0)
       return <section className={`browser-resource-detail ${live ? 'running' : resource.status}`} key={resource.id}>
         <header>
           <div className="browser-resource-identity"><span className={`status-dot ${live ? 'connected' : resource.status === 'error' ? 'error' : resource.status === 'starting' ? 'connecting' : 'disconnected'}`} /><Globe2 size={18} /><span><strong>{resource.name}</strong><small>{serviceLabel}</small></span></div>
@@ -2213,6 +2243,29 @@ function BrowserResourceManager({ resources, panes, chromeInstallation, onRefres
             <div><strong>{t('app.retainBrowserData')}</strong><span>{resource.retainProfile ? t('app.browserProfileRetained') : t('app.browserProfileDisposable')}</span></div>
             <label className="switch-control" title={resource.runtime || resource.status === 'starting' ? t('app.stopBrowserBeforeProfileChange') : undefined}><input type="checkbox" checked={resource.retainProfile} disabled={Boolean(resource.runtime) || resource.status === 'starting'} onChange={(event) => onRetainProfile(resource, event.target.checked)} /><span aria-hidden="true" /></label>
           </div>
+        </div>
+        <div className="browser-resource-tools">
+          <div className="browser-resource-tools-heading">
+            <span><strong>{t('app.browserAgentTools')}</strong><small>{t('app.browserAgentToolsDescription')}</small></span>
+            <span>{t('app.browserAgentToolCount', { value0: String(AGENT_BROWSER_TOOL_GROUPS.filter((group) => resource.toolProfiles.includes(group.id)).length) })}</span>
+          </div>
+          <div className="browser-tool-groups">{AGENT_BROWSER_TOOL_GROUPS.map((group) => {
+            const checked = resource.toolProfiles.includes(group.id)
+            const required = group.id === 'core'
+            return <label className={`browser-tool-group ${checked ? 'selected' : ''}`} key={group.id}>
+              <input type="checkbox" checked={checked} disabled={required} onChange={(event) => {
+                const selected = new Set(resource.toolProfiles)
+                if (event.target.checked) selected.add(group.id)
+                else selected.delete(group.id)
+                selected.add('core')
+                onToolProfiles(resource, AGENT_BROWSER_TOOL_GROUPS.map((candidate) => candidate.id).filter((profile) => selected.has(profile)))
+              }} />
+              <span><strong>{t(group.label)} <small>{t('app.browserAgentToolGroupCount', { value0: String(group.count) })}</small></strong><small>{t(group.description)}</small></span>
+              {required && <em>{t('app.required')}</em>}
+            </label>
+          })}</div>
+          {selectedToolUpperBound > 64 && <div className="browser-resource-warning browser-tool-warning"><ShieldAlert size={15} /><span><strong>{t('app.browserAgentToolsCodexLimit')}</strong><small>{t('app.browserAgentToolsCodexLimitDescription', { value0: String(selectedToolUpperBound) })}</small></span></div>}
+          <p className="browser-resource-profile-note">{t('app.browserAgentToolsRestartNote')}</p>
         </div>
       </section>
     })}</div>

@@ -275,6 +275,7 @@ pub struct BrowserResource {
     pub bookmark_id: String,
     pub url: String,
     pub retain_profile: bool,
+    pub tool_profiles: Vec<String>,
     pub sort_order: i64,
     pub created_at: String,
     pub updated_at: String,
@@ -295,6 +296,34 @@ pub struct BrowserResourceInput {
     pub url: String,
     #[serde(default)]
     pub retain_profile: Option<bool>,
+    #[serde(default)]
+    pub tool_profiles: Option<Vec<String>>,
+}
+
+pub const AGENT_BROWSER_TOOL_PROFILES: [&str; 8] = [
+    "core", "network", "debug", "tabs", "state", "react", "mobile", "webmcp",
+];
+
+pub fn normalize_agent_browser_tool_profiles(
+    profiles: impl IntoIterator<Item = String>,
+) -> Result<Vec<String>, String> {
+    let mut normalized = vec!["core".to_string()];
+    for profile in profiles {
+        let profile = profile.trim().to_ascii_lowercase();
+        if !AGENT_BROWSER_TOOL_PROFILES.contains(&profile.as_str()) {
+            return Err(format!("不支持的 agent-browser 工具分类：{profile}"));
+        }
+        if !normalized.contains(&profile) {
+            normalized.push(profile);
+        }
+    }
+    normalized.sort_by_key(|profile| {
+        AGENT_BROWSER_TOOL_PROFILES
+            .iter()
+            .position(|candidate| candidate == profile)
+            .unwrap_or(usize::MAX)
+    });
+    Ok(normalized)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

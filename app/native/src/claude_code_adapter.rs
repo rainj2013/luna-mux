@@ -633,7 +633,9 @@ mod tests {
         }
         // The react tools need an option Luna Mux cannot supply, so the prompt is
         // the only place an Agent can learn that it has to ask for them.
-        assert!(LUNA_MUX_BROWSER_INSTRUCTIONS.contains(r#"extraArgs ["--enable", "react-devtools"]"#));
+        assert!(
+            LUNA_MUX_BROWSER_INSTRUCTIONS.contains(r#"extraArgs ["--enable", "react-devtools"]"#)
+        );
         assert!(LUNA_MUX_BROWSER_INSTRUCTIONS.contains("installs a document script"));
     }
 }

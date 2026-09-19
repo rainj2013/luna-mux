@@ -118,9 +118,9 @@ BrowserRuntimeManager 通过 CDP 让绑定页面的配色跟随应用主题，�
 
 应用负责浏览器生命周期，`agent_browser` 负责页面自动化。自动化绑定 Session 的现有页面，普通导航复用该页面；网页操作不能自行启动或替换浏览器进程。
 
-Browser Runtime 启用 Chrome WebMCP 接口，页面须自行注册工具。本地和远程 Agent 共用的 MCP 工具组覆盖页面操作、网络调试、标签页、WebMCP、cookie 与 storage、加密凭据库、React 检查和设备模拟。React 检查须在打开页面时启用 `react-devtools`。Luna Mux 不附带上游 skills，以免其 CLI 和具名会话指引与受管浏览器契约冲突。
+Browser Resource 按上游 profile 持久化 Agent 工具组选择：Core 始终启用；Network、Debug、Tabs、State/Auth Vault、React、Mobile 与 WebMCP 默认关闭，可在 Browser 页分类勾选。本地和远程 Agent 使用同一选择。保存会更新当前 Runtime 的注册信息，新 MCP 连接立即采用；已运行的 Agent 需重启后重新发现工具，因为当前客户端不会响应工具列表热变更。Browser Runtime 始终启用 Chrome WebMCP 接口，但只有启用 WebMCP 工具组后 Agent 才能发现页面注册的工具。React 检查须在打开页面时启用 `react-devtools`。Luna Mux 不附带上游 skills，以免其 CLI 和具名会话指引与受管浏览器契约冲突。
 
-Agent 注入指引说明批量调用、无障碍审计、截图与快照差异比较，以及增量观察和输出收窄的用法；这些能力由 Agent 按任务选择。
+Agent 注入指引说明可选工具组，以及启用 Debug 后的批量调用、无障碍审计、截图与快照差异比较；Core 的增量观察和输出收窄始终可用。
 
 CDP 仅绑定本地回环地址，端口和连接信息属于临时运行状态。远程 Agent 通过经认证的 Runtime 通信桥访问 Session 浏览器，原始 CDP 不转发到远端。远程开发服务使用独立 SSH 隧道，浏览器资源不拥有隧道。
 

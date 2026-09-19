@@ -399,6 +399,13 @@ impl Database {
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             Ok(columns.iter().any(|column| column == "retainProfile"))
         })?;
+        let has_tool_profiles_json = self.with_conn(|db| {
+            let mut statement = db.prepare("PRAGMA table_info(browser_resources)")?;
+            let columns = statement
+                .query_map([], |row| row.get::<_, String>(1))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(columns.iter().any(|column| column == "toolProfilesJson"))
+        })?;
         // Kept only to be dropped: the old request-level temporary choice was
         // retired. Profile retention now belongs to the Browser Resource through
         // `retainProfile`, with a safe default for old rows.
@@ -461,6 +468,12 @@ impl Database {
             if !has_retain_profile {
                 transaction.execute(
                     "ALTER TABLE browser_resources ADD COLUMN retainProfile INTEGER NOT NULL DEFAULT 0",
+                    [],
+                )?;
+            }
+            if !has_tool_profiles_json {
+                transaction.execute(
+                    "ALTER TABLE browser_resources ADD COLUMN toolProfilesJson TEXT NOT NULL DEFAULT '[\"core\"]'",
                     [],
                 )?;
             }
@@ -888,9 +901,9 @@ impl Database {
     ) -> Result<Vec<BrowserResource>, String> {
         self.with_conn(|db| {
             let sql = if mux_session_id.is_some() {
-                "SELECT id,muxSessionId,name,sourcePaneId,bookmarkId,url,reuseLocalProfile,retainProfile,sortOrder,createdAt,updatedAt FROM browser_resources WHERE muxSessionId=? ORDER BY sortOrder ASC,createdAt ASC"
+                "SELECT id,muxSessionId,name,sourcePaneId,bookmarkId,url,reuseLocalProfile,retainProfile,toolProfilesJson,sortOrder,createdAt,updatedAt FROM browser_resources WHERE muxSessionId=? ORDER BY sortOrder ASC,createdAt ASC"
             } else {
-                "SELECT id,muxSessionId,name,sourcePaneId,bookmarkId,url,reuseLocalProfile,retainProfile,sortOrder,createdAt,updatedAt FROM browser_resources ORDER BY muxSessionId ASC,sortOrder ASC,createdAt ASC"
+                "SELECT id,muxSessionId,name,sourcePaneId,bookmarkId,url,reuseLocalProfile,retainProfile,toolProfilesJson,sortOrder,createdAt,updatedAt FROM browser_resources ORDER BY muxSessionId ASC,sortOrder ASC,createdAt ASC"
             };
             let mut statement = db.prepare(sql)?;
             let read = |row: &rusqlite::Row<'_>| {
@@ -902,9 +915,14 @@ impl Database {
                     bookmark_id: row.get(4)?,
                     url: row.get(5)?,
                     retain_profile: row.get(7)?,
-                    sort_order: row.get(8)?,
-                    created_at: row.get(9)?,
-                    updated_at: row.get(10)?,
+                    tool_profiles: crate::models::normalize_agent_browser_tool_profiles(
+                        serde_json::from_str::<Vec<String>>(&row.get::<_, String>(8)?)
+                            .unwrap_or_else(|_| vec!["core".into()]),
+                    )
+                    .unwrap_or_else(|_| vec!["core".into()]),
+                    sort_order: row.get(9)?,
+                    created_at: row.get(10)?,
+                    updated_at: row.get(11)?,
                 })
             };
             if let Some(id) = mux_session_id {
@@ -934,6 +952,7 @@ impl Database {
             bookmark_id: String::new(),
             url: String::new(),
             retain_profile: Some(false),
+            tool_profiles: Some(vec!["core".into()]),
         })
     }
 
@@ -991,6 +1010,13 @@ impl Database {
             .retain_profile
             .or_else(|| existing.as_ref().map(|resource| resource.retain_profile))
             .unwrap_or(false);
+        let tool_profiles = match input.tool_profiles {
+            Some(profiles) => crate::models::normalize_agent_browser_tool_profiles(profiles)?,
+            None => existing
+                .as_ref()
+                .map(|resource| resource.tool_profiles.clone())
+                .unwrap_or_else(|| vec!["core".into()]),
+        };
         let sort_order = if let Some(existing) = &existing {
             existing.sort_order
         } else {
@@ -1011,6 +1037,7 @@ impl Database {
             bookmark_id: bookmark_id.into(),
             url: url.into(),
             retain_profile,
+            tool_profiles,
             sort_order,
             created_at: existing
                 .as_ref()
@@ -1018,9 +1045,11 @@ impl Database {
                 .unwrap_or_else(|| now.clone()),
             updated_at: now,
         };
+        let tool_profiles_json =
+            serde_json::to_string(&resource.tool_profiles).map_err(|error| error.to_string())?;
         self.with_conn(|db| db.execute(
-            "INSERT INTO browser_resources(id,muxSessionId,name,sourcePaneId,bookmarkId,url,reuseLocalProfile,retainProfile,sortOrder,createdAt,updatedAt) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET muxSessionId=excluded.muxSessionId,name=excluded.name,sourcePaneId=excluded.sourcePaneId,bookmarkId=excluded.bookmarkId,url=excluded.url,reuseLocalProfile=excluded.reuseLocalProfile,retainProfile=excluded.retainProfile,updatedAt=excluded.updatedAt",
-            params![resource.id,resource.mux_session_id,resource.name,resource.source_pane_id,resource.bookmark_id,resource.url,0_i64,resource.retain_profile as i64,resource.sort_order,resource.created_at,resource.updated_at],
+            "INSERT INTO browser_resources(id,muxSessionId,name,sourcePaneId,bookmarkId,url,reuseLocalProfile,retainProfile,toolProfilesJson,sortOrder,createdAt,updatedAt) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET muxSessionId=excluded.muxSessionId,name=excluded.name,sourcePaneId=excluded.sourcePaneId,bookmarkId=excluded.bookmarkId,url=excluded.url,reuseLocalProfile=excluded.reuseLocalProfile,retainProfile=excluded.retainProfile,toolProfilesJson=excluded.toolProfilesJson,updatedAt=excluded.updatedAt",
+            params![resource.id,resource.mux_session_id,resource.name,resource.source_pane_id,resource.bookmark_id,resource.url,0_i64,resource.retain_profile as i64,tool_profiles_json,resource.sort_order,resource.created_at,resource.updated_at],
         ).map(|_| ()))?;
         Ok(resource)
     }
@@ -2166,6 +2195,7 @@ mod tests {
                 bookmark_id: String::new(),
                 url: String::new(),
                 retain_profile: Some(false),
+                tool_profiles: None,
             })
             .unwrap();
         assert!(browser.url.is_empty());
@@ -2180,6 +2210,7 @@ mod tests {
                     bookmark_id: String::new(),
                     url: String::new(),
                     retain_profile: Some(false),
+                    tool_profiles: None,
                 })
                 .unwrap_err()
                 .contains("只能关联一个浏览器资源")
@@ -2193,11 +2224,13 @@ mod tests {
                 bookmark_id: String::new(),
                 url: String::new(),
                 retain_profile: Some(true),
+                tool_profiles: Some(vec!["debug".into(), "network".into()]),
             })
             .unwrap();
         assert_eq!(renamed.id, browser.id);
         assert_eq!(renamed.name, "Renamed Browser");
         assert!(renamed.retain_profile);
+        assert_eq!(renamed.tool_profiles, vec!["core", "network", "debug"]);
         let preserved = database
             .save_browser_resource(BrowserResourceInput {
                 id: Some(browser.id.clone()),
@@ -2207,6 +2240,7 @@ mod tests {
                 bookmark_id: String::new(),
                 url: String::new(),
                 retain_profile: None,
+                tool_profiles: None,
             })
             .unwrap();
         assert!(
@@ -2277,6 +2311,7 @@ mod tests {
                 bookmark_id: String::new(),
                 url: "about:blank".into(),
                 retain_profile: None,
+                tool_profiles: None,
             })
             .unwrap();
         assert!(
@@ -2308,6 +2343,7 @@ mod tests {
             "the retired profile column must be dropped, since nothing reads it: {columns:?}"
         );
         assert!(columns.iter().any(|column| column == "retainProfile"));
+        assert!(columns.iter().any(|column| column == "toolProfilesJson"));
 
         // Running the migration again on the already-migrated file, which is what
         // every start after the first one does: the column is gone, so the drop

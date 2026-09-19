@@ -592,7 +592,7 @@ pub fn browser_chrome_discover(state: State<AppState>) -> Option<ChromeInstallat
 #[tauri::command]
 pub async fn browser_runtime_create(
     state: State<'_, AppState>,
-    request: BrowserRuntimeCreateRequest,
+    mut request: BrowserRuntimeCreateRequest,
 ) -> Result<BrowserRuntime, String> {
     let browser_resource_id = request.browser_resource_id.clone();
     let resource = state
@@ -604,6 +604,7 @@ pub async fn browser_runtime_create(
     if resource.mux_session_id != request.mux_session_id {
         return Err("浏览器资源与会话不匹配".into());
     }
+    request.tool_profiles.clone_from(&resource.tool_profiles);
     let runtime = state
         .browser_runtimes
         .create(request, resource.retain_profile)
@@ -2345,6 +2346,9 @@ pub fn browser_resources_save(
         }
     }
     let resource = state.db.save_browser_resource(input)?;
+    state
+        .browser_runtimes
+        .set_tool_profiles(&resource.mux_session_id, resource.tool_profiles.clone())?;
     Ok(resource)
 }
 

@@ -112,6 +112,7 @@ export interface BrowserResource {
   bookmarkId: string
   url: string
   retainProfile: boolean
+  toolProfiles: AgentBrowserToolProfile[]
   sortOrder: number
   createdAt: string
   updatedAt: string
@@ -125,7 +126,10 @@ export interface BrowserResourceInput {
   bookmarkId?: string
   url?: string
   retainProfile?: boolean
+  toolProfiles?: AgentBrowserToolProfile[]
 }
+
+export type AgentBrowserToolProfile = 'core' | 'network' | 'debug' | 'tabs' | 'state' | 'react' | 'mobile' | 'webmcp'
 
 export type {
   TerminalRuntime,
