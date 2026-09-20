@@ -17,6 +17,7 @@ use crate::models::*;
 const AI_API_KEY_ACCOUNT: &str = "__ai_api_key__";
 const AI_COMMAND_HISTORY_KEY: &str = "aiCommandHistory";
 const AI_COMMAND_HISTORY_LIMIT: usize = 10;
+const BROWSER_TOOL_PROFILES_DEFAULT_TABS_KEY: &str = "browserToolProfilesDefaultTabs";
 const PORTABLE_SETTING_KEYS: &[&str] = &[
     "aiSettings",
     "collapsedBookmarkGroups",
@@ -473,7 +474,7 @@ impl Database {
             }
             if !has_tool_profiles_json {
                 transaction.execute(
-                    "ALTER TABLE browser_resources ADD COLUMN toolProfilesJson TEXT NOT NULL DEFAULT '[\"core\"]'",
+                    "ALTER TABLE browser_resources ADD COLUMN toolProfilesJson TEXT NOT NULL DEFAULT '[\"core\",\"tabs\"]'",
                     [],
                 )?;
             }
@@ -587,6 +588,7 @@ impl Database {
             })?;
         }
         self.with_conn(|db| db.execute("UPDATE transfers SET status='interrupted', error='应用上次退出时传输未完成', updatedAt=? WHERE status IN ('queued','scanning','running','conflict')", [Utc::now().to_rfc3339()]).map(|_| ()))?;
+        self.upgrade_default_browser_tool_profiles()?;
         for session in self.list_mux_sessions()? {
             self.ensure_session_browser_resource(&session.id)?;
         }
@@ -917,9 +919,9 @@ impl Database {
                     retain_profile: row.get(7)?,
                     tool_profiles: crate::models::normalize_agent_browser_tool_profiles(
                         serde_json::from_str::<Vec<String>>(&row.get::<_, String>(8)?)
-                            .unwrap_or_else(|_| vec!["core".into()]),
+                            .unwrap_or_else(|_| crate::models::default_agent_browser_tool_profiles()),
                     )
-                    .unwrap_or_else(|_| vec!["core".into()]),
+                    .unwrap_or_else(|_| crate::models::default_agent_browser_tool_profiles()),
                     sort_order: row.get(9)?,
                     created_at: row.get(10)?,
                     updated_at: row.get(11)?,
@@ -931,6 +933,23 @@ impl Database {
                 statement.query_map([], read)?.collect()
             }
         })
+    }
+
+    fn upgrade_default_browser_tool_profiles(&self) -> Result<(), String> {
+        if self.get_setting(BROWSER_TOOL_PROFILES_DEFAULT_TABS_KEY, false) {
+            return Ok(());
+        }
+        let default_json =
+            serde_json::to_string(&crate::models::default_agent_browser_tool_profiles())
+                .map_err(|error| error.to_string())?;
+        self.with_conn(|db| {
+            db.execute(
+                r#"UPDATE browser_resources SET toolProfilesJson=?1 WHERE toolProfilesJson='["core"]'"#,
+                params![default_json],
+            )
+            .map(|_| ())
+        })?;
+        self.set_setting(BROWSER_TOOL_PROFILES_DEFAULT_TABS_KEY, &true)
     }
 
     pub fn ensure_session_browser_resource(
@@ -952,7 +971,7 @@ impl Database {
             bookmark_id: String::new(),
             url: String::new(),
             retain_profile: Some(false),
-            tool_profiles: Some(vec!["core".into()]),
+            tool_profiles: Some(crate::models::default_agent_browser_tool_profiles()),
         })
     }
 
@@ -1015,7 +1034,7 @@ impl Database {
             None => existing
                 .as_ref()
                 .map(|resource| resource.tool_profiles.clone())
-                .unwrap_or_else(|| vec!["core".into()]),
+                .unwrap_or_else(crate::models::default_agent_browser_tool_profiles),
         };
         let sort_order = if let Some(existing) = &existing {
             existing.sort_order
@@ -2144,6 +2163,7 @@ mod tests {
             .expect("list implicit browser resources");
         assert_eq!(browser.len(), 1);
         assert_eq!(browser[0].name, "Browser");
+        assert_eq!(browser[0].tool_profiles, vec!["core", "tabs"]);
         assert_eq!(
             db.ensure_session_browser_resource(&session.id)
                 .expect("reuse implicit browser resource")
@@ -2200,6 +2220,7 @@ mod tests {
             .unwrap();
         assert!(browser.url.is_empty());
         assert!(!browser.retain_profile);
+        assert_eq!(browser.tool_profiles, vec!["core", "tabs"]);
         assert!(
             database
                 .save_browser_resource(BrowserResourceInput {
@@ -2252,6 +2273,97 @@ mod tests {
             vec![preserved]
         );
         drop(database);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn upgrades_the_old_core_only_browser_tool_default_once() {
+        let path = std::env::temp_dir().join(format!(
+            "{}-browser-tool-default-{}.db",
+            crate::product::PRODUCT_KEY,
+            Uuid::new_v4()
+        ));
+        let database = Database::open(
+            &path,
+            &format!(
+                "{}.browser-tool-default-test",
+                crate::product::CREDENTIAL_SERVICE
+            ),
+        )
+        .unwrap();
+        let session = database
+            .save_mux_session(MuxSessionInput {
+                id: None,
+                name: "Browser Session".into(),
+                root_path: String::new(),
+                layout: None,
+            })
+            .unwrap();
+        let browser = database
+            .save_browser_resource(BrowserResourceInput {
+                id: None,
+                mux_session_id: session.id.clone(),
+                name: "Browser".into(),
+                source_pane_id: String::new(),
+                bookmark_id: String::new(),
+                url: String::new(),
+                retain_profile: Some(false),
+                tool_profiles: Some(vec!["core".into()]),
+            })
+            .unwrap();
+        assert_eq!(browser.tool_profiles, vec!["core"]);
+        database
+            .set_setting(super::BROWSER_TOOL_PROFILES_DEFAULT_TABS_KEY, &false)
+            .unwrap();
+        database
+            .with_conn(|db| {
+                db.execute(
+                    r#"UPDATE browser_resources SET toolProfilesJson='["core"]'"#,
+                    [],
+                )
+                .map(|_| ())
+            })
+            .unwrap();
+        drop(database);
+
+        let reopened = Database::open(
+            &path,
+            &format!(
+                "{}.browser-tool-default-test",
+                crate::product::CREDENTIAL_SERVICE
+            ),
+        )
+        .unwrap();
+        let upgraded = reopened.list_browser_resources(Some(&session.id)).unwrap();
+        assert_eq!(upgraded[0].tool_profiles, vec!["core", "tabs"]);
+        let core_only = reopened
+            .save_browser_resource(BrowserResourceInput {
+                id: Some(upgraded[0].id.clone()),
+                mux_session_id: session.id.clone(),
+                name: upgraded[0].name.clone(),
+                source_pane_id: String::new(),
+                bookmark_id: String::new(),
+                url: String::new(),
+                retain_profile: None,
+                tool_profiles: Some(vec!["core".into()]),
+            })
+            .unwrap();
+        assert_eq!(core_only.tool_profiles, vec!["core"]);
+        drop(reopened);
+
+        let persisted = Database::open(
+            &path,
+            &format!(
+                "{}.browser-tool-default-test",
+                crate::product::CREDENTIAL_SERVICE
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            persisted.list_browser_resources(Some(&session.id)).unwrap()[0].tool_profiles,
+            vec!["core"]
+        );
+        drop(persisted);
         let _ = std::fs::remove_file(path);
     }
 

@@ -129,7 +129,7 @@ export interface BrowserResourceInput {
   toolProfiles?: AgentBrowserToolProfile[]
 }
 
-export type AgentBrowserToolProfile = 'core' | 'network' | 'debug' | 'tabs' | 'state' | 'react' | 'mobile' | 'webmcp'
+export type AgentBrowserToolProfile = 'core' | 'tabs' | 'network' | 'debug' | 'state' | 'react' | 'mobile' | 'webmcp'
 
 export type {
   TerminalRuntime,

@@ -18,7 +18,10 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message};
 use uuid::Uuid;
 
-const DEFAULT_AGENT_BROWSER_TOOL_PROFILE: &str = "core";
+fn default_agent_browser_tool_profiles() -> Vec<String> {
+    crate::models::default_agent_browser_tool_profiles()
+}
+
 /// Pointer movement for MCP-driven sessions.  `human` trades speed for
 /// human-like motion, which keeps recorded runs and sites that reject
 /// instant pointer jumps usable.  This is a global CLI flag; unlike `--tools`
@@ -230,10 +233,6 @@ pub struct BrowserKeyEvent {
 
 fn default_url() -> String {
     "about:blank".into()
-}
-
-fn default_agent_browser_tool_profiles() -> Vec<String> {
-    vec![DEFAULT_AGENT_BROWSER_TOOL_PROFILE.into()]
 }
 
 struct ManagedBrowserRuntime {
@@ -1940,6 +1939,9 @@ fn browser_registry_path() -> PathBuf {
 }
 
 fn agent_browser_tools_arg(profiles: &[String]) -> String {
+    if profiles.is_empty() {
+        return default_agent_browser_tool_profiles().join(",");
+    }
     crate::models::normalize_agent_browser_tool_profiles(profiles.iter().cloned())
         .unwrap_or_else(|_| default_agent_browser_tool_profiles())
         .join(",")
@@ -3262,7 +3264,7 @@ mod tests {
         let serialized = serde_json::to_value(request).unwrap();
         assert!(serialized.get("reuseLocalProfile").is_none());
         assert_eq!(serialized["url"], "about:blank");
-        assert_eq!(serialized["toolProfiles"], json!(["core"]));
+        assert_eq!(serialized["toolProfiles"], json!(["core", "tabs"]));
     }
 
     #[test]
@@ -3271,7 +3273,11 @@ mod tests {
             super::agent_browser_tools_arg(&["react".into(), "network".into(), "react".into()]),
             "core,network,react"
         );
-        assert_eq!(super::agent_browser_tools_arg(&[]), "core");
+        assert_eq!(super::agent_browser_tools_arg(&[]), "core,tabs");
+        assert_eq!(
+            super::agent_browser_tools_arg(&["tabs".into(), "core".into()]),
+            "core,tabs"
+        );
     }
 
     #[test]
