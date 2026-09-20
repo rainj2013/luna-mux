@@ -69,7 +69,7 @@ function FileBrowser(props: BrowserProps): React.JSX.Element {
     .filter((entry) => entry.name.toLowerCase().includes(filter.trim().toLowerCase()))
     .sort((a, b) => Number(b.kind === 'directory') - Number(a.kind === 'directory') || a.name.localeCompare(b.name)), [props.entries, filter, showHidden])
   const paths = useMemo(() => shown.map((entry) => entry.path), [shown])
-  const virtualizer = useVirtualizer({ count: shown.length, getScrollElement: () => scroll.current, estimateSize: () => 31, overscan: 12 })
+  const virtualizer = useVirtualizer({ count: shown.length, getScrollElement: () => scroll.current, estimateSize: () => 32, overscan: 12 })
   const selectedEntries = shown.filter((entry) => props.selected.has(entry.path))
   const previewable = selectedEntries.length === 1 && selectedEntries[0]?.kind === 'file'
 
