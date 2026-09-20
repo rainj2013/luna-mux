@@ -2,13 +2,6 @@ import { resolve } from 'node:path'
 import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 
-const pad = (value: number): string => String(value).padStart(2, '0')
-
-function buildTimeText(): string {
-  const at = new Date()
-  return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())}:${pad(at.getSeconds())}`
-}
-
 const buildTimeModule = 'virtual:build-time'
 const resolvedBuildTimeModule = `\0${buildTimeModule}`
 
@@ -16,7 +9,7 @@ const resolvedBuildTimeModule = `\0${buildTimeModule}`
 // replacements do not reach the JSX transform path in dev, which would leave the
 // identifier undefined at runtime there.
 function buildTimePlugin(): Plugin {
-  const buildTime = buildTimeText()
+  const buildTime = Date.now()
   return {
     name: 'luna-mux-build-time',
     resolveId: (id) => (id === buildTimeModule ? resolvedBuildTimeModule : null),

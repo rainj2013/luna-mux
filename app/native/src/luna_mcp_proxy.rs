@@ -2,7 +2,7 @@ use rmcp::{
     ErrorData as McpError, Peer, RoleClient, ServerHandler, ServiceExt,
     model::{
         CallToolRequestParams, CallToolResponse, ListToolsResult, PaginatedRequestParams,
-        ServerInfo,
+        ServerConfig,
     },
     service::RequestContext,
     transport::{
@@ -17,11 +17,11 @@ use std::time::Duration;
 #[derive(Clone)]
 struct LunaMcpStdioProxy {
     upstream: Peer<RoleClient>,
-    info: ServerInfo,
+    info: ServerConfig,
 }
 
 impl ServerHandler for LunaMcpStdioProxy {
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> ServerConfig {
         self.info.clone()
     }
 
@@ -82,7 +82,7 @@ async fn run_proxy() -> Result<(), String> {
     let peer_info = peer
         .peer_info()
         .ok_or_else(|| "Luna MCP 未返回初始化信息".to_string())?;
-    let mut info = ServerInfo::new(peer_info.capabilities.clone())
+    let mut info = ServerConfig::new(peer_info.capabilities.clone())
         .with_protocol_version(peer_info.protocol_version.clone());
     if let Some(server_info) = peer_info.server_info.clone() {
         info = info.with_server_info(server_info);

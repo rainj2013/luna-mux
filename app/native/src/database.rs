@@ -385,6 +385,37 @@ impl Database {
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             Ok(columns.iter().any(|column| column == "launchProfileId"))
         })?;
+        let has_reuse_local_profile = self.with_conn(|db| {
+            let mut statement = db.prepare("PRAGMA table_info(browser_resources)")?;
+            let columns = statement
+                .query_map([], |row| row.get::<_, String>(1))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(columns.iter().any(|column| column == "reuseLocalProfile"))
+        })?;
+        let has_retain_profile = self.with_conn(|db| {
+            let mut statement = db.prepare("PRAGMA table_info(browser_resources)")?;
+            let columns = statement
+                .query_map([], |row| row.get::<_, String>(1))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(columns.iter().any(|column| column == "retainProfile"))
+        })?;
+        let has_tool_profiles_json = self.with_conn(|db| {
+            let mut statement = db.prepare("PRAGMA table_info(browser_resources)")?;
+            let columns = statement
+                .query_map([], |row| row.get::<_, String>(1))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(columns.iter().any(|column| column == "toolProfilesJson"))
+        })?;
+        // Kept only to be dropped: the old request-level temporary choice was
+        // retired. Profile retention now belongs to the Browser Resource through
+        // `retainProfile`, with a safe default for old rows.
+        let has_temporary_profile = self.with_conn(|db| {
+            let mut statement = db.prepare("PRAGMA table_info(browser_resources)")?;
+            let columns = statement
+                .query_map([], |row| row.get::<_, String>(1))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(columns.iter().any(|column| column == "temporaryProfile"))
+        })?;
         let has_resource_grants = self.with_conn(|db| {
             let mut statement = db.prepare("PRAGMA table_info(agent_control_grants)")?;
             let columns = statement
@@ -412,7 +443,7 @@ impl Database {
                 CREATE TABLE IF NOT EXISTS browser_resources (
                   id TEXT PRIMARY KEY, muxSessionId TEXT NOT NULL, name TEXT NOT NULL,
                   sourcePaneId TEXT NOT NULL DEFAULT '', bookmarkId TEXT NOT NULL DEFAULT '',
-                  url TEXT NOT NULL DEFAULT 'about:blank', temporaryProfile INTEGER NOT NULL DEFAULT 0,
+                  url TEXT NOT NULL DEFAULT 'about:blank',
                   sortOrder INTEGER NOT NULL DEFAULT 0, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL,
                   FOREIGN KEY(muxSessionId) REFERENCES mux_sessions(id) ON DELETE CASCADE
                 );
@@ -423,6 +454,32 @@ impl Database {
                     "ALTER TABLE mux_panes ADD COLUMN launchProfileId TEXT NOT NULL DEFAULT ''",
                     [],
                 )?;
+            }
+            // Retained as an inert compatibility column; no API exposes or uses it.
+            // Added by ALTER rather than to the CREATE TABLE above so that a
+            // fresh database and an existing one take the same path, and the
+            // migration stays idempotent when run again.
+            if !has_reuse_local_profile {
+                transaction.execute(
+                    "ALTER TABLE browser_resources ADD COLUMN reuseLocalProfile INTEGER NOT NULL DEFAULT 0",
+                    [],
+                )?;
+            }
+            if !has_retain_profile {
+                transaction.execute(
+                    "ALTER TABLE browser_resources ADD COLUMN retainProfile INTEGER NOT NULL DEFAULT 0",
+                    [],
+                )?;
+            }
+            if !has_tool_profiles_json {
+                transaction.execute(
+                    "ALTER TABLE browser_resources ADD COLUMN toolProfilesJson TEXT NOT NULL DEFAULT '[\"core\"]'",
+                    [],
+                )?;
+            }
+            if has_temporary_profile {
+                transaction
+                    .execute("ALTER TABLE browser_resources DROP COLUMN temporaryProfile", [])?;
             }
             if !has_resource_grants {
                 let browser_pane_ids = {
@@ -435,12 +492,12 @@ impl Database {
                 transaction.execute_batch(
                     r#"
                     INSERT OR IGNORE INTO browser_resources(
-                      id,muxSessionId,name,sourcePaneId,bookmarkId,url,temporaryProfile,
+                      id,muxSessionId,name,sourcePaneId,bookmarkId,url,
                       sortOrder,createdAt,updatedAt
                     )
                     SELECT id,muxSessionId,title,targetId,bookmarkId,
                       CASE WHEN trim(command)='' THEN 'about:blank' ELSE command END,
-                      0,sortOrder,createdAt,updatedAt
+                      sortOrder,createdAt,updatedAt
                     FROM mux_panes WHERE kind='browser';
                     CREATE TABLE agent_control_grants_v10 (
                       id TEXT PRIMARY KEY, sourcePaneId TEXT NOT NULL,
@@ -844,9 +901,9 @@ impl Database {
     ) -> Result<Vec<BrowserResource>, String> {
         self.with_conn(|db| {
             let sql = if mux_session_id.is_some() {
-                "SELECT id,muxSessionId,name,sourcePaneId,bookmarkId,url,temporaryProfile,sortOrder,createdAt,updatedAt FROM browser_resources WHERE muxSessionId=? ORDER BY sortOrder ASC,createdAt ASC"
+                "SELECT id,muxSessionId,name,sourcePaneId,bookmarkId,url,reuseLocalProfile,retainProfile,toolProfilesJson,sortOrder,createdAt,updatedAt FROM browser_resources WHERE muxSessionId=? ORDER BY sortOrder ASC,createdAt ASC"
             } else {
-                "SELECT id,muxSessionId,name,sourcePaneId,bookmarkId,url,temporaryProfile,sortOrder,createdAt,updatedAt FROM browser_resources ORDER BY muxSessionId ASC,sortOrder ASC,createdAt ASC"
+                "SELECT id,muxSessionId,name,sourcePaneId,bookmarkId,url,reuseLocalProfile,retainProfile,toolProfilesJson,sortOrder,createdAt,updatedAt FROM browser_resources ORDER BY muxSessionId ASC,sortOrder ASC,createdAt ASC"
             };
             let mut statement = db.prepare(sql)?;
             let read = |row: &rusqlite::Row<'_>| {
@@ -857,10 +914,15 @@ impl Database {
                     source_pane_id: row.get(3)?,
                     bookmark_id: row.get(4)?,
                     url: row.get(5)?,
-                    temporary_profile: row.get::<_, i64>(6)? != 0,
-                    sort_order: row.get(7)?,
-                    created_at: row.get(8)?,
-                    updated_at: row.get(9)?,
+                    retain_profile: row.get(7)?,
+                    tool_profiles: crate::models::normalize_agent_browser_tool_profiles(
+                        serde_json::from_str::<Vec<String>>(&row.get::<_, String>(8)?)
+                            .unwrap_or_else(|_| vec!["core".into()]),
+                    )
+                    .unwrap_or_else(|_| vec!["core".into()]),
+                    sort_order: row.get(9)?,
+                    created_at: row.get(10)?,
+                    updated_at: row.get(11)?,
                 })
             };
             if let Some(id) = mux_session_id {
@@ -889,7 +951,8 @@ impl Database {
             source_pane_id: String::new(),
             bookmark_id: String::new(),
             url: String::new(),
-            temporary_profile: false,
+            retain_profile: Some(false),
+            tool_profiles: Some(vec!["core".into()]),
         })
     }
 
@@ -943,6 +1006,17 @@ impl Database {
             return Err("每个 Mux Session 只能关联一个浏览器资源".into());
         }
         let existing = existing.into_iter().find(|resource| resource.id == id);
+        let retain_profile = input
+            .retain_profile
+            .or_else(|| existing.as_ref().map(|resource| resource.retain_profile))
+            .unwrap_or(false);
+        let tool_profiles = match input.tool_profiles {
+            Some(profiles) => crate::models::normalize_agent_browser_tool_profiles(profiles)?,
+            None => existing
+                .as_ref()
+                .map(|resource| resource.tool_profiles.clone())
+                .unwrap_or_else(|| vec!["core".into()]),
+        };
         let sort_order = if let Some(existing) = &existing {
             existing.sort_order
         } else {
@@ -962,7 +1036,8 @@ impl Database {
             source_pane_id: source_pane_id.into(),
             bookmark_id: bookmark_id.into(),
             url: url.into(),
-            temporary_profile: input.temporary_profile,
+            retain_profile,
+            tool_profiles,
             sort_order,
             created_at: existing
                 .as_ref()
@@ -970,13 +1045,19 @@ impl Database {
                 .unwrap_or_else(|| now.clone()),
             updated_at: now,
         };
+        let tool_profiles_json =
+            serde_json::to_string(&resource.tool_profiles).map_err(|error| error.to_string())?;
         self.with_conn(|db| db.execute(
-            "INSERT INTO browser_resources(id,muxSessionId,name,sourcePaneId,bookmarkId,url,temporaryProfile,sortOrder,createdAt,updatedAt) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET muxSessionId=excluded.muxSessionId,name=excluded.name,sourcePaneId=excluded.sourcePaneId,bookmarkId=excluded.bookmarkId,url=excluded.url,temporaryProfile=excluded.temporaryProfile,updatedAt=excluded.updatedAt",
-            params![resource.id,resource.mux_session_id,resource.name,resource.source_pane_id,resource.bookmark_id,resource.url,resource.temporary_profile as i64,resource.sort_order,resource.created_at,resource.updated_at],
+            "INSERT INTO browser_resources(id,muxSessionId,name,sourcePaneId,bookmarkId,url,reuseLocalProfile,retainProfile,toolProfilesJson,sortOrder,createdAt,updatedAt) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET muxSessionId=excluded.muxSessionId,name=excluded.name,sourcePaneId=excluded.sourcePaneId,bookmarkId=excluded.bookmarkId,url=excluded.url,reuseLocalProfile=excluded.reuseLocalProfile,retainProfile=excluded.retainProfile,toolProfilesJson=excluded.toolProfilesJson,updatedAt=excluded.updatedAt",
+            params![resource.id,resource.mux_session_id,resource.name,resource.source_pane_id,resource.bookmark_id,resource.url,0_i64,resource.retain_profile as i64,tool_profiles_json,resource.sort_order,resource.created_at,resource.updated_at],
         ).map(|_| ()))?;
         Ok(resource)
     }
 
+    /// Delete the resource row.
+    ///
+    /// Nothing on disk is scoped by a Resource any more: its profile belongs to
+    /// the Runtime that created it and is deleted when that Runtime closes.
     pub fn delete_browser_resource(&self, id: &str) -> Result<(), String> {
         self.with_conn(|db| {
             db.execute("DELETE FROM browser_resources WHERE id=?", [id])?;
@@ -2113,10 +2194,12 @@ mod tests {
                 source_pane_id: String::new(),
                 bookmark_id: String::new(),
                 url: String::new(),
-                temporary_profile: false,
+                retain_profile: Some(false),
+                tool_profiles: None,
             })
             .unwrap();
         assert!(browser.url.is_empty());
+        assert!(!browser.retain_profile);
         assert!(
             database
                 .save_browser_resource(BrowserResourceInput {
@@ -2126,7 +2209,8 @@ mod tests {
                     source_pane_id: String::new(),
                     bookmark_id: String::new(),
                     url: String::new(),
-                    temporary_profile: false,
+                    retain_profile: Some(false),
+                    tool_profiles: None,
                 })
                 .unwrap_err()
                 .contains("只能关联一个浏览器资源")
@@ -2139,17 +2223,151 @@ mod tests {
                 source_pane_id: String::new(),
                 bookmark_id: String::new(),
                 url: String::new(),
-                temporary_profile: false,
+                retain_profile: Some(true),
+                tool_profiles: Some(vec!["debug".into(), "network".into()]),
             })
             .unwrap();
         assert_eq!(renamed.id, browser.id);
         assert_eq!(renamed.name, "Renamed Browser");
+        assert!(renamed.retain_profile);
+        assert_eq!(renamed.tool_profiles, vec!["core", "network", "debug"]);
+        let preserved = database
+            .save_browser_resource(BrowserResourceInput {
+                id: Some(browser.id.clone()),
+                mux_session_id: session.id.clone(),
+                name: "Renamed Browser".into(),
+                source_pane_id: String::new(),
+                bookmark_id: String::new(),
+                url: String::new(),
+                retain_profile: None,
+                tool_profiles: None,
+            })
+            .unwrap();
+        assert!(
+            preserved.retain_profile,
+            "an older caller that omits retainProfile must preserve the saved choice"
+        );
         assert_eq!(
             database.list_browser_resources(Some(&session.id)).unwrap(),
-            vec![renamed]
+            vec![preserved]
         );
         drop(database);
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn reads_a_browser_resource_row_written_before_the_reuse_local_profile_column() {
+        let path = std::env::temp_dir().join(format!(
+            "{}-browser-reuse-column-{}.db",
+            crate::product::PRODUCT_KEY,
+            Uuid::new_v4()
+        ));
+        let connection = rusqlite::Connection::open(&path).expect("create old database");
+        connection
+            .execute_batch(
+                r#"
+                CREATE TABLE mux_sessions (
+                  id TEXT PRIMARY KEY, name TEXT NOT NULL, rootPath TEXT NOT NULL DEFAULT '',
+                  layoutJson TEXT NOT NULL DEFAULT '', sortOrder INTEGER NOT NULL DEFAULT 0,
+                  createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL
+                );
+                CREATE TABLE browser_resources (
+                  id TEXT PRIMARY KEY, muxSessionId TEXT NOT NULL, name TEXT NOT NULL,
+                  sourcePaneId TEXT NOT NULL DEFAULT '', bookmarkId TEXT NOT NULL DEFAULT '',
+                  url TEXT NOT NULL DEFAULT 'about:blank', temporaryProfile INTEGER NOT NULL DEFAULT 0,
+                  sortOrder INTEGER NOT NULL DEFAULT 0, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL,
+                  FOREIGN KEY(muxSessionId) REFERENCES mux_sessions(id) ON DELETE CASCADE
+                );
+                INSERT INTO mux_sessions (id,name,createdAt,updatedAt)
+                  VALUES ('session','Session','2026-01-01','2026-01-01');
+                INSERT INTO browser_resources (id,muxSessionId,name,temporaryProfile,sortOrder,createdAt,updatedAt)
+                  VALUES ('browser','session','Browser',1,0,'2026-01-01','2026-01-01');
+                "#,
+            )
+            .expect("create pre-column schema");
+        drop(connection);
+
+        let database = Database::open(
+            &path,
+            &format!("{}.reuse-column-test", crate::product::CREDENTIAL_SERVICE),
+        )
+        .expect("migrate database");
+        let resources = database.list_browser_resources(None).unwrap();
+        assert_eq!(resources.len(), 1);
+        assert!(!resources[0].retain_profile);
+        assert!(
+            serde_json::to_value(&resources[0])
+                .unwrap()
+                .get("reuseLocalProfile")
+                .is_none()
+        );
+
+        let saved = database
+            .save_browser_resource(BrowserResourceInput {
+                id: Some("browser".into()),
+                mux_session_id: "session".into(),
+                name: "Browser".into(),
+                source_pane_id: String::new(),
+                bookmark_id: String::new(),
+                url: "about:blank".into(),
+                retain_profile: None,
+                tool_profiles: None,
+            })
+            .unwrap();
+        assert!(
+            serde_json::to_value(&saved)
+                .unwrap()
+                .get("reuseLocalProfile")
+                .is_none()
+        );
+        database
+            .with_conn(|db| db.execute("UPDATE browser_resources SET reuseLocalProfile=1", []))
+            .unwrap();
+        drop(database);
+
+        // The dropped column is the other half of the migration, and it is only
+        // observable from outside the crate's own row reader.
+        let connection = rusqlite::Connection::open(&path).expect("reopen database");
+        let mut statement = connection
+            .prepare("PRAGMA table_info(browser_resources)")
+            .expect("read migrated schema");
+        let columns = statement
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        drop(statement);
+        drop(connection);
+        assert!(
+            !columns.iter().any(|column| column == "temporaryProfile"),
+            "the retired profile column must be dropped, since nothing reads it: {columns:?}"
+        );
+        assert!(columns.iter().any(|column| column == "retainProfile"));
+        assert!(columns.iter().any(|column| column == "toolProfilesJson"));
+
+        // Running the migration again on the already-migrated file, which is what
+        // every start after the first one does: the column is gone, so the drop
+        // must be skipped rather than attempted and the row must survive.
+        let reopened = Database::open(
+            &path,
+            &format!("{}.reuse-column-test", crate::product::CREDENTIAL_SERVICE),
+        )
+        .expect("reopen an already-migrated database");
+        let resources = reopened.list_browser_resources(None).unwrap();
+        assert_eq!(resources.len(), 1);
+        assert!(!resources[0].retain_profile);
+        assert!(
+            serde_json::to_value(&resources[0])
+                .unwrap()
+                .get("reuseLocalProfile")
+                .is_none(),
+            "a retired saved choice must not reappear after reopening"
+        );
+        drop(reopened);
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("db-wal"));
+        let _ = std::fs::remove_file(path.with_extension("db-shm"));
     }
 
     #[test]

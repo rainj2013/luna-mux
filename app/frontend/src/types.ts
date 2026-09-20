@@ -52,7 +52,6 @@ export interface BrowserRuntimeCreateRequest {
   muxSessionId: string
   browserResourceId: string
   url?: string
-  temporaryProfile?: boolean
 }
 
 export type BrowserRuntimeEvent =
@@ -112,7 +111,8 @@ export interface BrowserResource {
   sourcePaneId: string
   bookmarkId: string
   url: string
-  temporaryProfile: boolean
+  retainProfile: boolean
+  toolProfiles: AgentBrowserToolProfile[]
   sortOrder: number
   createdAt: string
   updatedAt: string
@@ -125,8 +125,11 @@ export interface BrowserResourceInput {
   sourcePaneId?: string
   bookmarkId?: string
   url?: string
-  temporaryProfile?: boolean
+  retainProfile?: boolean
+  toolProfiles?: AgentBrowserToolProfile[]
 }
+
+export type AgentBrowserToolProfile = 'core' | 'network' | 'debug' | 'tabs' | 'state' | 'react' | 'mobile' | 'webmcp'
 
 export type {
   TerminalRuntime,

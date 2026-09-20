@@ -108,13 +108,19 @@ Output, parsing, and waits have resource limits. Interaction records do not copy
 
 ### 3.5 Browser Resources
 
-Browsers are shared at Session scope so users and Agents working on one project use the same page context. The tradeoff is shared browser state without isolated page permissions between participants. Profiles are isolated by resource and are not reused across Sessions. Each Session shares one active Browser Runtime, which can start on the first automation call.
+Browsers are shared at Session scope so users and Agents working on one project use the same page context. The tradeoff is shared browser state without isolated page permissions between participants. Each Session shares one active Browser Runtime, which can start on the first automation call.
 
 Browsers run in independent desktop Chrome windows outside the terminal layout, keeping web tabs separate from terminal Pane layout, dimensions, and lifecycle.
 
+Each Browser Resource owns a Keep browser data setting, off by default. When off, every Runtime uses a separate disposable profile that is deleted after Chrome closes. When on, that Browser Resource reuses one stable profile across Runtime starts in the same Session, retaining cookies, sign-in state, and site storage. The setting can change only while Chrome is stopped; turning it off immediately deletes the retained profile. Neither mode copies cookies from the user's local Chrome. Startup sweeps only disposable profiles left after a crash. Deleting a Browser Resource or Session removes its retained profile and Session downloads. Deletion must remain within the product data directory.
+
+BrowserRuntimeManager uses CDP to make the bound page follow the application theme. With the system theme selected, Chrome follows the OS. Screenshots enable element annotations by default.
+
 The app owns browser lifecycle; `agent_browser` owns page automation. Automation binds to the Session's existing page and reuses it for ordinary navigation. Page operations cannot independently launch or replace the browser process.
 
-Browser Runtime enables the Chrome WebMCP page API and testing interfaces used by preview clients (`WebMCP,WebMCPTesting`). The MCP tool profile shared by local and remote Agents includes `webmcp` for discovering and invoking page tools, retrieving detached results, and cancelling calls. Pages must register their own tools; availability depends on the Chrome and page API versions.
+Each Browser Resource persists an Agent tool-group selection using upstream profiles. Core is always enabled; Network, Debug, Tabs, State/Auth Vault, React, Mobile, and WebMCP are off by default and can be selected by category on the Browser page. Local and remote Agents share the same selection. Saving updates the current Runtime registry, so new MCP connections use it immediately; an already-running Agent must restart to rediscover tools because current clients do not respond to live tool-list changes. Browser Runtime always enables Chrome WebMCP interfaces, but an Agent can discover page-registered tools only when the WebMCP group is enabled. React inspection requires enabling `react-devtools` when opening the page. Luna Mux does not bundle upstream skills because their CLI and named-session guidance conflicts with the managed browser contract.
+
+Injected Agent instructions describe the optional groups and, when Debug is enabled, batch calls, accessibility audits, and screenshot/snapshot comparisons. Core incremental observation and output filtering remain available.
 
 CDP binds only to local loopback, with ports and connection details kept as temporary runtime state. Remote Agents access the Session browser through authenticated Runtime communication bridges; raw CDP is not forwarded remotely. Remote development services use separate SSH tunnels, which browser resources do not own.
 

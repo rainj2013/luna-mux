@@ -592,7 +592,7 @@ pub fn browser_chrome_discover(state: State<AppState>) -> Option<ChromeInstallat
 #[tauri::command]
 pub async fn browser_runtime_create(
     state: State<'_, AppState>,
-    request: BrowserRuntimeCreateRequest,
+    mut request: BrowserRuntimeCreateRequest,
 ) -> Result<BrowserRuntime, String> {
     let browser_resource_id = request.browser_resource_id.clone();
     let resource = state
@@ -604,7 +604,11 @@ pub async fn browser_runtime_create(
     if resource.mux_session_id != request.mux_session_id {
         return Err("浏览器资源与会话不匹配".into());
     }
-    let runtime = state.browser_runtimes.create(request).await?;
+    request.tool_profiles.clone_from(&resource.tool_profiles);
+    let runtime = state
+        .browser_runtimes
+        .create(request, resource.retain_profile)
+        .await?;
     if let Err(error) = state
         .luna_mcp
         .refresh_target_resource("browser", &browser_resource_id)
@@ -2245,7 +2249,25 @@ pub fn mux_sessions_reorder(state: State<AppState>, ids: Vec<String>) -> Result<
 }
 
 #[tauri::command]
-pub fn mux_sessions_remove(state: State<AppState>, id: String) -> Result<(), String> {
+pub async fn mux_sessions_remove(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    // Deleting the Session row cascades to its browser resources, so the
+    // runtimes have to be closed first: the cascade would otherwise leave
+    // running Chrome processes with no owning row, and their profiles on disk
+    // with nothing left to reference them.
+    let runtime_ids = state
+        .browser_runtimes
+        .list()?
+        .into_iter()
+        .filter(|runtime| runtime.mux_session_id == id)
+        .map(|runtime| runtime.id)
+        .collect::<Vec<_>>();
+    for runtime_id in runtime_ids {
+        state.browser_runtimes.close(&runtime_id).await?;
+    }
+    // Remove the data before the row: if deletion fails, the Session is still
+    // present and the user can retry, rather than being left with an orphaned
+    // directory that nothing points at.
+    state.browser_runtimes.remove_session_data(&id)?;
     state.db.delete_mux_session(&id)
 }
 
@@ -2290,7 +2312,44 @@ pub fn browser_resources_save(
     state: State<AppState>,
     input: BrowserResourceInput,
 ) -> Result<BrowserResource, String> {
-    state.db.save_browser_resource(input)
+    let existing = if let Some(id) = input.id.as_ref() {
+        state
+            .db
+            .list_browser_resources(None)?
+            .into_iter()
+            .find(|resource| resource.id == *id)
+    } else {
+        None
+    };
+    let requested_retain_profile = input
+        .retain_profile
+        .or_else(|| existing.as_ref().map(|resource| resource.retain_profile))
+        .unwrap_or(false);
+    if existing
+        .as_ref()
+        .is_some_and(|resource| resource.retain_profile != requested_retain_profile)
+        && state
+            .browser_runtimes
+            .list()?
+            .iter()
+            .any(|runtime| input.id.as_deref() == Some(runtime.browser_resource_id.as_str()))
+    {
+        return Err("请先停止浏览器，再更改浏览器数据保留设置".into());
+    }
+    if !requested_retain_profile {
+        if let Some(existing) = existing.as_ref() {
+            // Delete first so a filesystem failure leaves the saved choice on;
+            // the user can retry instead of seeing an off switch with data left.
+            state
+                .browser_runtimes
+                .remove_resource_data(&existing.mux_session_id, &existing.id)?;
+        }
+    }
+    let resource = state.db.save_browser_resource(input)?;
+    state
+        .browser_runtimes
+        .set_tool_profiles(&resource.mux_session_id, resource.tool_profiles.clone())?;
+    Ok(resource)
 }
 
 #[tauri::command]
@@ -2307,6 +2366,16 @@ pub async fn browser_resources_remove(
         .collect::<Vec<_>>();
     for runtime_id in runtime_ids {
         state.browser_runtimes.close(&runtime_id).await?;
+    }
+    let resource = state
+        .db
+        .list_browser_resources(None)?
+        .into_iter()
+        .find(|resource| resource.id == id);
+    if let Some(resource) = resource {
+        state
+            .browser_runtimes
+            .remove_resource_data(&resource.mux_session_id, &resource.id)?;
     }
     state.db.delete_browser_resource(&id)?;
     state.luna_mcp.refresh_target_resource("browser", &id)
@@ -3244,6 +3313,9 @@ pub(crate) fn save_ui_theme(
     theme: UiTheme,
 ) -> Result<UiTheme, String> {
     database.set_setting("uiTheme", &theme)?;
+    if let Some(state) = window.app_handle().try_state::<AppState>() {
+        state.browser_runtimes.refresh_color_scheme();
+    }
     window
         .set_theme(match &theme {
             UiTheme::System => None,

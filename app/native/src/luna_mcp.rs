@@ -16,7 +16,7 @@ use rmcp::{
     model::{
         CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
         ErrorCode, ListToolsResult, PaginatedRequestParams, ProtocolVersion, ServerCapabilities,
-        ServerInfo, Tool, ToolAnnotations,
+        ServerConfig, Tool, ToolAnnotations,
     },
     service::RequestContext,
     transport::streamable_http_server::{
@@ -495,8 +495,8 @@ fn list_tools_result_for_protocol(
 }
 
 impl ServerHandler for LunaMcpHandler {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
             "This server controls resources owned by the Luna Mux desktop application: app theme and terminal appearance, saved connection summaries and terminal targets, Mux Sessions, panes and split layouts, Luna-owned terminal runtimes, managed Agents, SFTP transfers, and SSH tunnels. Use it only when the object being inspected or changed belongs to Luna Mux. Do not use it for ordinary source-code, filesystem, shell, Git, operating-system, or external-service work merely because the caller runs inside Luna Mux. Route any unqualified request about 窗格, Pane, 新建窗格, 分屏, split, 布局, or layout here, not to agent_browser. Read settings.appearance.get before changing Luna Mux theme or terminal appearance. Use terminal.targets.list followed by mux.pane.create to create and optionally start a terminal Pane; use mux.layout.set for a complete validated split layout. Use agents.* for managed Agent processes shown by Luna Mux, not as a substitute for the caller's own subagent/delegation features. Use terminal.runtime.* when the user wants to control a Luna-owned Pane runtime, especially another Pane; use the caller's normal shell for commands that are simply part of the current coding task. Session, Pane, and layout edits are limited to the caller's current Mux Session. Connection tools never expose saved credentials or private-key contents. Mutating terminal, transfer, and tunnel operations may require approval in the trusted desktop UI. Browser automation is provided by the separate native agent-browser server; use that server only for content rendered by a webpage: navigation, snapshots, interaction, browser tabs/windows, page screenshots, browser console, and page network inspection. A Luna Mux Pane is never a browser tab or window.",
         )
     }

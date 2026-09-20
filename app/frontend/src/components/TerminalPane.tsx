@@ -7,6 +7,7 @@ import { WebglAddon } from '@xterm/addon-webgl'
 import { ChevronDown, ChevronUp, ClipboardPaste, Copy, KeyRound, Palette, Play, RefreshCw, Search, ShieldAlert, X } from 'lucide-react'
 import type { TerminalRuntimeEvent, TerminalSettings, TerminalUiDiagnosticEvent, TerminalUiInputPath, TerminalUiKeyCategory } from '../types'
 import { colorWithOpacity } from '../terminal-style'
+import { shouldUseWebglRenderer } from '../terminal-renderer'
 import { createTerminalOutputWriter, type TerminalOutputWriter } from '../terminal-output-writer'
 import { agentImagePasteInput, handleCodexMultilinePasteEvent, routeTerminalPaste } from '../terminal-input'
 import { useI18n } from '../i18n'
@@ -277,6 +278,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
   const searchInput = useRef<HTMLInputElement>(null)
 
   const shouldRenderTerminal = Boolean(runtimeId) || started
+  const useWebglRenderer = shouldUseWebglRenderer(window.api.platform, focused)
   const rendererBackground = settings.backgroundImagePath && backgroundImage ? 'rgba(0, 0, 0, 0)' : colorWithOpacity(settings.backgroundColor, settings.backgroundOpacity)
 
   useImperativeHandle(ref, () => ({
@@ -867,7 +869,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     const term = terminal.current
     const element = container.current
     if (!term || !element) return
-    if (!focused) {
+    if (!useWebglRenderer) {
       webglAddon.current?.dispose()
       webglAddon.current = null
       element.dataset.renderer = 'dom'
@@ -910,7 +912,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
         focusTerminalIfFocused(term)
       })
     })
-  }, [focused, visible, shouldRenderTerminal])
+  }, [visible, shouldRenderTerminal, useWebglRenderer])
 
   useEffect(() => {
     // If a visible pane was flow-paused just before it became inactive, do not

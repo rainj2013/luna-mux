@@ -152,7 +152,8 @@ pub fn run() {
                 &data_dir.join(product::DATABASE_FILE),
                 product::CREDENTIAL_SERVICE,
             )?);
-            let browser_runtimes = BrowserRuntimeManager::new(app.handle().clone(), &data_dir);
+            let browser_runtimes =
+                BrowserRuntimeManager::new(app.handle().clone(), &data_dir, database.clone());
             let database_runtimes = Arc::new(database_runtime::DatabaseRuntimeManager::new());
             let selected_theme = database.get_setting("uiTheme", models::UiTheme::default());
             let window = app
@@ -314,8 +315,8 @@ pub fn run() {
                             mux_session_id: mux_session_id.clone(),
                             browser_resource_id: resource.id.clone(),
                             url: String::new(),
-                            temporary_profile: resource.temporary_profile,
-                        })
+                            tool_profiles: resource.tool_profiles.clone(),
+                        }, resource.retain_profile)
                         .await?;
                     if let Err(error) = luna_mcp.refresh_target_resource("browser", &resource.id) {
                         let _ = browser_runtimes.close(&runtime.id).await;

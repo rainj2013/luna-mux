@@ -18,7 +18,13 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message};
 use uuid::Uuid;
 
-const AGENT_BROWSER_TOOLS: &str = "core,network,debug,tabs,webmcp";
+const DEFAULT_AGENT_BROWSER_TOOL_PROFILE: &str = "core";
+/// Pointer movement for MCP-driven sessions.  `human` trades speed for
+/// human-like motion, which keeps recorded runs and sites that reject
+/// instant pointer jumps usable.  This is a global CLI flag; unlike `--tools`
+/// it cannot be expressed as a config-file key, so it must precede the
+/// subcommand.
+const AGENT_BROWSER_INPUT_MODE: &str = "human";
 const AGENT_BROWSER_CONFIG_STALE_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -115,8 +121,8 @@ struct BrowserRuntimeRegistryEntry {
     status: BrowserRuntimeStatus,
     #[serde(default)]
     profile_path: String,
-    #[serde(default)]
-    temporary_profile: bool,
+    #[serde(default = "default_agent_browser_tool_profiles")]
+    tool_profiles: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -126,6 +132,11 @@ struct AgentBrowserMcpConfig {
     content_boundaries: bool,
     max_output: u32,
     pin_tab: bool,
+    annotate: bool,
+    /// Keep page-initiated downloads inside the product data directory instead
+    /// of the user's default Downloads folder, so browser downloads stay
+    /// isolated with the rest of the Session's browser state.
+    download_path: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -166,8 +177,8 @@ pub struct BrowserRuntimeCreateRequest {
     pub browser_resource_id: String,
     #[serde(default = "default_url")]
     pub url: String,
-    #[serde(default)]
-    pub temporary_profile: bool,
+    #[serde(default = "default_agent_browser_tool_profiles")]
+    pub tool_profiles: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -221,11 +232,16 @@ fn default_url() -> String {
     "about:blank".into()
 }
 
+fn default_agent_browser_tool_profiles() -> Vec<String> {
+    vec![DEFAULT_AGENT_BROWSER_TOOL_PROFILE.into()]
+}
+
 struct ManagedBrowserRuntime {
     summary: BrowserRuntime,
     child: Child,
-    temporary_profile: bool,
     cdp_tx: mpsc::UnboundedSender<CdpCommand>,
+    retain_profile: bool,
+    tool_profiles: Vec<String>,
 }
 
 struct CdpCommand {
@@ -248,6 +264,7 @@ struct ReservedCdpEndpoint {
 
 pub struct BrowserRuntimeManager {
     event_sink: BrowserRuntimeEventSink,
+    color_scheme: Arc<dyn Fn() -> &'static str + Send + Sync>,
     profiles_root: PathBuf,
     runtimes: Mutex<HashMap<String, ManagedBrowserRuntime>>,
     start_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
@@ -256,7 +273,20 @@ pub struct BrowserRuntimeManager {
 }
 
 impl BrowserRuntimeManager {
-    pub fn new(app_handle: tauri::AppHandle, data_dir: &Path) -> Arc<Self> {
+    pub fn new(
+        app_handle: tauri::AppHandle,
+        data_dir: &Path,
+        database: Arc<crate::database::Database>,
+    ) -> Arc<Self> {
+        let color_scheme = Arc::new(move || {
+            let theme = database.get_setting("uiTheme", crate::models::UiTheme::default());
+            match theme {
+                crate::models::UiTheme::Dark => "dark",
+                crate::models::UiTheme::Light => "light",
+                // Empty value removes the override; Chrome follows the OS itself.
+                crate::models::UiTheme::System => "",
+            }
+        });
         let event_sink: BrowserRuntimeEventSink = Arc::new(move |event| {
             let _ = app_handle.emit("browser-runtime:event", event);
         });
@@ -266,10 +296,14 @@ impl BrowserRuntimeManager {
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
             cleanup_stale_managed_chrome(&profiles_root);
+            // Safe here and only here without checking: nothing has been started
+            // yet, so no profile in this tree can belong to a live browser.
+            sweep_stale_browser_profiles(&profiles_root);
             let _ = std::fs::remove_file(&registry_path);
         }
         Arc::new(Self {
             event_sink,
+            color_scheme,
             profiles_root,
             runtimes: Mutex::new(HashMap::new()),
             start_locks: Mutex::new(HashMap::new()),
@@ -282,12 +316,39 @@ impl BrowserRuntimeManager {
     fn new_for_test(data_dir: &Path) -> Arc<Self> {
         Arc::new(Self {
             event_sink: Arc::new(|_| {}),
+            color_scheme: Arc::new(|| ""),
             profiles_root: data_dir.join("browser-profiles"),
             runtimes: Mutex::new(HashMap::new()),
             start_locks: Mutex::new(HashMap::new()),
             session_endpoints: Mutex::new(HashMap::new()),
             registry_path: data_dir.join("browser-runtimes.json"),
         })
+    }
+
+    /// Root directory holding every artifact the manager owns.  It is derived
+    /// from the registry path rather than from the environment so that a manager
+    /// built for a test stays inside its own data directory instead of writing
+    /// to the real product data directory.
+    fn data_root(&self) -> PathBuf {
+        data_root_from_registry_path(&self.registry_path).unwrap_or_else(browser_data_root)
+    }
+
+    fn download_dir(&self, mux_session_id: &str) -> PathBuf {
+        browser_download_dir_under(&self.data_root(), &agent_browser_scope(mux_session_id))
+    }
+
+    /// Read the persisted application setting each time; no parallel theme state.
+    /// A system theme clears emulation so Chrome follows OS changes natively.
+    pub fn refresh_color_scheme(&self) {
+        let scheme = (self.color_scheme)();
+        if let Ok(runtimes) = self.runtimes.lock() {
+            for runtime in runtimes.values() {
+                let _ = runtime.cdp_tx.send(CdpCommand {
+                    payload: color_scheme_command(scheme),
+                    response: None,
+                });
+            }
+        }
     }
 
     pub fn discover_chrome(&self) -> Option<ChromeInstallation> {
@@ -298,11 +359,31 @@ impl BrowserRuntimeManager {
         self.registry_path.to_string_lossy().into_owned()
     }
 
-    fn resource_profile_path(&self, mux_session_id: &str, browser_resource_id: &str) -> PathBuf {
+    /// Where a disposable Runtime's Chrome profile lives.
+    fn disposable_profile_path(&self, runtime_id: &str) -> PathBuf {
+        self.profiles_root.join("temporary").join(runtime_id)
+    }
+
+    /// Stable profile owned by one Browser Resource inside one Mux Session.
+    fn retained_profile_path(&self, mux_session_id: &str, browser_resource_id: &str) -> PathBuf {
         self.profiles_root
             .join("sessions")
             .join(mux_session_id)
             .join(browser_resource_id)
+    }
+
+    fn profile_path(
+        &self,
+        mux_session_id: &str,
+        browser_resource_id: &str,
+        runtime_id: &str,
+        retain_profile: bool,
+    ) -> PathBuf {
+        if retain_profile {
+            self.retained_profile_path(mux_session_id, browser_resource_id)
+        } else {
+            self.disposable_profile_path(runtime_id)
+        }
     }
 
     pub fn session_cdp_port(&self, mux_session_id: &str) -> Result<u16, String> {
@@ -345,9 +426,12 @@ impl BrowserRuntimeManager {
     pub async fn create(
         self: &Arc<Self>,
         request: BrowserRuntimeCreateRequest,
+        retain_profile: bool,
     ) -> Result<BrowserRuntime, String> {
         let mux_session_id = validate_id("muxSessionId", &request.mux_session_id)?;
         let browser_resource_id = validate_id("browserResourceId", &request.browser_resource_id)?;
+        let tool_profiles =
+            crate::models::normalize_agent_browser_tool_profiles(request.tool_profiles)?;
         let start_lock = self
             .start_locks
             .lock()
@@ -373,10 +457,8 @@ impl BrowserRuntimeManager {
                 None => None,
             }
         };
-        if let Some(runtime) = stale_runtime
-            && runtime.temporary_profile
-        {
-            let _ = std::fs::remove_dir_all(runtime.summary.profile_path);
+        if let Some(runtime) = stale_runtime {
+            cleanup_runtime_profile(&runtime);
         }
         let another_runtime = self
             .runtimes
@@ -401,18 +483,32 @@ impl BrowserRuntimeManager {
         })?;
         let url = normalize_url(&request.url)?;
         let runtime_id = Uuid::new_v4().to_string();
-        let profile_path = if request.temporary_profile {
-            self.profiles_root.join("temporary").join(&runtime_id)
-        } else {
-            self.resource_profile_path(&mux_session_id, &browser_resource_id)
-        };
+        let profile_path = self.profile_path(
+            &mux_session_id,
+            &browser_resource_id,
+            &runtime_id,
+            retain_profile,
+        );
         std::fs::create_dir_all(&profile_path).map_err(|error| {
             format!(
                 "无法创建 Chrome 配置目录 {}: {error}",
                 profile_path.display()
             )
         })?;
+        // Held until the Runtime is registered below: every step between here and
+        // there can fail after the directory has been prepared, and none of them should have to remember to clean up.
+        let profile_guard =
+            (!retain_profile).then(|| ProfileCleanupGuard::new(profile_path.clone()));
         mark_chrome_profile_clean(&profile_path)?;
+        // The agent-browser config only carries the download directory, so it
+        // must exist before the Agent can trigger a download.  Failing here is
+        // deliberate: it is the same class of failure as an unusable profile
+        // directory, and a silent fallback would let the user believe downloads
+        // land in the product data directory when they do not.
+        let download_dir = self.download_dir(&mux_session_id);
+        std::fs::create_dir_all(&download_dir).map_err(|error| {
+            format!("无法创建浏览器下载目录 {}: {error}", download_dir.display())
+        })?;
         let port = self.take_session_cdp_port(&mux_session_id)?;
         let mut command = Command::new(&installation.executable_path);
         command
@@ -455,7 +551,7 @@ impl BrowserRuntimeManager {
             error: None,
         };
         if let Err(error) = wait_for_cdp(port, Duration::from_secs(8)).await {
-            cleanup_failed_browser_start(&mut child, &profile_path, request.temporary_profile);
+            cleanup_failed_browser_start(&mut child);
             summary.status = BrowserRuntimeStatus::Error;
             summary.error = Some(error.clone());
             self.reserve_session_cdp_port(&mux_session_id, port);
@@ -464,7 +560,7 @@ impl BrowserRuntimeManager {
         let websocket_url = match page_websocket_url(port, &url).await {
             Ok(websocket_url) => websocket_url,
             Err(error) => {
-                cleanup_failed_browser_start(&mut child, &profile_path, request.temporary_profile);
+                cleanup_failed_browser_start(&mut child);
                 self.reserve_session_cdp_port(&mux_session_id, port);
                 return Err(error);
             }
@@ -472,7 +568,7 @@ impl BrowserRuntimeManager {
         let cdp_socket = match connect_async(&websocket_url).await {
             Ok((socket, _)) => socket,
             Err(error) => {
-                cleanup_failed_browser_start(&mut child, &profile_path, request.temporary_profile);
+                cleanup_failed_browser_start(&mut child);
                 self.reserve_session_cdp_port(&mux_session_id, port);
                 return Err(format!("无法连接 Chrome CDP: {error}"));
             }
@@ -487,10 +583,16 @@ impl BrowserRuntimeManager {
                 ManagedBrowserRuntime {
                     summary: summary.clone(),
                     child,
-                    temporary_profile: request.temporary_profile,
                     cdp_tx,
+                    retain_profile,
+                    tool_profiles,
                 },
             );
+        // Past this point the profile belongs to the Runtime. A disposable
+        // Runtime deletes it on close; a retained Runtime leaves it for reuse.
+        if let Some(profile_guard) = profile_guard {
+            let _ = profile_guard.keep();
+        }
         self.write_registry();
         (self.event_sink)(BrowserRuntimeEvent::Started {
             runtime: summary.clone(),
@@ -520,6 +622,27 @@ impl BrowserRuntimeManager {
         drop(guard);
         self.write_registry();
         Ok(items)
+    }
+
+    pub fn set_tool_profiles(
+        &self,
+        mux_session_id: &str,
+        profiles: Vec<String>,
+    ) -> Result<(), String> {
+        let profiles = crate::models::normalize_agent_browser_tool_profiles(profiles)?;
+        let mut runtimes = self
+            .runtimes
+            .lock()
+            .map_err(|_| "浏览器 Runtime 状态已损坏".to_string())?;
+        for runtime in runtimes
+            .values_mut()
+            .filter(|runtime| runtime.summary.mux_session_id == mux_session_id)
+        {
+            runtime.tool_profiles.clone_from(&profiles);
+        }
+        drop(runtimes);
+        self.write_registry();
+        Ok(())
     }
 
     pub async fn close(&self, runtime_id: &str) -> Result<(), String> {
@@ -557,10 +680,47 @@ impl BrowserRuntimeManager {
         self.write_registry();
     }
 
+    /// Delete every on-disk artifact owned by a Session.
+    pub fn remove_session_data(&self, mux_session_id: &str) -> Result<(), String> {
+        let mux_session_id = validate_id("muxSessionId", mux_session_id)?;
+        let session_root = self.profiles_root.join("sessions").join(&mux_session_id);
+        remove_dir_within(&self.profiles_root, &session_root)?;
+        let download_dir = self.download_dir(&mux_session_id);
+        remove_dir_within(&self.data_root(), &download_dir)
+    }
+
+    /// Delete a stopped Browser Resource's retained profile. Disposable profiles
+    /// belong to their Runtime and are removed when that Runtime closes.
+    pub fn remove_resource_data(
+        &self,
+        mux_session_id: &str,
+        browser_resource_id: &str,
+    ) -> Result<(), String> {
+        let mux_session_id = validate_id("muxSessionId", mux_session_id)?;
+        let browser_resource_id = validate_id("browserResourceId", browser_resource_id)?;
+        let profile = self.retained_profile_path(&mux_session_id, &browser_resource_id);
+        remove_dir_within(&self.profiles_root, &profile)
+    }
+
     pub fn force_cleanup_managed_processes(&self) {
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
             cleanup_stale_managed_chrome(&self.profiles_root);
+            // The sweep deletes the directory a live Chrome is using, so it runs
+            // only once the map is empty.  `close_all` waits before this is
+            // called, but it waits with a timeout, and a runtime that outlived
+            // that timeout still owns its profile.  The process enumeration is
+            // not evidence either way: it reports nothing both when nothing is
+            // running and when the platform command that lists processes is
+            // missing, and only the map distinguishes those.
+            let drained = self
+                .runtimes
+                .lock()
+                .map(|runtimes| runtimes.is_empty())
+                .unwrap_or(false);
+            if drained {
+                sweep_stale_browser_profiles(&self.profiles_root);
+            }
             let _ = std::fs::remove_file(&self.registry_path);
         }
     }
@@ -580,7 +740,7 @@ impl BrowserRuntimeManager {
                         process_id: runtime.summary.process_id,
                         status: runtime.summary.status.clone(),
                         profile_path: runtime.summary.profile_path.clone(),
-                        temporary_profile: runtime.temporary_profile,
+                        tool_profiles: runtime.tool_profiles.clone(),
                     })
                     .collect::<Vec<_>>()
             })
@@ -925,10 +1085,10 @@ impl Drop for BrowserRuntimeManager {
             }
             let profile_path = PathBuf::from(&runtime.summary.profile_path);
             let _ = runtime.child.wait();
-            if runtime.temporary_profile {
-                let _ = std::fs::remove_dir_all(profile_path);
-            } else {
+            if runtime.retain_profile {
                 let _ = mark_chrome_profile_clean(&profile_path);
+            } else {
+                let _ = std::fs::remove_dir_all(profile_path);
             }
         }
     }
@@ -984,6 +1144,11 @@ pub fn try_run_mcp_browser(args: &[String]) -> Option<i32> {
         }
         return Some(1);
     }
+    let tool_profiles = matching
+        .first()
+        .map(|runtime| runtime.tool_profiles.clone())
+        .unwrap_or_else(default_agent_browser_tool_profiles);
+    let tools_arg = agent_browser_tools_arg(&tool_profiles);
     let cdp_port = matching
         .first()
         .map(|runtime| runtime.cdp_port)
@@ -1014,18 +1179,20 @@ pub fn try_run_mcp_browser(args: &[String]) -> Option<i32> {
             return Some(1);
         }
     };
+    ensure_agent_browser_skills_dir();
     let mut command = Command::new(&agent_browser);
     configure_agent_browser_command(&mut command);
     command
+        .args(["--input-mode", AGENT_BROWSER_INPUT_MODE])
         .arg("mcp")
-        .args(["--tools", AGENT_BROWSER_TOOLS])
+        .args(["--tools", &tools_arg])
         .env("AGENT_BROWSER_CONFIG", &config_path)
         .env("AGENT_BROWSER_SESSION", &scope)
         .env("AGENT_BROWSER_NAMESPACE", &scope)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
-    if let Err(error) = ensure_agent_browser_mcp_config(&config_path, cdp_port) {
+    if let Err(error) = ensure_agent_browser_mcp_config(&config_path, &scope, cdp_port) {
         let _ = std::fs::remove_file(&config_path);
         eprintln!("Luna Mux 无法恢复 Browser MCP 配置：{error}");
         return Some(1);
@@ -1102,16 +1269,19 @@ where
 
     let binary = resolve_agent_browser_binary()?;
     let scope = agent_browser_scope(mux_session_id);
+    let tools_arg = agent_browser_tools_for_runtime(mux_session_id, cdp_port);
     let config_path = create_agent_browser_mcp_config(&scope, cdp_port)?;
     record_remote_bridge_diagnostic(&format!(
         "starting agent-browser MCP: session={mux_session_id}, cdp_port={cdp_port}, binary={}",
         binary.display()
     ));
+    ensure_agent_browser_skills_dir();
     let mut command = Command::new(binary);
     configure_agent_browser_command(&mut command);
     command
+        .args(["--input-mode", AGENT_BROWSER_INPUT_MODE])
         .arg("mcp")
-        .args(["--tools", AGENT_BROWSER_TOOLS])
+        .args(["--tools", &tools_arg])
         .env("AGENT_BROWSER_CONFIG", &config_path)
         .env("AGENT_BROWSER_SESSION", &scope)
         .env("AGENT_BROWSER_NAMESPACE", &scope)
@@ -1122,7 +1292,7 @@ where
         // discarding stderr turns the actual startup error into an opaque
         // handshake failure.
         .stderr(Stdio::piped());
-    ensure_agent_browser_mcp_config(&config_path, cdp_port)?;
+    ensure_agent_browser_mcp_config(&config_path, &scope, cdp_port)?;
     let mut child = match tokio::process::Command::from(command).spawn() {
         Ok(child) => child,
         Err(error) => {
@@ -1420,16 +1590,49 @@ fn agent_browser_sidecar_source_name() -> &'static str {
     "agent-browser"
 }
 
+/// Directory agent-browser reads its bundled skills from.
+///
+/// Luna Mux bundles none, and the directory exists so the three `state`-profile
+/// skills tools report that plainly instead of failing with the sidecar's advice
+/// to "reinstall via npm", which nothing in a packaged app can act on.  Upstream
+/// ships what would go here: a core skill that teaches the `agent-browser`
+/// command line and a named session per task, both of which the Luna Mux browser
+/// contract forbids because Luna Mux owns the browser process and pins every call
+/// to the injected default session, plus a set of Vercel-internal workflows that
+/// mean nothing to this product.  Installing them would answer the skills tools
+/// by handing Agents guidance that contradicts the contract they were given.
+fn agent_browser_skills_root() -> PathBuf {
+    browser_data_root().join("agent-browser-skills")
+}
+
+/// Create the skills root before a `mcp` spawn.  Only an MCP server reads
+/// skills, so only the two MCP launch paths call this, and a failure is not
+/// fatal: agent-browser then reports a missing skills directory, which is what
+/// leaving the tools exposed without this call would have done anyway.
+fn ensure_agent_browser_skills_dir() {
+    let root = agent_browser_skills_root();
+    if let Err(error) = std::fs::create_dir_all(&root) {
+        eprintln!(
+            "Luna Mux 无法创建 Browser skills 目录 {}：{error}",
+            root.display()
+        );
+    }
+}
+
 #[cfg(not(windows))]
 fn configure_agent_browser_command(command: &mut Command) {
-    command.env("AGENT_BROWSER_SOCKET_DIR", AGENT_BROWSER_SOCKET_DIR);
+    command
+        .env("AGENT_BROWSER_SOCKET_DIR", AGENT_BROWSER_SOCKET_DIR)
+        .env("AGENT_BROWSER_SKILLS_DIR", agent_browser_skills_root());
 }
 
 #[cfg(windows)]
 fn configure_agent_browser_command(command: &mut Command) {
     use std::os::windows::process::CommandExt;
 
-    command.creation_flags(CREATE_NO_WINDOW);
+    command
+        .creation_flags(CREATE_NO_WINDOW)
+        .env("AGENT_BROWSER_SKILLS_DIR", agent_browser_skills_root());
 }
 
 fn agent_browser_scope(mux_session_id: &str) -> String {
@@ -1463,16 +1666,20 @@ fn create_agent_browser_mcp_config(scope: &str, cdp_port: u16) -> Result<PathBuf
     let root = std::env::temp_dir().join("luna-mux").join("agent-browser");
     std::fs::create_dir_all(&root).map_err(|error| error.to_string())?;
     let path = root.join(format!("{scope}-{}.json", Uuid::new_v4()));
-    write_agent_browser_mcp_config(&path, cdp_port)?;
+    write_agent_browser_mcp_config(&path, scope, cdp_port)?;
     Ok(path)
 }
 
-fn write_agent_browser_mcp_config(path: &Path, cdp_port: u16) -> Result<(), String> {
+fn write_agent_browser_mcp_config(path: &Path, scope: &str, cdp_port: u16) -> Result<(), String> {
     let config = AgentBrowserMcpConfig {
         cdp: cdp_port.to_string(),
         content_boundaries: true,
         max_output: 50_000,
         pin_tab: true,
+        annotate: true,
+        download_path: agent_browser_download_dir(scope)
+            .to_string_lossy()
+            .into_owned(),
     };
     let contents = serde_json::to_vec_pretty(&config).map_err(|error| error.to_string())?;
     let parent = path
@@ -1482,11 +1689,11 @@ fn write_agent_browser_mcp_config(path: &Path, cdp_port: u16) -> Result<(), Stri
     std::fs::write(path, contents).map_err(|error| error.to_string())
 }
 
-fn ensure_agent_browser_mcp_config(path: &Path, cdp_port: u16) -> Result<(), String> {
+fn ensure_agent_browser_mcp_config(path: &Path, scope: &str, cdp_port: u16) -> Result<(), String> {
     if path.exists() {
         Ok(())
     } else {
-        write_agent_browser_mcp_config(path, cdp_port)
+        write_agent_browser_mcp_config(path, scope, cdp_port)
     }
 }
 
@@ -1697,14 +1904,204 @@ async fn close_agent_browser_session(mux_session_id: &str) {
     .await;
 }
 
-fn browser_registry_path() -> PathBuf {
-    if let Some(path) = std::env::var_os("LUNA_MUX_BROWSER_REGISTRY_PATH") {
-        return PathBuf::from(path);
+/// Luna Mux data directory, as seen from any process that writes an
+/// agent-browser configuration.  The app hands Agents the absolute registry
+/// path via `LUNA_MUX_BROWSER_REGISTRY_PATH`, whose parent is this directory;
+/// the fallback matches Tauri's `app_data_dir()` for the `com.luna.mux`
+/// identifier so the app process resolves the same directory without extra
+/// plumbing.  This is the single derivation, so the app, the MCP shim, and the
+/// remote bridge always agree.
+fn browser_data_root() -> PathBuf {
+    if let Some(path) = std::env::var_os("LUNA_MUX_BROWSER_REGISTRY_PATH")
+        && let Some(root) = data_root_from_registry_path(Path::new(&path))
+    {
+        return root;
     }
     dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("com.luna.mux")
-        .join("browser-runtimes.json")
+}
+
+/// Parent directory of the browser registry file.  A bare filename has an empty
+/// parent, which would resolve the data directory to the process working
+/// directory; treat that as unresolvable and fall back instead.
+fn data_root_from_registry_path(registry_path: &Path) -> Option<PathBuf> {
+    registry_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+}
+
+fn browser_registry_path() -> PathBuf {
+    if let Some(path) = std::env::var_os("LUNA_MUX_BROWSER_REGISTRY_PATH") {
+        return PathBuf::from(path);
+    }
+    browser_data_root().join("browser-runtimes.json")
+}
+
+fn agent_browser_tools_arg(profiles: &[String]) -> String {
+    crate::models::normalize_agent_browser_tool_profiles(profiles.iter().cloned())
+        .unwrap_or_else(|_| default_agent_browser_tool_profiles())
+        .join(",")
+}
+
+fn agent_browser_tools_for_runtime(mux_session_id: &str, cdp_port: u16) -> String {
+    let profiles = std::fs::read_to_string(browser_registry_path())
+        .ok()
+        .and_then(|contents| {
+            serde_json::from_str::<Vec<BrowserRuntimeRegistryEntry>>(&contents).ok()
+        })
+        .and_then(|entries| {
+            entries
+                .into_iter()
+                .find(|entry| entry.mux_session_id == mux_session_id && entry.cdp_port == cdp_port)
+                .map(|entry| entry.tool_profiles)
+        })
+        .unwrap_or_else(default_agent_browser_tool_profiles);
+    agent_browser_tools_arg(&profiles)
+}
+
+/// Downloads initiated by a page land here rather than in the user's default
+/// Downloads folder.  `scope` is already the stable, filesystem-safe per-Session
+/// token used for the agent-browser session and config file, so it is reused
+/// here instead of deriving a second identifier.  The directory is created when
+/// the Browser Runtime starts; this only computes the path.
+fn browser_download_dir_under(data_root: &Path, scope: &str) -> PathBuf {
+    data_root.join("browser-downloads").join(scope)
+}
+
+/// Download directory for a caller that has no manager and can only resolve the
+/// data directory from the environment: the MCP shim process and the remote
+/// bridge.  The app process derives the same directory from the manager's
+/// registry path (see `BrowserRuntimeManager::download_dir`) so that the path
+/// written into the agent-browser configuration matches the one the app
+/// creates.
+fn agent_browser_download_dir(scope: &str) -> PathBuf {
+    browser_download_dir_under(&browser_data_root(), scope)
+}
+
+fn is_redirected_directory(metadata: &std::fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        metadata.file_attributes() & 0x400 != 0 // FILE_ATTRIBUTE_REPARSE_POINT
+    }
+    #[cfg(not(windows))]
+    {
+        metadata.file_type().is_symlink()
+    }
+}
+
+/// Remove `target`, but only when it is a strict descendant of `root`.
+///
+/// The paths handed here are built from Session and resource identifiers, and
+/// `validate_id` only bounds their length, so a value like `../..` survives
+/// validation.  Deletion is irreversible, so containment is enforced at the
+/// point of deletion instead of being assumed from the caller.
+fn remove_dir_within(root: &Path, target: &Path) -> Result<(), String> {
+    if target == root || !target.starts_with(root) || has_unresolved_component(target) {
+        return Err(format!(
+            "拒绝删除浏览器数据目录之外的路径：{}",
+            target.display()
+        ));
+    }
+    match std::fs::symlink_metadata(root) {
+        Ok(metadata) if is_redirected_directory(&metadata) => {
+            return Err(format!(
+                "拒绝删除重定向的浏览器数据根目录：{}",
+                root.display()
+            ));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.to_string()),
+    }
+    let canonical_root = match root.canonicalize() {
+        Ok(path) => path,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.to_string()),
+    };
+    let mut current = root.to_path_buf();
+    for component in target
+        .strip_prefix(root)
+        .map_err(|error| error.to_string())?
+        .components()
+    {
+        current.push(component);
+        let metadata = match std::fs::symlink_metadata(&current) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error.to_string()),
+        };
+        let redirected = is_redirected_directory(&metadata);
+        let resolved = current.canonicalize().map_err(|error| error.to_string())?;
+        if redirected || resolved == canonical_root || !resolved.starts_with(&canonical_root) {
+            return Err(format!(
+                "拒绝删除重定向的浏览器数据路径：{}",
+                current.display()
+            ));
+        }
+    }
+    match std::fs::remove_dir_all(target) {
+        Ok(()) => Ok(()),
+        // A Session that never started a browser has nothing to remove, and a
+        // sweep has nothing to do on a clean install; treating that as success
+        // keeps the operation idempotent.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "无法删除浏览器数据目录 {}: {error}",
+            target.display()
+        )),
+    }
+}
+
+/// Whether a path holds a component that only resolves once the OS reads it.
+///
+/// `Path::starts_with` compares components lexically and `Path::join` does not
+/// normalize, so `<root>/sessions/../..` passes a containment check that is
+/// written in terms of them — while `remove_dir_all` hands the same string to
+/// the kernel, which resolves `..` for real and deletes `<root>`'s parent.  A
+/// component that would move the target after the check has been trusted is
+/// refused rather than resolved.
+fn has_unresolved_component(path: &Path) -> bool {
+    path.components().any(|component| {
+        matches!(
+            component,
+            std::path::Component::ParentDir | std::path::Component::CurDir
+        )
+    })
+}
+
+/// Deletes a profile directory unless the Runtime that owns it takes it over.
+///
+/// `create` has several steps that can fail after the directory exists:
+/// writing Chrome's preferences,
+/// preparing the download directory, reserving the session's CDP port, spawning
+/// the process. Each failure must remove the abandoned directory.
+/// A guard makes deletion the default, so a step added later cannot forget it.
+struct ProfileCleanupGuard {
+    path: Option<PathBuf>,
+}
+
+impl ProfileCleanupGuard {
+    fn new(path: PathBuf) -> Self {
+        Self { path: Some(path) }
+    }
+
+    /// Hand the directory to the Runtime that will own and delete it.
+    fn keep(mut self) -> PathBuf {
+        self.path
+            .take()
+            .expect("a profile guard is only ever released once")
+    }
+}
+
+impl Drop for ProfileCleanupGuard {
+    fn drop(&mut self) {
+        if let Some(path) = self.path.take() {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
 }
 
 fn validate_selector(selector: &str) -> Result<&str, String> {
@@ -1797,26 +2194,34 @@ async fn close_managed_runtime(mut runtime: ManagedBrowserRuntime) {
     }
     let _ = tokio::task::spawn_blocking(move || {
         let profile_path = PathBuf::from(&runtime.summary.profile_path);
-        let temporary_profile = runtime.temporary_profile;
         let _ = runtime.child.wait();
-        if temporary_profile {
-            let _ = std::fs::remove_dir_all(&profile_path);
-        } else {
+        if runtime.retain_profile {
             let _ = mark_chrome_profile_clean(&profile_path);
+        } else {
+            let _ = std::fs::remove_dir_all(&profile_path);
         }
     })
     .await;
 }
 
-fn cleanup_failed_browser_start(child: &mut Child, profile_path: &Path, temporary_profile: bool) {
+fn cleanup_runtime_profile(runtime: &ManagedBrowserRuntime) {
+    let profile_path = PathBuf::from(&runtime.summary.profile_path);
+    if runtime.retain_profile {
+        let _ = mark_chrome_profile_clean(&profile_path);
+    } else {
+        let _ = std::fs::remove_dir_all(profile_path);
+    }
+}
+
+/// Kill a Chrome that never became a Runtime.
+///
+/// A disposable profile is removed by the caller's `ProfileCleanupGuard`.
+/// A retained profile survives a failed launch so earlier browser data is not
+/// destroyed by a transient Chrome or CDP error.
+fn cleanup_failed_browser_start(child: &mut Child) {
     close_process_tree(child);
     let _ = child.kill();
     let _ = child.wait();
-    if temporary_profile {
-        let _ = std::fs::remove_dir_all(profile_path);
-    } else {
-        let _ = mark_chrome_profile_clean(profile_path);
-    }
 }
 
 fn mark_chrome_profile_clean(profile_path: &Path) -> Result<(), String> {
@@ -1883,6 +2288,22 @@ fn configure_process_group(command: &mut Command) {
 #[cfg(not(unix))]
 fn configure_process_group(_command: &mut Command) {}
 
+/// Delete disposable profile directories a previous run left behind.
+///
+/// A Runtime deletes its own profile when it closes, which covers every ordinary
+/// exit.  It does not cover a crash, a force quit, or a kill — and a leftover
+/// disposable profile holds a copy of the user's site cookies. This restores
+/// the non-retention guarantee at the one moment it can be known that nothing is using them:
+/// startup, before any Runtime exists, once the Chrome processes the last run
+/// left running have been terminated.
+///
+/// Only the two callers that can prove nothing is live may use this: startup,
+/// before any Runtime exists, and exit once the runtime map has drained.
+/// Killing processes is not a substitute for that proof.
+fn sweep_stale_browser_profiles(profiles_root: &Path) {
+    let _ = remove_dir_within(profiles_root, &profiles_root.join("temporary"));
+}
+
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 fn cleanup_stale_managed_chrome(profiles_root: &Path) {
     #[cfg(target_os = "macos")]
@@ -1894,20 +2315,20 @@ fn cleanup_stale_managed_chrome(profiles_root: &Path) {
         managed_chrome_process_ids(&String::from_utf8_lossy(&output.stdout), profiles_root);
     #[cfg(target_os = "windows")]
     let process_ids = windows_runtime_process_ids(profiles_root);
-    if process_ids.is_empty() {
-        return;
-    }
-
-    for process_id in &process_ids {
-        terminate_managed_chrome_process(*process_id);
-    }
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while Instant::now() < deadline && process_ids.iter().any(|pid| process_exists(*pid)) {
-        std::thread::sleep(Duration::from_millis(40));
-    }
-    for process_id in process_ids {
-        if process_exists(process_id) {
-            terminate_managed_chrome_process(process_id);
+    // Terminating first is what makes the sweep below safe: a profile may only
+    // be deleted once the Chrome process that would still be using it is gone.
+    if !process_ids.is_empty() {
+        for process_id in &process_ids {
+            terminate_managed_chrome_process(*process_id);
+        }
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline && process_ids.iter().any(|pid| process_exists(*pid)) {
+            std::thread::sleep(Duration::from_millis(40));
+        }
+        for process_id in process_ids {
+            if process_exists(process_id) {
+                terminate_managed_chrome_process(process_id);
+            }
         }
     }
 }
@@ -2264,6 +2685,14 @@ fn select_page_websocket_url(targets: &[Value], preferred_url: &str) -> Option<S
         .map(|(_, websocket)| websocket.to_string())
 }
 
+fn color_scheme_command(scheme: &str) -> Value {
+    json!({
+        "id": next_command_id(),
+        "method": "Emulation.setEmulatedMedia",
+        "params": {"features": [{"name": "prefers-color-scheme", "value": scheme}]}
+    })
+}
+
 fn start_cdp_runtime(
     manager: Weak<BrowserRuntimeManager>,
     event_sink: BrowserRuntimeEventSink,
@@ -2274,6 +2703,12 @@ fn start_cdp_runtime(
     tauri::async_runtime::spawn(async move {
         let mut socket = initial_socket;
         loop {
+            // Emulation belongs to a page target. Reapply when a closed/replaced
+            // tab causes the CDP socket to bind to another target.
+            if let Some(manager) = manager.upgrade() {
+                let payload = color_scheme_command((manager.color_scheme)());
+                let _ = socket.send(Message::Text(payload.to_string().into())).await;
+            }
             let connection_closed = drive_cdp_page(&mut commands, socket).await;
             if !connection_closed {
                 return;
@@ -2591,6 +3026,26 @@ mod tests {
     }
 
     #[test]
+    fn agent_browser_commands_point_skills_at_the_product_directory() {
+        // The skills tools are only as good as this variable: without it
+        // agent-browser looks next to a binary that never shipped a skills
+        // directory and answers every call with install advice a packaged app
+        // cannot follow.
+        let mut command = std::process::Command::new("agent-browser");
+        super::configure_agent_browser_command(&mut command);
+        let skills = command
+            .get_envs()
+            .find(|(name, _)| *name == "AGENT_BROWSER_SKILLS_DIR")
+            .and_then(|(_, value)| value)
+            .map(std::path::PathBuf::from)
+            .expect("agent-browser is told where its skills live");
+
+        assert_eq!(skills, super::agent_browser_skills_root());
+        assert_eq!(skills.file_name().unwrap(), "agent-browser-skills");
+        assert!(skills.is_absolute());
+    }
+
+    #[test]
     fn normalizes_local_development_urls() {
         assert_eq!(
             normalize_url("localhost:3000").unwrap(),
@@ -2671,20 +3126,57 @@ mod tests {
     }
 
     #[test]
-    fn browser_resources_use_independent_persistent_profiles() {
+    fn disposable_profiles_are_swept_without_touching_retained_profiles() {
         let root =
             std::env::temp_dir().join(format!("luna-mux-browser-profile-{}", uuid::Uuid::new_v4()));
         let manager = BrowserRuntimeManager::new_for_test(&root);
-        let first = manager.resource_profile_path("session-1", "resource-1");
-        let second = manager.resource_profile_path("session-2", "resource-2");
+        let first = manager.disposable_profile_path("runtime-1");
+        let second = manager.disposable_profile_path("runtime-2");
+        let retained_first = manager.profile_path("session-1", "resource-1", "runtime-1", true);
+        let retained_second = manager.profile_path("session-1", "resource-1", "runtime-2", true);
         assert_eq!(
             first,
+            root.join("browser-profiles")
+                .join("temporary")
+                .join("runtime-1")
+        );
+        assert_ne!(
+            first, second,
+            "two runtimes must never share a profile directory"
+        );
+        assert_eq!(retained_first, retained_second);
+        assert_eq!(
+            retained_first,
             root.join("browser-profiles")
                 .join("sessions")
                 .join("session-1")
                 .join("resource-1")
         );
-        assert_ne!(first, second);
+        assert_ne!(
+            manager.profile_path("session-1", "resource-1", "runtime-1", false),
+            manager.profile_path("session-1", "resource-1", "runtime-2", false)
+        );
+
+        // A disposable profile left by a crash must go. A Resource profile is
+        // user-selected persistent state and must survive the same sweep.
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::write(first.join("Cookies"), b"cookie-state").unwrap();
+        let retained = manager.retained_profile_path("session-1", "resource-1");
+        std::fs::create_dir_all(&retained).unwrap();
+        std::fs::write(retained.join("Cookies"), b"cookie-state").unwrap();
+
+        super::sweep_stale_browser_profiles(&manager.profiles_root);
+
+        assert!(!first.exists());
+        assert!(retained.join("Cookies").is_file());
+        assert!(
+            !root.join("browser-profiles").join("temporary").exists(),
+            "the whole disposable profile root is swept, not just its entries"
+        );
+        manager
+            .remove_resource_data("session-1", "resource-1")
+            .unwrap();
+        assert!(!retained.exists());
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -2697,7 +3189,301 @@ mod tests {
         assert_eq!(config["contentBoundaries"], true);
         assert_eq!(config["maxOutput"], 50_000);
         assert_eq!(config["pinTab"], true);
+        assert_eq!(config["annotate"], true);
+        assert!(
+            config["downloadPath"]
+                .as_str()
+                .expect("downloadPath is a string")
+                .ends_with("browser-downloads/luna-mux-session-1")
+                || config["downloadPath"]
+                    .as_str()
+                    .expect("downloadPath is a string")
+                    .ends_with("browser-downloads\\luna-mux-session-1"),
+            "downloads must stay inside the product data directory: {config}"
+        );
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn browser_data_root_ignores_a_registry_path_without_a_directory() {
+        assert_eq!(
+            super::data_root_from_registry_path(std::path::Path::new(
+                "/data/com.luna.mux/browser-runtimes.json"
+            )),
+            Some(std::path::PathBuf::from("/data/com.luna.mux"))
+        );
+        // A bare filename must not resolve the data directory to the current
+        // working directory.
+        assert_eq!(
+            super::data_root_from_registry_path(std::path::Path::new("browser-runtimes.json")),
+            None
+        );
+    }
+
+    #[test]
+    fn browser_downloads_are_scoped_under_the_given_data_root() {
+        let root = std::path::Path::new("/data/com.luna.mux");
+        assert_eq!(
+            super::browser_download_dir_under(root, "lm-session-scope"),
+            std::path::PathBuf::from("/data/com.luna.mux/browser-downloads/lm-session-scope")
+        );
+        // Deriving the path must not touch the filesystem; the directory is
+        // created when the Browser Runtime starts.
+        assert!(!super::browser_download_dir_under(root, "lm-session-scope").exists());
+    }
+
+    /// A test manager owns its own data directory, so downloads started by the
+    /// browser it launches must land there rather than in the real product data
+    /// directory of the user running the tests.
+    #[test]
+    fn manager_downloads_stay_inside_the_managers_own_data_root() {
+        let root = std::env::temp_dir().join(format!("luna-mux-browser-test-{}", Uuid::new_v4()));
+        let manager = BrowserRuntimeManager::new_for_test(&root);
+        let download_dir = manager.download_dir("integration-session");
+        assert_eq!(
+            download_dir,
+            root.join("browser-downloads")
+                .join(super::agent_browser_scope("integration-session"))
+        );
+        assert!(
+            download_dir.starts_with(&root),
+            "downloads escaped the manager data root: {}",
+            download_dir.display()
+        );
+    }
+
+    #[test]
+    fn retired_cookie_reuse_request_is_ignored() {
+        let request: super::BrowserRuntimeCreateRequest = serde_json::from_value(json!({
+            "muxSessionId": "session", "browserResourceId": "resource",
+            "reuseLocalProfile": true, "temporaryProfile": false
+        }))
+        .unwrap();
+        let serialized = serde_json::to_value(request).unwrap();
+        assert!(serialized.get("reuseLocalProfile").is_none());
+        assert_eq!(serialized["url"], "about:blank");
+        assert_eq!(serialized["toolProfiles"], json!(["core"]));
+    }
+
+    #[test]
+    fn agent_browser_tool_profiles_are_ordered_and_keep_core() {
+        assert_eq!(
+            super::agent_browser_tools_arg(&["react".into(), "network".into(), "react".into()]),
+            "core,network,react"
+        );
+        assert_eq!(super::agent_browser_tools_arg(&[]), "core");
+    }
+
+    #[test]
+    fn fresh_profile_contains_no_imported_cookie_state() {
+        let root = std::env::temp_dir().join(format!("luna-clean-profile-{}", Uuid::new_v4()));
+        super::mark_chrome_profile_clean(&root).unwrap();
+        assert!(!root.join("Local State").exists());
+        assert!(!root.join("Default/Cookies").exists());
+        assert!(!root.join("Default/Network/Cookies").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn fresh_profile_does_not_require_a_local_chrome_profile() {
+        let root = std::env::temp_dir().join(format!("luna-clean-profile-{}", Uuid::new_v4()));
+        super::mark_chrome_profile_clean(&root).unwrap();
+        assert!(root.join("Default/Preferences").is_file());
+        super::mark_chrome_profile_clean(&root).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn profile_deletion_refuses_a_path_outside_the_profiles_root() {
+        let root = std::env::temp_dir().join(format!("luna-mux-browser-remove-{}", Uuid::new_v4()));
+        let profiles_root = root.join("browser-profiles");
+        std::fs::create_dir_all(&profiles_root).unwrap();
+        let outside = root.join("unrelated-data");
+        std::fs::create_dir_all(&outside).unwrap();
+
+        assert!(super::remove_dir_within(&profiles_root, &outside).is_err());
+        assert!(outside.is_dir(), "a path outside the root must survive");
+        assert!(
+            super::remove_dir_within(&profiles_root, &profiles_root).is_err(),
+            "the root itself must never be removed"
+        );
+        assert!(profiles_root.is_dir());
+
+        // `<profiles_root>/sessions/../..` passes a lexical `starts_with` and
+        // resolves to the data directory itself once the kernel reads it, which
+        // is what makes this the case the guard exists for.
+        let climbing = profiles_root.join("sessions").join("..").join("..");
+        assert!(
+            super::remove_dir_within(&profiles_root, &climbing).is_err(),
+            "a path that only leaves the root when the OS resolves it must be refused"
+        );
+        assert!(outside.is_dir(), "nothing above the root may be deleted");
+        assert!(profiles_root.is_dir());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn profile_deletion_refuses_redirected_roots_ancestors_and_leaf() {
+        let root = std::env::temp_dir().join(format!("luna-delete-link-{}", Uuid::new_v4()));
+        let profiles = root.join("profiles");
+        let outside = root.join("outside");
+        std::fs::create_dir_all(&profiles).unwrap();
+        std::fs::create_dir_all(outside.join("session")).unwrap();
+        std::fs::write(outside.join("session/sentinel"), b"keep").unwrap();
+        let link = profiles.join("sessions");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        #[cfg(windows)]
+        {
+            let status = crate::local_pty_backend::windows_no_window_command("cmd.exe")
+                .args(["/D", "/C", "mklink", "/J"])
+                .arg(&link)
+                .arg(&outside)
+                .status()
+                .unwrap();
+            assert!(status.success(), "create fixture junction");
+        }
+        assert!(super::remove_dir_within(&link, &link.join("session")).is_err());
+        assert!(super::remove_dir_within(&profiles, &profiles.join("sessions/session")).is_err());
+        assert!(super::remove_dir_within(&profiles, &profiles.join("sessions")).is_err());
+        assert!(outside.join("session/sentinel").is_file());
+        #[cfg(windows)]
+        std::fs::remove_dir(&link).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn browser_connection_applies_theme_before_page_commands() {
+        use futures::StreamExt;
+        use std::sync::Arc;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let first = socket.next().await.unwrap().unwrap();
+            let payload: Value = serde_json::from_str(first.to_text().unwrap()).unwrap();
+            assert_eq!(payload["method"], "Emulation.setEmulatedMedia");
+            assert_eq!(payload["params"]["features"][0]["value"], "dark");
+            let next = socket.next().await.unwrap().unwrap();
+            let payload: Value = serde_json::from_str(next.to_text().unwrap()).unwrap();
+            assert_eq!(payload["method"], "Page.enable");
+        });
+        let root = std::env::temp_dir().join(format!("luna-cdp-theme-{}", Uuid::new_v4()));
+        let mut manager = BrowserRuntimeManager::new_for_test(&root);
+        Arc::get_mut(&mut manager).unwrap().color_scheme = Arc::new(|| "dark");
+        let (socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}"))
+            .await
+            .unwrap();
+        let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let runtime = super::BrowserRuntime {
+            id: "test".into(),
+            mux_session_id: "session".into(),
+            browser_resource_id: "resource".into(),
+            url: "about:blank".into(),
+            cdp_port: address.port(),
+            profile_path: root.to_string_lossy().into_owned(),
+            process_id: 0,
+            status: super::BrowserRuntimeStatus::Running,
+            error: None,
+        };
+        super::start_cdp_runtime(
+            Arc::downgrade(&manager),
+            Arc::new(|_| {}),
+            runtime,
+            socket,
+            rx,
+        );
+        tokio::time::timeout(Duration::from_secs(3), server)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[test]
+    fn browser_theme_emulates_explicit_themes_and_clears_for_system() {
+        for scheme in ["dark", "light", ""] {
+            let command = super::color_scheme_command(scheme);
+            assert_eq!(command["method"], "Emulation.setEmulatedMedia");
+            assert_eq!(
+                command["params"]["features"],
+                json!([{
+                    "name": "prefers-color-scheme", "value": scheme
+                }])
+            );
+        }
+    }
+
+    #[test]
+    fn a_profile_guard_deletes_the_directory_unless_a_runtime_claims_it() {
+        let root = std::env::temp_dir().join(format!("luna-mux-browser-guard-{}", Uuid::new_v4()));
+        let abandoned = root.join("abandoned");
+        std::fs::create_dir_all(abandoned.join("Default")).unwrap();
+        std::fs::write(
+            abandoned.join("Default").join("Cookies"),
+            b"cookie database",
+        )
+        .unwrap();
+        drop(super::ProfileCleanupGuard::new(abandoned.clone()));
+        assert!(
+            !abandoned.exists(),
+            "a failed start must not leave its profile behind"
+        );
+
+        let claimed = root.join("claimed");
+        std::fs::create_dir_all(&claimed).unwrap();
+        let returned = super::ProfileCleanupGuard::new(claimed.clone()).keep();
+        assert_eq!(returned, claimed);
+        assert!(
+            claimed.is_dir(),
+            "a directory handed to a runtime outlives the guard"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn session_data_removal_is_idempotent_and_leaves_runtime_profiles_alone() {
+        let root = std::env::temp_dir().join(format!("luna-mux-browser-remove-{}", Uuid::new_v4()));
+        let manager = BrowserRuntimeManager::new_for_test(&root);
+        let session_id = "removable-session";
+        // A retained Resource profile belongs to its Session, so removing the
+        // Session must remove it regardless of the saved toggle value.
+        let retained = manager
+            .profiles_root
+            .join("sessions")
+            .join(session_id)
+            .join("removable-resource");
+        std::fs::create_dir_all(retained.join("Default")).unwrap();
+        std::fs::write(retained.join("Default").join("Cookies"), b"cookie database").unwrap();
+        let downloads = manager.download_dir(session_id);
+        std::fs::create_dir_all(&downloads).unwrap();
+        // A live Runtime's profile.  It belongs to the Runtime and is deleted
+        // when that closes, not by removing the Session that spawned it.
+        let live = manager.disposable_profile_path("some-runtime");
+        std::fs::create_dir_all(&live).unwrap();
+
+        manager.remove_session_data(session_id).unwrap();
+        assert!(
+            !manager
+                .profiles_root
+                .join("sessions")
+                .join(session_id)
+                .exists()
+        );
+        assert!(
+            !downloads.exists(),
+            "a deleted Session keeps no download directory"
+        );
+        assert!(
+            live.is_dir(),
+            "a Runtime's profile is not a Session's to delete"
+        );
+        manager.remove_session_data(session_id).unwrap();
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -2763,7 +3549,7 @@ mod tests {
             Uuid::new_v4()
         ));
         let path = root.join("session.json");
-        ensure_agent_browser_mcp_config(&path, 43_129).unwrap();
+        ensure_agent_browser_mcp_config(&path, "luna-mux-session-1", 43_129).unwrap();
         let config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(config["cdp"], "43129");
         let _ = std::fs::remove_dir_all(root);
@@ -2786,6 +3572,140 @@ mod tests {
             super::managed_chrome_process_ids(processes, profiles_root),
             vec![101]
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires the bundled agent-browser sidecar"]
+    async fn the_shared_tool_profile_exposes_every_enabled_group() {
+        // Tool discovery is paginated at 64 per page.  Reading only the first
+        // page would fit inside `core` alone and report a pass for any profile,
+        // so every cursor is followed and the total is asserted to exceed one
+        // page.
+        use std::{io::Write, sync::mpsc as std_mpsc};
+
+        let binary = resolve_agent_browser_binary().expect("bundled agent-browser sidecar");
+        let all_profiles = crate::models::AGENT_BROWSER_TOOL_PROFILES
+            .iter()
+            .map(|profile| (*profile).to_string())
+            .collect::<Vec<_>>();
+        let tools_arg = super::agent_browser_tools_arg(&all_profiles);
+        let mut mcp = std::process::Command::new(binary)
+            // No browser is needed: the tool surface is static and the server
+            // answers discovery before anything is attached.
+            .args(["mcp", "--tools", &tools_arg])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut stdin = mcp.stdin.take().unwrap();
+        let stdout = mcp.stdout.take().unwrap();
+        let (line_tx, line_rx) = std_mpsc::channel();
+        std::thread::spawn(move || {
+            for line in std::io::BufReader::new(stdout)
+                .lines()
+                .map_while(Result::ok)
+            {
+                if line_tx.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+
+        writeln!(
+            stdin,
+            "{}",
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {},
+                    "clientInfo": { "name": "luna-mux-test", "version": "1.0" }
+                }
+            })
+        )
+        .unwrap();
+        stdin.flush().unwrap();
+        assert!(
+            line_rx.recv_timeout(Duration::from_secs(10)).is_ok(),
+            "agent-browser must answer initialize"
+        );
+
+        let mut names = Vec::new();
+        let mut cursor: Option<String> = None;
+        let mut pages = 0;
+        loop {
+            let mut params = json!({});
+            if let Some(cursor) = &cursor {
+                params = json!({ "cursor": cursor });
+            }
+            writeln!(
+                stdin,
+                "{}",
+                json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": params })
+            )
+            .unwrap();
+            stdin.flush().unwrap();
+            let page: Value = serde_json::from_str(
+                &line_rx
+                    .recv_timeout(Duration::from_secs(10))
+                    .expect("tools/list response"),
+            )
+            .expect("valid tools/list JSON");
+            pages += 1;
+            let tools = page["result"]["tools"].as_array().expect("tools array");
+            for tool in tools {
+                names.push(tool["name"].as_str().expect("tool name").to_string());
+            }
+            match page["result"]["nextCursor"].as_str() {
+                Some(next) if !next.is_empty() => cursor = Some(next.to_string()),
+                _ => break,
+            }
+        }
+
+        let _ = stdin.write_all(b"");
+        drop(stdin);
+        let _ = mcp.kill();
+        let _ = mcp.wait();
+
+        let has = |name: &str| names.iter().any(|tool| tool == name);
+        assert!(
+            pages > 1 && names.len() > 64,
+            "discovery must be read to the end: {pages} page(s), {} tool(s)",
+            names.len()
+        );
+        // The react group exists but stays inert until a page is opened with
+        // `--enable react-devtools`; it is listed here so the injected
+        // instructions can name tools that are actually reachable.
+        for tool in [
+            "agent_browser_react_tree",
+            "agent_browser_react_inspect",
+            "agent_browser_react_renders_start",
+            "agent_browser_react_suspense",
+        ] {
+            assert!(has(tool), "{tool} is missing from {names:?}");
+        }
+        for tool in [
+            "agent_browser_set_device",
+            "agent_browser_set_viewport",
+            "agent_browser_tap",
+            "agent_browser_swipe",
+        ] {
+            assert!(has(tool), "{tool} is missing from {names:?}");
+        }
+        // Adding groups must not displace what earlier groups already exposed.
+        for tool in [
+            "agent_browser_open",
+            "agent_browser_snapshot",
+            "agent_browser_a11y",
+            "agent_browser_webmcp_list",
+            "agent_browser_auth_save",
+            "agent_browser_network_requests",
+        ] {
+            assert!(has(tool), "{tool} disappeared from the tool list");
+        }
     }
 
     #[tokio::test]
@@ -3023,12 +3943,15 @@ mod tests {
         let manager = BrowserRuntimeManager::new_for_test(&root);
         let session_id = format!("managed-browser-rebind-{}", Uuid::new_v4());
         let runtime = manager
-            .create(BrowserRuntimeCreateRequest {
-                mux_session_id: session_id.clone(),
-                browser_resource_id: "browser-resource".into(),
-                url: "about:blank".into(),
-                temporary_profile: true,
-            })
+            .create(
+                BrowserRuntimeCreateRequest {
+                    mux_session_id: session_id.clone(),
+                    browser_resource_id: "browser-resource".into(),
+                    url: "about:blank".into(),
+                    tool_profiles: super::default_agent_browser_tool_profiles(),
+                },
+                false,
+            )
             .await
             .unwrap();
 
@@ -3159,12 +4082,15 @@ mod tests {
             }
         });
         let runtime = manager
-            .create(BrowserRuntimeCreateRequest {
-                mux_session_id: "integration-session".into(),
-                browser_resource_id: "browser-resource".into(),
-                url: format!("http://127.0.0.1:{port}"),
-                temporary_profile: false,
-            })
+            .create(
+                BrowserRuntimeCreateRequest {
+                    mux_session_id: "integration-session".into(),
+                    browser_resource_id: "browser-resource".into(),
+                    url: format!("http://127.0.0.1:{port}"),
+                    tool_profiles: super::default_agent_browser_tool_profiles(),
+                },
+                false,
+            )
             .await
             .unwrap();
         manager.focus_external_window(&runtime.id).unwrap();
@@ -3203,12 +4129,15 @@ mod tests {
         assert!(screenshot.len() > 100);
 
         let second_runtime = manager
-            .create(BrowserRuntimeCreateRequest {
-                mux_session_id: "integration-session-2".into(),
-                browser_resource_id: "browser-resource-2".into(),
-                url: "about:blank".into(),
-                temporary_profile: false,
-            })
+            .create(
+                BrowserRuntimeCreateRequest {
+                    mux_session_id: "integration-session-2".into(),
+                    browser_resource_id: "browser-resource-2".into(),
+                    url: "about:blank".into(),
+                    tool_profiles: super::default_agent_browser_tool_profiles(),
+                },
+                false,
+            )
             .await
             .unwrap();
         assert_ne!(runtime.process_id, second_runtime.process_id);
@@ -3217,12 +4146,20 @@ mod tests {
         assert_eq!(manager.list().unwrap().len(), 2);
 
         let profile = runtime.profile_path.clone();
+        let second_profile = second_runtime.profile_path.clone();
         manager.close(&runtime.id).await.unwrap();
         assert_eq!(manager.list().unwrap().len(), 1);
-        assert!(std::path::Path::new(&profile).exists());
+        assert!(
+            !std::path::Path::new(&profile).exists(),
+            "closing a runtime deletes the profile it was using"
+        );
+        assert!(
+            std::path::Path::new(&second_profile).exists(),
+            "one runtime closing must not delete another runtime's profile"
+        );
         manager.close(&second_runtime.id).await.unwrap();
         assert!(manager.list().unwrap().is_empty());
-        assert!(std::path::Path::new(&profile).exists());
+        assert!(!std::path::Path::new(&second_profile).exists());
         server.abort();
         let _ = std::fs::remove_dir_all(root);
     }

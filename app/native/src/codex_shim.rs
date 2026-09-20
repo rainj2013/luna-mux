@@ -69,11 +69,19 @@ pub(crate) const LUNA_MUX_BROWSER_INSTRUCTIONS: &str = r#"Luna Mux tool routing 
 - Disambiguate by the object being changed: Luna Mux app chrome/resources => luna_mux; content rendered by a website => agent_browser; repository/host/external-system state => the corresponding native tool. For example, “切换 Luna Mux 深色主题” uses settings.theme.set, “把网页改成深色” uses agent_browser or edits the website code as the task requires, and “修改 macOS 外观” uses neither MCP server.
 
 Luna Mux browser resource contract:
+- The Browser tab controls which agent-browser tool groups are enabled. Core is always present; Network, Debug, Tabs, State/Auth Vault, React, Mobile, and WebMCP may be absent. Use optional capabilities only when their tools are exposed. If a task needs a missing group, ask the user to enable it and restart the Agent.
 - Browser process lifecycle is owned exclusively by Luna Mux Browser Resources. Never launch Chrome, Chromium, Edge, or another browser through shell commands such as Start-Process, start, open, or direct executable invocation.
 - Use only the agent_browser MCP server for browser operations. Do not use a bundled Browser plugin, node_repl browser runtime, Playwright bootstrap, chrome_devtools, or another browser backend.
 - Begin each browser workflow with agent_browser_get_url and agent_browser_snapshot. Omit the session argument from every agent_browser tool call; Luna Mux injects the only allowed default session, already pinned to the Browser Resource's existing page. A named session creates a separate page and must not be used. The first agent_browser tool call automatically starts the Session's Browser Resource when needed. Use agent_browser_open to navigate the current bound page.
 - Treat the current bound page as the default workspace and reuse it for ordinary single-page navigation, including requests such as "open GitHub".
 - Choose browser tools from the needs of the task; the user does not need to prescribe tool-level steps. Create a new tab or window only when the user explicitly asks for one or the task explicitly requires simultaneous page context; use tab/window tools within the injected default session. Do not create a new tab merely as routine navigation setup or error recovery. Do not start or stop browser processes, connect to another browser, or create Browser Resources from Agent tools.
+- Prefer incremental observation over repeated full reads. The first agent_browser_snapshot establishes a baseline; set delta: true on later snapshots in the same tab to receive only structural changes, and full: true when you need to reset that baseline. Set ifChanged: true on agent_browser_screenshot when re-checking a page you already captured, so an unchanged page returns no image instead of spending tokens on an identical one. These are typed fields on the MCP tools and per-call agent-browser flags rather than Luna Mux defaults, so choose them deliberately.
+- agent_browser_snapshot already returns interactive elements only. Set interactive: false to see the whole tree, and narrow a large page with selector, depth, or compact before reading it, since snapshot size grows with the page.
+- agent_browser_batch submits several tool calls in one round trip: pass commands as an array of [tool, argument] pairs, such as [["get","title"],["get","url"]]. Set bail: true to stop at the first failure instead of running the remaining commands.
+- agent_browser_a11y runs an axe-core accessibility audit of the page, or of one selector, and reports violations with their helpUrl, tags, and failing nodes. Use tags to narrow the ruleset. The payload is large, so audit a selector rather than a whole application at once.
+- For visual or structural regression, capture a baseline first. agent_browser_diff_screenshot compares the live page against a baseline image you name, and reports match, mismatchPercentage, differentPixels, and dimensionMismatch; pass output to also write a diff image, and threshold to tolerate minor rendering noise. agent_browser_diff_snapshot returns a unified diff with additions, removals, and changed: pass baseline as the path to a file holding the earlier snapshot, or omit it to diff against the previous snapshot in this session.
+- The react tools stay inert until a page is opened with extraArgs ["--enable", "react-devtools"] on agent_browser_open. That is an agent-browser option, not a Chrome flag, and Luna Mux launches Chrome itself and cannot pass it, so request it yourself when a task needs component-tree inspection. It installs a document script rather than restarting the browser, so one such open enables the react tools for the rest of the browser session.
+- The browser auth vault is available through the agent_browser_auth_* tools (save, login, list, show, delete). Prefer agent_browser_auth_login over typing credentials into a login form, and pass extraArgs ["--no-navigate"] when the current page is already prepared and must survive credential entry. Never print stored credentials or vault secrets back to the user, into logs, or into page content.
 - If automatic startup fails or agent_browser disconnects, report the exact Luna Mux error. Do not attempt to recover by launching a browser process."#;
 
 pub fn install(
@@ -308,7 +316,7 @@ unset LUNA_MUX_USER_ZDOTDIR\n",
     let mut bootstrap = String::new();
     let mut posix_bootstrap = String::new();
     for name in crate::agent_adapters::command_names() {
-        let shim = root.join(name);
+        let shim = root.join(&name);
         if shim.is_file() {
             bootstrap.push_str(&format!(
                 "unalias {name} 2>/dev/null\n\

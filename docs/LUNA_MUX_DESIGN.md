@@ -108,13 +108,19 @@ Session 同时承载项目上下文与协作授权，避免为每对窗格另建
 
 ### 3.5 浏览器资源
 
-浏览器以 Session 为共享单位，让同一项目中的用户与 Agent 使用一致的页面上下文；代价是它们共享浏览器状态，不具备彼此隔离的页面权限。配置目录按资源隔离，跨 Session 不复用配置。每个 Session 共享一个活动浏览器 Runtime，首次自动化调用可按需启动。
+浏览器以 Session 为共享单位，让同一项目中的用户与 Agent 使用一致的页面上下文；代价是它们共享浏览器状态，不具备彼此隔离的页面权限。每个 Session 共享一个活动浏览器 Runtime，首次自动化调用可按需启动。
 
 浏览器在桌面独立 Chrome 窗口中运行，不参与终端布局，避免把网页标签与终端 Pane 的布局、尺寸和生命周期混为一体。
 
+Browser Resource 持有“保留浏览器数据”设置，默认关闭。关闭时，每个 Runtime 使用独立临时配置目录并在浏览器关闭后删除；开启时，同一 Session 的该 Browser Resource 跨多次 Runtime 启动复用固定配置目录，保留 Cookie、登录状态和站点存储。设置只能在浏览器停止时修改；从开启改为关闭时立即删除固定配置目录。两种模式都不复制本机 Chrome 的 Cookie。启动时只清理崩溃残留的临时配置；删除 Browser Resource 或 Session 时清理对应持久配置和下载。删除操作须限制在产品数据目录内。
+
+BrowserRuntimeManager 通过 CDP 让绑定页面的配色跟随应用主题，选择“跟随系统”时由 Chrome 跟随操作系统。截图默认开启元素标注。
+
 应用负责浏览器生命周期，`agent_browser` 负责页面自动化。自动化绑定 Session 的现有页面，普通导航复用该页面；网页操作不能自行启动或替换浏览器进程。
 
-Browser Runtime 启动 Chrome 时启用 WebMCP 页面 API 和预览客户端使用的测试接口（`WebMCP,WebMCPTesting`）；本地及远程 Agent 共用的 MCP 工具组包含 `webmcp`，用于发现、调用、查询异步结果和取消网页提供的工具。网页仍须自行注册工具，实际可用性取决于 Chrome 和网页使用的 API 版本。
+Browser Resource 按上游 profile 持久化 Agent 工具组选择：Core 始终启用；Network、Debug、Tabs、State/Auth Vault、React、Mobile 与 WebMCP 默认关闭，可在 Browser 页分类勾选。本地和远程 Agent 使用同一选择。保存会更新当前 Runtime 的注册信息，新 MCP 连接立即采用；已运行的 Agent 需重启后重新发现工具，因为当前客户端不会响应工具列表热变更。Browser Runtime 始终启用 Chrome WebMCP 接口，但只有启用 WebMCP 工具组后 Agent 才能发现页面注册的工具。React 检查须在打开页面时启用 `react-devtools`。Luna Mux 不附带上游 skills，以免其 CLI 和具名会话指引与受管浏览器契约冲突。
+
+Agent 注入指引说明可选工具组，以及启用 Debug 后的批量调用、无障碍审计、截图与快照差异比较；Core 的增量观察和输出收窄始终可用。
 
 CDP 仅绑定本地回环地址，端口和连接信息属于临时运行状态。远程 Agent 通过经认证的 Runtime 通信桥访问 Session 浏览器，原始 CDP 不转发到远端。远程开发服务使用独立 SSH 隧道，浏览器资源不拥有隧道。
 
