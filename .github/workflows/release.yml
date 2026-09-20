@@ -42,7 +42,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Cache agent-browser sidecar
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: app/native/binaries
           key: agent-browser-${{ matrix.target }}-${{ hashFiles('scripts/sync-agent-browser-sidecar.mjs') }}
@@ -99,7 +99,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache agent-browser sidecar
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: app/native/binaries
           key: agent-browser-x86_64-pc-windows-msvc-${{ hashFiles('scripts/sync-agent-browser-sidecar.mjs') }}
