@@ -733,7 +733,7 @@ export default {
   "help.helpTopics": "帮助目录",
   "help.noMatchingHelpTopics": "没有匹配的帮助内容",
   "help.searchHelp": "搜索帮助",
-  "help.tryConnectionSftpOrPortForwarding": "尝试搜索“会话”“Agent”“浏览器”或“SSH”",
+  "help.tryConnectionSftpOrPortForwarding": "尝试搜索“会话”“Agent”“浏览器”“数据库”或“SSH”",
   "sftp.back": "后退",
   "sftp.binaryFile": "二进制文件",
   "sftp.closePreview": "关闭预览",

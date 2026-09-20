@@ -733,7 +733,7 @@ export default {
   "help.helpTopics": "Help topics",
   "help.noMatchingHelpTopics": "No matching help topics",
   "help.searchHelp": "Search help",
-  "help.tryConnectionSftpOrPortForwarding": "Try “Session”, “Agent”, “browser”, or “SSH”",
+  "help.tryConnectionSftpOrPortForwarding": "Try “Session”, “Agent”, “browser”, “database”, or “SSH”",
   "sftp.back": "Back",
   "sftp.binaryFile": "Binary file",
   "sftp.closePreview": "Close preview",

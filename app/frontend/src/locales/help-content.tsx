@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { BookOpen, FolderOpen, Globe2, LayoutGrid, Network, Rocket, Server, Settings, ShieldCheck, Sparkles, SquareTerminal, TriangleAlert, WandSparkles, type LucideIcon } from 'lucide-react'
+import { BookOpen, Database, FolderOpen, Globe2, LayoutGrid, Network, Rocket, Server, Settings, ShieldCheck, Sparkles, SquareTerminal, TriangleAlert, WandSparkles, type LucideIcon } from 'lucide-react'
 import { PRODUCT_INFO } from '../product-info'
 
 export interface HelpSection {
@@ -15,20 +15,20 @@ export function createChineseHelpSections(commandKey: string): HelpSection[] {
   return [
     {
       id: 'start', group: '开始使用', title: '快速开始', icon: BookOpen,
-      searchText: '快速开始 第一次 项目 会话 窗格 终端 agent 浏览器 ssh 工作区',
+      searchText: '快速开始 第一次 项目 会话 窗格 终端 agent 浏览器 数据库 ssh 工作区',
       content: <>
         <h2>快速开始</h2>
-        <p>{PRODUCT_INFO.displayName} 以项目会话组织终端、Coding Agent、SSH 连接和受管浏览器。一个会话会保存项目根目录、窗格定义、拆分布局和浏览器配置，让同一个项目的工作环境可以持续使用。</p>
+        <p>{PRODUCT_INFO.displayName} 以项目会话组织终端、Coding Agent、SSH 连接、数据库窗格和受管浏览器。一个会话会保存项目根目录、窗格定义、拆分布局和浏览器配置，让同一个项目的工作环境可以持续使用。</p>
         <h3>第一次使用</h3>
         <ol>
           <li>点击侧栏顶部的加号创建项目会话，填写名称，并按需选择项目根目录。</li>
-          <li>在会话行点击加号添加窗格，选择本机 Shell、WSL、SSH 目标或 Coding Agent 启动配置。</li>
-          <li>在窗格中运行命令，或让 Agent 执行任务；需要并行上下文时，继续添加窗格或拆分当前窗格。</li>
+          <li>在会话行点击加号添加窗格，选择本机 Shell、WSL、SSH 目标、数据库连接或 Coding Agent 启动配置。</li>
+          <li>在窗格中运行命令、查询数据库，或让 Agent 执行任务；需要并行上下文时，继续添加窗格或拆分当前窗格。</li>
           <li>Agent 验证网页时会使用当前会话的受管浏览器，Luna Mux 会按需准备 Chrome 环境。</li>
         </ol>
         <h3>顶部视图</h3>
         <table className="help-detail-table"><tbody>
-          <tr><th scope="row">窗格</th><td>显示本地终端、SSH 终端和 Agent 终端组成的拆分工作区，是日常操作的主视图。</td></tr>
+          <tr><th scope="row">窗格</th><td>显示本地终端、SSH 终端、数据库窗格和 Agent 终端组成的拆分工作区，是日常操作的主视图。</td></tr>
           <tr><th scope="row">Agent</th><td>查看当前活跃 Agent 的所属窗格、目标环境、Hook、Luna MCP 和 Browser MCP 状态。</td></tr>
           <tr><th scope="row">浏览器</th><td>启动、聚焦、重启或停止当前会话的受管 Chrome，并查看 Profile、进程和启动诊断。</td></tr>
           <tr><th scope="row">文件</th><td>聚焦已连接 SSH 窗格后出现，用于浏览本地和远端目录、传输文件和打开部署工具。</td></tr>
@@ -44,8 +44,8 @@ export function createChineseHelpSections(commandKey: string): HelpSection[] {
         <h3>会话保存内容</h3>
         <ul>
           <li><strong>名称和项目根目录：</strong>名称显示在侧栏；项目根目录会作为新建本地终端和本地 Agent 的初始工作目录。</li>
-          <li><strong>窗格和布局：</strong>窗格名称、目标、Agent 启动类型、拆分方向和比例会随会话保存，应用重启后恢复工作区结构。</li>
-          <li><strong>浏览器环境：</strong>每个会话自动配备一个独立 Browser Resource，用于同会话 Agent 的网页验证。Profile 默认随浏览器关闭而删除，也可在浏览器页选择跨多次启动保留。</li>
+          <li><strong>窗格和布局：</strong>窗格名称、目标、Agent 启动类型、数据库连接、拆分方向和比例会随会话保存，应用重启后恢复工作区结构。</li>
+          <li><strong>浏览器环境：</strong>每个会话自动配备一个独立 Browser Resource，用于同会话 Agent 的网页验证。Profile 默认随浏览器关闭而删除，也可在浏览器页选择跨多次启动保留，并按组选择暴露给 Agent 的 MCP 工具。</li>
         </ul>
         <h3>侧栏操作</h3>
         <ul>
@@ -60,20 +60,20 @@ export function createChineseHelpSections(commandKey: string): HelpSection[] {
           <li>Agent 需要确认或输入时，窗格图标与名称使用警示色，同时终端面板出现橙色边框；错误使用红色，未读完成事件使用蓝色。</li>
           <li>进入窗格会标记完成或错误事件为已读；权限确认、输入和中断等实际操作会推进仍在等待的 Agent 状态。</li>
         </ul>
-        <div className="help-warning"><TriangleAlert size={15} aria-hidden="true" /><div><strong>删除会话</strong><p>删除会话会关闭其中的终端、Agent 和受管浏览器，并删除窗格与布局定义。已保存的 SSH 目标会继续保留在资源库中。</p></div></div>
+        <div className="help-warning"><TriangleAlert size={15} aria-hidden="true" /><div><strong>删除会话</strong><p>删除会话会关闭其中的终端、Agent 和受管浏览器，并删除窗格与布局定义。已保存的 SSH 目标和数据库连接会继续保留在资源库中。</p></div></div>
       </>
     },
     {
       id: 'terminal', group: '开始使用', title: '窗格与终端', icon: SquareTerminal,
-      searchText: '窗格 pane 终端 本地 powershell pwsh wsl macos ssh 分屏 拆分 布局 最大化 重启 搜索 复制 粘贴 快捷键 背景图',
+      searchText: '窗格 pane 终端 本地 powershell pwsh wsl macos ssh 数据库 分屏 拆分 布局 最大化 最小化 重启 搜索 复制 粘贴 快捷键 背景图',
       content: <>
         <h2>窗格、布局与终端</h2>
-        <p>窗格承载一个本地、WSL、SSH 或 Agent 运行时。拆分布局让同一会话中的多个上下文并排工作。</p>
+        <p>窗格承载一个本地、WSL、SSH、数据库或 Agent 运行时。拆分布局让同一会话中的多个上下文并排工作。</p>
         <h3>添加窗格</h3>
         <ol>
           <li>在会话行点击加号，按需填写窗格名称。</li>
-          <li>选择普通“终端”或一个 Coding Agent 启动配置。</li>
-          <li>选择运行目标：Windows 提供 PowerShell 7 和已安装的 WSL 发行版；macOS 使用登录 Shell；远程目标来自 SSH 目标资源库。</li>
+          <li>选择本机或 SSH 终端、已保存的数据库连接，或一个 Coding Agent 启动配置。</li>
+          <li>终端目标：Windows 提供 PowerShell 7 和已安装的 WSL 发行版；macOS 使用登录 Shell；远程目标来自 SSH 目标资源库。数据库连接在添加窗格对话框的“数据库连接”中选择，也可先打开连接管理。</li>
         </ol>
         <p>普通终端里也可以手动运行已安装的 Agent（例如 <code>codex</code>、<code>claude</code> 或 <code>grok</code>），Luna Mux 会在检测到活动后把它识别为 Agent。</p>
         <h3>拆分和布局</h3>
@@ -81,6 +81,7 @@ export function createChineseHelpSections(commandKey: string): HelpSection[] {
           <li>窗格标题栏的左右拆分和上下拆分按钮会复制当前目标定义，创建一个新的同类窗格。</li>
           <li>拖动窗格之间的分隔线调整比例，比例会随会话保存。</li>
           <li>最大化按钮临时只显示一个窗格，再次点击恢复完整布局。</li>
+          <li>最小化会从当前布局中收起窗格，但不关闭运行时。可在侧栏窗格行或空状态中恢复。</li>
           <li>两个以上窗格时，顶部布局菜单可改为横向、纵向或每行两列排列。</li>
           <li>重启会关闭当前运行时并按原目标重新启动；关闭窗格会同时移除它的持久化定义。</li>
         </ul>
@@ -104,8 +105,34 @@ export function createChineseHelpSections(commandKey: string): HelpSection[] {
       </>
     },
     {
+      id: 'database', group: '开始使用', title: '数据库窗格', icon: Database,
+      searchText: '数据库 database sqlite mysql mariadb postgres postgresql 表 视图 sql 查询 结构 导入 导出 只读 dml ddl 权限 连接 profile',
+      content: <>
+        <h2>数据库窗格</h2>
+        <p>数据库窗格用于在当前会话中连接 SQLite、MySQL / MariaDB 和 PostgreSQL。每个窗格使用独立连接；连接配置可保存，密码保存在系统凭据库。</p>
+        <h3>添加和连接</h3>
+        <ol>
+          <li>在会话行点击加号，打开“数据库连接”。</li>
+          <li>选择已保存的连接；没有连接时，先打开“管理数据库连接”创建 SQLite 文件或网络数据库。</li>
+          <li>窗格默认以只读模式打开。需要写入时，在工具栏的访问权限中关闭只读，并对数据写入（DML）或结构变更（DDL）进行确认或授权。</li>
+        </ol>
+        <h3>浏览和查询</h3>
+        <ul>
+          <li><strong>SQL 查询：</strong>编写并执行 SQL，也可只执行选中内容。结果分页显示，并可导出。</li>
+          <li><strong>数据：</strong>浏览当前表或视图的分页数据。</li>
+          <li><strong>表结构：</strong>查看字段、索引和外键。SQLite 还支持新增或删除字段和索引。</li>
+        </ul>
+        <h3>导入和导出</h3>
+        <ul>
+          <li>可导入 SQL 文件，或把整个数据库、单表、查询结果导出为 SQL。</li>
+          <li>导入会执行文件中的写入和结构变更，需要先关闭只读。</li>
+        </ul>
+        <div className="help-warning"><TriangleAlert size={15} aria-hidden="true" /><div><strong>写入授权</strong><p>默认只读。DML 和 DDL 会分别确认，也可在本次连接内授权免确认，断开后恢复。获得 Luna MCP 的 Agent 可以操作已打开的数据库窗格，写入同样受这些权限约束。</p></div></div>
+      </>
+    },
+    {
       id: 'agents', group: 'Agent 与自动化', title: 'Agent 工作流', icon: Sparkles,
-      searchText: 'agent codex claude code 启动 手动 hook mcp luna browser 状态 提醒 等待 授权 环境 集成 adapter 多窗格 协作 输出 指令 bash 远程 agent ssh 注入',
+      searchText: 'agent codex claude code 启动 手动 hook mcp luna browser 数据库 状态 提醒 等待 授权 环境 集成 adapter 多窗格 协作 输出 指令 bash 远程 agent ssh 注入',
       content: <>
         <h2>Coding Agent 工作流</h2>
         <p>Luna Mux 把 Codex、Claude Code 和 Grok Build 放进会话窗格中运行。Codex 和 Claude Code 会获得 Hook、Luna MCP 与 Browser MCP；Grok Build 当前只通过启动包装脚本报告进程启动和退出，不会注入 MCP。</p>
@@ -122,7 +149,7 @@ export function createChineseHelpSections(commandKey: string): HelpSection[] {
           <li>进入窗格可阅读最新事件；提交输入、确认权限、按 Esc 或 Ctrl+C 会推动 Agent 继续运行或中断。</li>
         </ul>
         <h3>同会话多 Agent 协作</h3>
-        <p>项目会话是协作边界。获得 Luna MCP 的 Codex 和 Claude Code 可以发现会话内所有窗格和当前运行时，并与其他终端或 Agent 协作；Grok Build 当前不具备这项能力。</p>
+        <p>项目会话是协作边界。获得 Luna MCP 的 Codex 和 Claude Code 可以发现会话内所有窗格和当前运行时，与其他终端或 Agent 协作，并操作已打开的数据库窗格；Grok Build 当前不具备这项能力。</p>
         <ul>
           <li><code>terminal.runtimes.list</code> 返回终端运行时和所属窗格，目标可以是 Agent，也可以是普通 Bash、PowerShell 或 SSH Shell。</li>
           <li><code>terminal.runtime.output.read</code> 按游标增量读取有界输出；<code>terminal.runtime.write</code> 向目标 PTY 写入文本或命令。</li>
@@ -145,7 +172,7 @@ export function createChineseHelpSections(commandKey: string): HelpSection[] {
     },
     {
       id: 'browser', group: 'Agent 与自动化', title: '浏览器自动化', icon: Globe2,
-      searchText: '浏览器 browser chrome cdp profile agent-browser mcp 自动 按需 启动 停止 重启 打开 tab 页面 可用 agent 退出 profile 临时 保留 cookie 登录状态',
+      searchText: '浏览器 browser chrome cdp profile agent-browser mcp 工具组 core tabs network debug state react mobile webmcp 自动 按需 启动 停止 重启 打开 tab 页面 可用 agent 退出 profile 临时 保留 cookie 登录状态',
       content: <>
         <h2>受管浏览器与网页验证</h2>
         <p>每个项目会话自动拥有一个 Browser Resource。它为同会话中支持 Browser MCP 的 Codex 和 Claude Code 提供独立 Chrome 进程、可选持久化的 Profile 和 agent-browser MCP 连接；Grok Build 当前不会注入该连接。</p>
@@ -164,8 +191,14 @@ export function createChineseHelpSections(commandKey: string): HelpSection[] {
           <tr><th scope="row">停止</th><td>关闭 Chrome 进程。未开启保留时同时删除 Profile；开启时保留给下次启动。</td></tr>
           <tr><th scope="row">保留数据</th><td>只能在浏览器停止时修改。关闭开关会立即删除此前保留的 Cookie、登录状态和站点数据。</td></tr>
         </tbody></table>
+        <h3>MCP 工具</h3>
+        <p>浏览器页可以按组选择暴露给 Agent 的 <code>agent_browser</code> 工具。Core 始终启用，Tabs 与窗口默认开启；Network、Debug、State、React、Mobile 和 WebMCP 按需打开，避免一次暴露过多工具。</p>
+        <ul>
+          <li>更改会立即用于新连接的 Agent；已经运行的 Agent 需要重启，才能重新发现工具。</li>
+          <li>所选分组的工具数量较多时，可能超过 Codex 当前的发现上限，排在后面的工具可能不可用。</li>
+        </ul>
         <p>诊断区显示运行状态、PID、CDP 地址、Profile 路径和启动错误。安装 Chrome 后，可点击重新检测刷新可用状态。</p>
-        <div className="help-warning"><TriangleAlert size={15} aria-hidden="true" /><div><strong>Agent 浏览器自动化</strong><p>Agent 可以通过注入的 <code>agent_browser</code> 工具按需启动并操作当前会话的受管 Chrome；“浏览器”页提供同一个 Browser Resource 的人工启动、聚焦、重启和诊断入口。</p></div></div>
+        <div className="help-warning"><TriangleAlert size={15} aria-hidden="true" /><div><strong>Agent 浏览器自动化</strong><p>Agent 可以通过注入的 <code>agent_browser</code> 工具按需启动并操作当前会话的受管 Chrome；“浏览器”页提供同一个 Browser Resource 的人工启动、聚焦、重启、数据保留和 MCP 工具入口。</p></div></div>
       </>
     },
     {
@@ -316,12 +349,12 @@ export function createChineseHelpSections(commandKey: string): HelpSection[] {
     },
     {
       id: 'security', group: '设置与支持', title: '安全与常见排查', icon: ShieldCheck,
-      searchText: '安全 排查 错误 agent hook mcp browser chrome cdp ssh 指纹 凭据 keychain credential manager 断线 超时 sftp 端口转发 诊断',
+      searchText: '安全 排查 错误 agent hook mcp browser chrome cdp ssh 指纹 凭据 keychain credential manager 数据库 断线 超时 sftp 端口转发 诊断',
       content: <>
         <h2>安全与常见排查</h2>
         <h3>安全边界</h3>
         <ul>
-          <li>密码、私钥口令和 AI API Key 使用 macOS Keychain 或 Windows Credential Manager；私钥文件本身由文件系统管理。</li>
+          <li>SSH 密码、私钥口令、数据库密码和 AI API Key 使用 macOS Keychain 或 Windows Credential Manager；私钥文件本身由文件系统管理。</li>
           <li>每个 Agent 运行时获得临时身份。Codex 与 Claude Code 的 Hook、Luna MCP 和 Browser MCP 都绑定到当前会话与窗格，运行时退出后撤销；Grok Build 只使用生命周期 Hook。</li>
           <li>Browser Resource 默认使用随浏览器创建和删除的临时 Profile；用户可显式选择为当前会话保留 Cookie、登录状态和站点数据。Profile 目录和 CDP 端点应交给 Luna Mux 与 agent-browser 管理。</li>
         </ul>
@@ -353,20 +386,20 @@ export function createEnglishHelpSections(commandKey: string): HelpSection[] {
   return [
     {
       id: 'start', group: 'Getting started', title: 'Quick start', icon: BookOpen,
-      searchText: 'quick start first project session pane terminal agent browser ssh workspace',
+      searchText: 'quick start first project session pane terminal agent browser database ssh workspace',
       content: <>
         <h2>Quick start</h2>
-        <p>{PRODUCT_INFO.displayName} organizes terminals, Coding Agents, SSH connections, and a managed browser around project Sessions. A Session stores the project root, Pane definitions, split layout, and browser configuration for one reusable workspace.</p>
+        <p>{PRODUCT_INFO.displayName} organizes terminals, Coding Agents, SSH connections, database Panes, and a managed browser around project Sessions. A Session stores the project root, Pane definitions, split layout, and browser configuration for one reusable workspace.</p>
         <h3>First workflow</h3>
         <ol>
           <li>Select the plus button at the top of the sidebar, create a project Session, and optionally choose its project root.</li>
-          <li>Select the plus button on the Session row, then choose a local shell, WSL distribution, SSH target, or Coding Agent launch profile.</li>
-          <li>Run commands in the Pane or give the Agent a task. Add or split Panes when you need parallel contexts.</li>
+          <li>Select the plus button on the Session row, then choose a local shell, WSL distribution, SSH target, database connection, or Coding Agent launch profile.</li>
+          <li>Run commands, query a database, or give the Agent a task. Add or split Panes when you need parallel contexts.</li>
           <li>When an Agent verifies a web page, Luna Mux prepares the Session's managed Chrome environment on demand.</li>
         </ol>
         <h3>Workspace views</h3>
         <table className="help-detail-table"><tbody>
-          <tr><th scope="row">Panes</th><td>The main split workspace containing local terminals, SSH terminals, and Agent terminals.</td></tr>
+          <tr><th scope="row">Panes</th><td>The main split workspace containing local terminals, SSH terminals, database Panes, and Agent terminals.</td></tr>
           <tr><th scope="row">Agents</th><td>Active Agent details such as owner Pane, target environment, Hooks, Luna MCP, and Browser MCP.</td></tr>
           <tr><th scope="row">Browser</th><td>Start, focus, restart, or stop the Session's managed Chrome and inspect its Profile, process, and startup diagnostics.</td></tr>
           <tr><th scope="row">Files</th><td>Appears for a focused connected SSH Pane and provides local/remote browsing, file transfer, and deployment tools.</td></tr>
@@ -382,8 +415,8 @@ export function createEnglishHelpSections(commandKey: string): HelpSection[] {
         <h3>What a Session stores</h3>
         <ul>
           <li><strong>Name and project root:</strong> the name appears in the sidebar, and the root becomes the initial directory for new local terminals and local Agents.</li>
-          <li><strong>Panes and layout:</strong> Pane names, targets, Agent launch types, split directions, and ratios are saved with the Session and restored on app restart.</li>
-          <li><strong>Browser environment:</strong> every Session receives an isolated Browser Resource for web verification by Agents in that Session. Its Profile is deleted with Chrome by default, or can be retained across starts from the Browser view.</li>
+          <li><strong>Panes and layout:</strong> Pane names, targets, Agent launch types, database connections, split directions, and ratios are saved with the Session and restored on app restart.</li>
+          <li><strong>Browser environment:</strong> every Session receives an isolated Browser Resource for web verification by Agents in that Session. Its Profile is deleted with Chrome by default, or can be retained across starts from the Browser view. The same view also chooses which MCP tool groups the Agent can see.</li>
         </ul>
         <h3>Sidebar operations</h3>
         <ul>
@@ -398,20 +431,20 @@ export function createEnglishHelpSections(commandKey: string): HelpSection[] {
           <li>An Agent waiting for input or permission colors the Pane icon/name and draws an orange border around its terminal. Errors are red; unread completion is blue.</li>
           <li>Opening a Pane marks completion or error events as read; confirming permissions, submitting input, or interrupting the Agent advances actionable states.</li>
         </ul>
-        <div className="help-warning"><TriangleAlert size={15} /><div><strong>Deleting a Session</strong><p>Deleting a Session closes its terminals, Agents, and managed browser, then removes Pane and layout definitions. Saved SSH targets remain in the target library.</p></div></div>
+        <div className="help-warning"><TriangleAlert size={15} /><div><strong>Deleting a Session</strong><p>Deleting a Session closes its terminals, Agents, and managed browser, then removes Pane and layout definitions. Saved SSH targets and database connections remain in their libraries.</p></div></div>
       </>
     },
     {
       id: 'terminal', group: 'Getting started', title: 'Panes and terminal', icon: SquareTerminal,
-      searchText: 'pane terminal local powershell pwsh wsl macos ssh split layout maximize restart search copy paste shortcut background',
+      searchText: 'pane terminal local powershell pwsh wsl macos ssh database split layout maximize minimize restart search copy paste shortcut background',
       content: <>
         <h2>Panes, layouts, and terminal use</h2>
-        <p>A Pane hosts one local, WSL, SSH, or Agent runtime. Split layouts place multiple contexts from the same Session side by side.</p>
+        <p>A Pane hosts one local, WSL, SSH, database, or Agent runtime. Split layouts place multiple contexts from the same Session side by side.</p>
         <h3>Adding a Pane</h3>
         <ol>
           <li>Select the plus button on a Session and optionally enter a Pane name.</li>
-          <li>Choose ordinary Terminal or a Coding Agent launch profile.</li>
-          <li>Choose a target. Windows offers PowerShell 7 and installed WSL distributions; macOS uses the login shell; remote targets come from the SSH target library.</li>
+          <li>Choose a local or SSH terminal, a saved database connection, or a Coding Agent launch profile.</li>
+          <li>Terminal targets: Windows offers PowerShell 7 and installed WSL distributions; macOS uses the login shell; remote targets come from the SSH target library. Database connections are listed under Database connections in the same dialog, or create them in the connection manager first.</li>
         </ol>
         <p>You can also run an installed Agent such as <code>codex</code>, <code>claude</code>, or <code>grok</code> manually in an ordinary terminal. Luna Mux recognizes the Agent after activity is detected.</p>
         <h3>Splits and layout</h3>
@@ -419,6 +452,7 @@ export function createEnglishHelpSections(commandKey: string): HelpSection[] {
           <li>The split-right and split-down buttons duplicate the current target definition into a new matching Pane.</li>
           <li>Drag dividers to resize. Ratios persist with the Session.</li>
           <li>Maximize temporarily shows one Pane; select it again to restore the full layout.</li>
+          <li>Minimize hides a Pane from the current layout without stopping its runtime. Restore it from the sidebar row or the empty-state buttons.</li>
           <li>With two or more Panes, the toolbar can arrange them horizontally, vertically, or in two columns per row.</li>
           <li>Restart closes and relaunches the current runtime. Close also removes the persistent Pane definition.</li>
         </ul>
@@ -442,6 +476,32 @@ export function createEnglishHelpSections(commandKey: string): HelpSection[] {
       </>
     },
     {
+      id: 'database', group: 'Getting started', title: 'Database Panes', icon: Database,
+      searchText: 'database sqlite mysql mariadb postgres postgresql table view sql query structure import export read-only dml ddl permission connection profile',
+      content: <>
+        <h2>Database Panes</h2>
+        <p>A database Pane connects to SQLite, MySQL / MariaDB, or PostgreSQL in the current Session. Each Pane uses its own connection. Saved profiles keep connection settings; passwords stay in the system credential store.</p>
+        <h3>Add and connect</h3>
+        <ol>
+          <li>Select the plus button on a Session and open Database connections.</li>
+          <li>Choose a saved connection, or open Manage database connections first to create a SQLite file or a network database.</li>
+          <li>Panes open read-only by default. To write, turn off read-only in Access permissions and confirm or grant DML or DDL for the current connection.</li>
+        </ol>
+        <h3>Browse and query</h3>
+        <ul>
+          <li><strong>SQL query:</strong> write and run SQL, or run only the selection. Results are paginated and can be exported.</li>
+          <li><strong>Data:</strong> browse paginated rows of the current table or view.</li>
+          <li><strong>Structure:</strong> inspect columns, indexes, and foreign keys. SQLite also supports adding or dropping columns and indexes.</li>
+        </ul>
+        <h3>Import and export</h3>
+        <ul>
+          <li>Import a SQL file, or export the whole database, one table, or query results as SQL.</li>
+          <li>Import runs writes and schema changes from the file, so read-only must be off first.</li>
+        </ul>
+        <div className="help-warning"><TriangleAlert size={15} /><div><strong>Write authorization</strong><p>Panes start read-only. DML and DDL are confirmed separately, or granted for the rest of this connection and cleared on disconnect. Agents with Luna MCP can operate an open database Pane; writes still follow these permissions.</p></div></div>
+      </>
+    },
+    {
       id: 'agents', group: 'Agents and automation', title: 'Agent workflows', icon: Sparkles,
       searchText: 'agent codex claude code managed manual hook mcp luna browser status attention waiting permission environment integration adapter multi pane collaboration output command bash remote agent ssh injection',
       content: <>
@@ -460,7 +520,7 @@ export function createEnglishHelpSections(commandKey: string): HelpSection[] {
           <li>Open the Pane to read the latest event; submit input, approve permissions, press Escape, or press Ctrl+C to continue or interrupt the Agent.</li>
         </ul>
         <h3>Multi-Agent collaboration inside a Session</h3>
-        <p>The project Session is the collaboration boundary. Codex and Claude Code runtimes with Luna MCP can discover its Panes and current runtimes and collaborate with other terminals or Agents; Grok Build does not currently have this capability.</p>
+        <p>The project Session is the collaboration boundary. Codex and Claude Code runtimes with Luna MCP can discover its Panes and current runtimes, collaborate with other terminals or Agents, and operate open database Panes; Grok Build does not currently have this capability.</p>
         <ul>
           <li><code>terminal.runtimes.list</code> returns terminal runtimes and owner Panes. A target may contain an Agent or an ordinary Bash, PowerShell, or SSH shell.</li>
           <li><code>terminal.runtime.output.read</code> incrementally reads bounded output by cursor, while <code>terminal.runtime.write</code> writes text or commands to the target PTY.</li>
@@ -483,7 +543,7 @@ export function createEnglishHelpSections(commandKey: string): HelpSection[] {
     },
     {
       id: 'browser', group: 'Agents and automation', title: 'Browser automation', icon: Globe2,
-      searchText: 'browser chrome cdp profile agent-browser mcp automatic on demand start stop restart focus tab page available agent exit profile disposable retained cookie sign-in',
+      searchText: 'browser chrome cdp profile agent-browser mcp tool group core tabs network debug state react mobile webmcp automatic on demand start stop restart focus tab page available agent exit profile disposable retained cookie sign-in',
       content: <>
         <h2>Managed browser and web verification</h2>
         <p>Every Session automatically owns one Browser Resource. It gives Codex and Claude Code runtimes with Browser MCP an isolated Chrome process, an optionally retained Profile, and an agent-browser MCP connection; Grok Build does not currently receive that connection.</p>
@@ -502,8 +562,14 @@ export function createEnglishHelpSections(commandKey: string): HelpSection[] {
           <tr><th scope="row">Stop</th><td>Closes Chrome. The Profile is deleted when retention is off and kept for the next start when it is on.</td></tr>
           <tr><th scope="row">Keep data</th><td>Can change only while Chrome is stopped. Turning it off immediately deletes retained cookies, sign-in state, and site data.</td></tr>
         </tbody></table>
+        <h3>MCP tools</h3>
+        <p>The Browser view chooses which <code>agent_browser</code> tool groups Agents can see. Core is always on and Tabs &amp; windows is on by default; Network, Debug, State, React, Mobile, and WebMCP can be enabled as needed so the tool list stays small.</p>
+        <ul>
+          <li>Changes apply immediately to new Agent connections. Restart a running Agent so it rediscovers the tool list.</li>
+          <li>A large selection can exceed Codex's current discovery limit, so tools after that limit may be unavailable.</li>
+        </ul>
         <p>Diagnostics show runtime state, PID, CDP endpoint, Profile path, and startup errors. After installing Chrome, use the refresh button to update availability.</p>
-        <div className="help-warning"><TriangleAlert size={15} /><div><strong>Agent browser automation</strong><p>Agents can use the injected <code>agent_browser</code> tools to start and operate the current Session's managed Chrome on demand. The Browser view provides manual start, focus, restart, and diagnostics for the same Browser Resource.</p></div></div>
+        <div className="help-warning"><TriangleAlert size={15} /><div><strong>Agent browser automation</strong><p>Agents can use the injected <code>agent_browser</code> tools to start and operate the current Session's managed Chrome on demand. The Browser view provides manual start, focus, restart, data retention, and MCP tool controls for the same Browser Resource.</p></div></div>
       </>
     },
     {
@@ -654,12 +720,12 @@ export function createEnglishHelpSections(commandKey: string): HelpSection[] {
     },
     {
       id: 'security', group: 'Settings and support', title: 'Security and troubleshooting', icon: ShieldCheck,
-      searchText: 'security troubleshoot error agent hook mcp browser chrome cdp ssh fingerprint credential keychain manager disconnect timeout sftp tunnel diagnostics',
+      searchText: 'security troubleshoot error agent hook mcp browser chrome cdp ssh fingerprint credential keychain manager database disconnect timeout sftp tunnel diagnostics',
       content: <>
         <h2>Security and troubleshooting</h2>
         <h3>Security boundaries</h3>
         <ul>
-          <li>Passwords, private-key passphrases, and AI API Keys use macOS Keychain or Windows Credential Manager. Private-key files are managed by the filesystem.</li>
+          <li>SSH passwords, private-key passphrases, database passwords, and AI API Keys use macOS Keychain or Windows Credential Manager. Private-key files are managed by the filesystem.</li>
           <li>Each Agent runtime receives an ephemeral identity. Codex and Claude Code Hooks, Luna MCP, and Browser MCP are scoped to its Session and Pane and revoked on exit; Grok Build uses only the lifecycle Hook.</li>
           <li>Browser Resources use a disposable Profile by default. Users may explicitly retain cookies, sign-in state, and site data for the current Session. Profile directories and CDP endpoints should remain managed by Luna Mux and agent-browser.</li>
         </ul>
