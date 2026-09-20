@@ -21,9 +21,9 @@ interface AiCommandTarget { name: string; detail: string; runtimeId?: string; co
 interface BrowserResourceState extends BrowserResource { runtime?: BrowserRuntime; tunnel?: BrowserTunnel; status: BrowserRuntimeStatus | 'stopped'; error?: string }
 const AGENT_BROWSER_TOOL_GROUPS: ReadonlyArray<{ id: AgentBrowserToolProfile; count: number; label: MessageKey; description: MessageKey }> = [
   { id: 'core', count: 29, label: 'app.browserToolsCore', description: 'app.browserToolsCoreDescription' },
+  { id: 'tabs', count: 13, label: 'app.browserToolsTabs', description: 'app.browserToolsTabsDescription' },
   { id: 'network', count: 9, label: 'app.browserToolsNetwork', description: 'app.browserToolsNetworkDescription' },
   { id: 'debug', count: 40, label: 'app.browserToolsDebug', description: 'app.browserToolsDebugDescription' },
-  { id: 'tabs', count: 13, label: 'app.browserToolsTabs', description: 'app.browserToolsTabsDescription' },
   { id: 'state', count: 27, label: 'app.browserToolsState', description: 'app.browserToolsStateDescription' },
   { id: 'react', count: 8, label: 'app.browserToolsReact', description: 'app.browserToolsReactDescription' },
   { id: 'mobile', count: 15, label: 'app.browserToolsMobile', description: 'app.browserToolsMobileDescription' },
@@ -2213,63 +2213,77 @@ function BrowserResourceManager({ resources, panes, chromeInstallation, onRefres
   const paneMap = new Map(panes.map((pane) => [pane.id, pane]))
   if (!resources.length) return <div className="browser-resource-manager empty"><Globe2 size={30} /><strong>{t('app.noBrowserResources')}</strong></div>
   return <div className="browser-resource-manager">
-    <div className="browser-resource-list">{resources.map((resource) => {
-      const live = resource.status === 'running' && Boolean(resource.runtime)
-      const sourcePane = resource.sourcePaneId ? paneMap.get(resource.sourcePaneId) : undefined
-      const statusLabel = resource.status === 'starting' ? t('app.connecting') : live ? t('app.browserRunning') : resource.status === 'error' ? t('app.browserRuntimeFailed') : t('app.browserRuntimeStopped')
-      const agentAccessLabel = live ? t('app.browserAgentAccessReady') : chromeInstallation ? t('app.browserAgentAccessOnStart') : t('app.browserAgentAccessBlocked')
-      const serviceLabel = sourcePane ? `${t('app.viaSshPane')} ${sourcePane.title}` : t('app.localService')
-      const selectedToolUpperBound = AGENT_BROWSER_TOOL_GROUPS.filter((group) => resource.toolProfiles.includes(group.id)).reduce((total, group) => total + group.count, 0)
-      return <section className={`browser-resource-detail ${live ? 'running' : resource.status}`} key={resource.id}>
-        <header>
-          <div className="browser-resource-identity"><span className={`status-dot ${live ? 'connected' : resource.status === 'error' ? 'error' : resource.status === 'starting' ? 'connecting' : 'disconnected'}`} /><Globe2 size={18} /><span><strong>{resource.name}</strong><small>{serviceLabel}</small></span></div>
-          <div className="browser-resource-actions">
-            {live ? <button className="secondary-button" onClick={() => onFocus(resource)}><ExternalLink size={15} />{t('app.openManagedChrome')}</button> : <button className="primary-button" disabled={!chromeInstallation || resource.status === 'starting'} onClick={() => onStart(resource)}><Play size={15} />{t('app.startBrowser')}</button>}
-            <button className="icon-button" title={t('app.restartBrowser')} aria-label={t('app.restartBrowser')} disabled={!resource.runtime || resource.status === 'starting'} onClick={() => onRestart(resource)}><RotateCcw size={15} /></button>
-            <button className="icon-button" title={t('app.stopBrowser')} aria-label={t('app.stopBrowser')} disabled={!resource.runtime} onClick={() => onStop(resource)}><Power size={15} /></button>
-          </div>
-        </header>
-        {chromeInstallation === null && <div className="browser-resource-warning"><ShieldAlert size={16} /><span><strong>{t('app.chromeNotFound')}</strong><small>{t('app.installChromeFirst')}</small></span><button className="icon-button" title={t('app.recheckBrowser')} aria-label={t('app.recheckBrowser')} onClick={onRefreshChrome}><RotateCcw size={15} /></button></div>}
-        {resource.error && <div className="browser-resource-error" title={resource.error}><ShieldAlert size={15} />{resource.error}</div>}
-        <dl className="browser-resource-diagnostics">
-          <div><dt>{t('app.runtimeStatus')}</dt><dd><span className={`status-dot ${live ? 'connected' : resource.status === 'error' ? 'error' : resource.status === 'starting' ? 'connecting' : 'disconnected'}`} />{statusLabel}</dd></div>
-          <div><dt>{t('app.agentBrowserAccess')}</dt><dd>{agentAccessLabel}</dd></div>
-          <div><dt>{sourcePane ? t('app.remoteServiceUrl') : t('app.initialUrl')}</dt><dd><code title={resource.url || 'about:blank'}>{resource.url || 'about:blank'}</code></dd></div>
-          <div><dt>{t('app.chromeProcess')}</dt><dd><code>{resource.runtime ? `PID ${resource.runtime.processId} · CDP ${resource.runtime.cdpPort}` : '—'}</code></dd></div>
-        </dl>
-        <div className="browser-resource-profile">
-          <div className="browser-resource-profile-heading">{t('app.browserProfileSettings')}</div>
-          <div className="settings-option-row">
-            <div><strong>{t('app.retainBrowserData')}</strong><span>{resource.retainProfile ? t('app.browserProfileRetained') : t('app.browserProfileDisposable')}</span></div>
-            <label className="switch-control" title={resource.runtime || resource.status === 'starting' ? t('app.stopBrowserBeforeProfileChange') : undefined}><input type="checkbox" checked={resource.retainProfile} disabled={Boolean(resource.runtime) || resource.status === 'starting'} onChange={(event) => onRetainProfile(resource, event.target.checked)} /><span aria-hidden="true" /></label>
-          </div>
-        </div>
-        <div className="browser-resource-tools">
-          <div className="browser-resource-tools-heading">
-            <span><strong>{t('app.browserAgentTools')}</strong><small>{t('app.browserAgentToolsDescription')}</small></span>
-            <span>{t('app.browserAgentToolCount', { value0: String(AGENT_BROWSER_TOOL_GROUPS.filter((group) => resource.toolProfiles.includes(group.id)).length) })}</span>
-          </div>
-          <div className="browser-tool-groups">{AGENT_BROWSER_TOOL_GROUPS.map((group) => {
-            const checked = resource.toolProfiles.includes(group.id)
-            const required = group.id === 'core'
-            return <label className={`browser-tool-group ${checked ? 'selected' : ''}`} key={group.id}>
-              <input type="checkbox" checked={checked} disabled={required} onChange={(event) => {
-                const selected = new Set(resource.toolProfiles)
-                if (event.target.checked) selected.add(group.id)
-                else selected.delete(group.id)
-                selected.add('core')
-                onToolProfiles(resource, AGENT_BROWSER_TOOL_GROUPS.map((candidate) => candidate.id).filter((profile) => selected.has(profile)))
-              }} />
-              <span><strong>{t(group.label)} <small>{t('app.browserAgentToolGroupCount', { value0: String(group.count) })}</small></strong><small>{t(group.description)}</small></span>
-              {required && <em>{t('app.required')}</em>}
-            </label>
-          })}</div>
-          {selectedToolUpperBound > 64 && <div className="browser-resource-warning browser-tool-warning"><ShieldAlert size={15} /><span><strong>{t('app.browserAgentToolsCodexLimit')}</strong><small>{t('app.browserAgentToolsCodexLimitDescription', { value0: String(selectedToolUpperBound) })}</small></span></div>}
-          <p className="browser-resource-profile-note">{t('app.browserAgentToolsRestartNote')}</p>
+    <div className="browser-resource-list">{resources.map((resource) => <BrowserResourceCard key={resource.id} resource={resource} sourcePane={resource.sourcePaneId ? paneMap.get(resource.sourcePaneId) : undefined} chromeInstallation={chromeInstallation} onRefreshChrome={onRefreshChrome} onStart={onStart} onFocus={onFocus} onRestart={onRestart} onStop={onStop} onRetainProfile={onRetainProfile} onToolProfiles={onToolProfiles} />)}</div>
+  </div>
+}
+
+function BrowserResourceCard({ resource, sourcePane, chromeInstallation, onRefreshChrome, onStart, onFocus, onRestart, onStop, onRetainProfile, onToolProfiles }: { resource: BrowserResourceState; sourcePane?: WorkspaceTab; chromeInstallation: ChromeInstallation | null | undefined; onRefreshChrome(): void; onStart(resource: BrowserResourceState): void; onFocus(resource: BrowserResourceState): void; onRestart(resource: BrowserResourceState): void; onStop(resource: BrowserResourceState): void; onRetainProfile(resource: BrowserResourceState, retain: boolean): void; onToolProfiles(resource: BrowserResourceState, profiles: AgentBrowserToolProfile[]): void }): React.JSX.Element {
+  const { t } = useI18n()
+  const live = resource.status === 'running' && Boolean(resource.runtime)
+  const statusLabel = resource.status === 'starting' ? t('app.connecting') : live ? t('app.browserRunning') : resource.status === 'error' ? t('app.browserRuntimeFailed') : t('app.browserRuntimeStopped')
+  const agentAccessLabel = live ? t('app.browserAgentAccessReady') : chromeInstallation ? t('app.browserAgentAccessOnStart') : t('app.browserAgentAccessBlocked')
+  const serviceLabel = sourcePane ? `${t('app.viaSshPane')} ${sourcePane.title}` : t('app.localService')
+  const profileLocked = Boolean(resource.runtime) || resource.status === 'starting'
+  const selectedCount = AGENT_BROWSER_TOOL_GROUPS.filter((group) => resource.toolProfiles.includes(group.id)).length
+  const selectedToolUpperBound = AGENT_BROWSER_TOOL_GROUPS.filter((group) => resource.toolProfiles.includes(group.id)).reduce((total, group) => total + group.count, 0)
+  const toggleGroup = (id: AgentBrowserToolProfile, enabled: boolean): void => {
+    if (id === 'core') return
+    const selected = new Set(resource.toolProfiles)
+    if (enabled) selected.add(id); else selected.delete(id)
+    selected.add('core')
+    onToolProfiles(resource, AGENT_BROWSER_TOOL_GROUPS.map((group) => group.id).filter((profile) => selected.has(profile)))
+  }
+  return <section className={`browser-resource-detail ${live ? 'running' : resource.status}`}>
+    <header>
+      <div className="browser-resource-identity"><span className={`status-dot ${live ? 'connected' : resource.status === 'error' ? 'error' : resource.status === 'starting' ? 'connecting' : 'disconnected'}`} /><Globe2 size={18} /><span><strong>{resource.name}</strong><small>{serviceLabel}</small></span></div>
+      <div className="browser-resource-actions">
+        {live ? <button className="secondary-button" onClick={() => onFocus(resource)}><ExternalLink size={15} />{t('app.openManagedChrome')}</button> : <button className="primary-button" disabled={!chromeInstallation || resource.status === 'starting'} onClick={() => onStart(resource)}><Play size={15} />{t('app.startBrowser')}</button>}
+        <button className="icon-button" title={t('app.restartBrowser')} aria-label={t('app.restartBrowser')} disabled={!resource.runtime || resource.status === 'starting'} onClick={() => onRestart(resource)}><RotateCcw size={15} /></button>
+        <button className="icon-button" title={t('app.stopBrowser')} aria-label={t('app.stopBrowser')} disabled={!resource.runtime} onClick={() => onStop(resource)}><Power size={15} /></button>
+      </div>
+    </header>
+    {chromeInstallation === null && <div className="browser-resource-warning"><ShieldAlert size={16} /><span><strong>{t('app.chromeNotFound')}</strong><small>{t('app.installChromeFirst')}</small></span><button className="icon-button" title={t('app.recheckBrowser')} aria-label={t('app.recheckBrowser')} onClick={onRefreshChrome}><RotateCcw size={15} /></button></div>}
+    {resource.error && <div className="browser-resource-error" title={resource.error}><ShieldAlert size={15} />{resource.error}</div>}
+    <dl className="browser-resource-diagnostics">
+      <div><dt>{t('app.runtimeStatus')}</dt><dd><span className={`status-dot ${live ? 'connected' : resource.status === 'error' ? 'error' : resource.status === 'starting' ? 'connecting' : 'disconnected'}`} />{statusLabel}</dd></div>
+      <div><dt>{t('app.agentBrowserAccess')}</dt><dd>{agentAccessLabel}</dd></div>
+      <div><dt>{sourcePane ? t('app.remoteServiceUrl') : t('app.initialUrl')}</dt><dd><code title={resource.url || 'about:blank'}>{resource.url || 'about:blank'}</code></dd></div>
+      <div><dt>{t('app.chromeProcess')}</dt><dd><code>{resource.runtime ? `PID ${resource.runtime.processId} · CDP ${resource.runtime.cdpPort}` : '—'}</code></dd></div>
+    </dl>
+    <div className="browser-resource-settings">
+      <section className="browser-setting-block">
+        <header><strong>{t('app.browserProfileSettings')}</strong></header>
+        <div className="browser-tool-groups">
+          <label className={`browser-tool-group ${resource.retainProfile ? 'selected' : ''} ${profileLocked ? 'locked' : ''}`} title={profileLocked ? t('app.stopBrowserBeforeProfileChange') : undefined}>
+            <input type="checkbox" checked={resource.retainProfile} disabled={profileLocked} onChange={(event) => onRetainProfile(resource, event.target.checked)} />
+            <span>
+              <strong>{t('app.retainBrowserData')}</strong>
+              <small>{t('app.browserProfileRetained')}</small>
+            </span>
+          </label>
         </div>
       </section>
-    })}</div>
-  </div>
+      <section className="browser-setting-block">
+        <header>
+          <strong>{t('app.browserAgentTools')}</strong>
+          <span>{t('app.browserAgentToolCount', { value0: String(selectedCount) })}</span>
+        </header>
+        <p className="browser-setting-copy">{t('app.browserAgentToolsDescription')} {t('app.browserAgentToolsRestartNote')}</p>
+        <div className="browser-tool-groups">{AGENT_BROWSER_TOOL_GROUPS.map((group) => {
+          const checked = resource.toolProfiles.includes(group.id)
+          const required = group.id === 'core'
+          return <label className={`browser-tool-group ${checked ? 'selected' : ''} ${required ? 'locked' : ''}`} key={group.id}>
+            <input type="checkbox" checked={checked} disabled={required} onChange={(event) => toggleGroup(group.id, event.target.checked)} />
+            <span>
+              <strong>{t(group.label)} <small>{group.count}</small>{required && <em>{t('app.required')}</em>}</strong>
+              <small>{t(group.description)}</small>
+            </span>
+          </label>
+        })}</div>
+        {selectedToolUpperBound > 64 && <div className="browser-resource-warning browser-tool-warning"><ShieldAlert size={15} /><span><strong>{t('app.browserAgentToolsCodexLimit')}</strong><small>{t('app.browserAgentToolsCodexLimitDescription', { value0: String(selectedToolUpperBound) })}</small></span></div>}
+      </section>
+    </div>
+  </section>
 }
 
 function BookmarkArchiveImportDialog({ preview, onClose, onImported, onError }: { preview: BookmarkArchivePreview; onClose(): void; onImported(result: { importedConnections: number; importedGroups: number }): void; onError(message: string): void }): React.JSX.Element {

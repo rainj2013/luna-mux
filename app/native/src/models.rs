@@ -301,8 +301,12 @@ pub struct BrowserResourceInput {
 }
 
 pub const AGENT_BROWSER_TOOL_PROFILES: [&str; 8] = [
-    "core", "network", "debug", "tabs", "state", "react", "mobile", "webmcp",
+    "core", "tabs", "network", "debug", "state", "react", "mobile", "webmcp",
 ];
+
+pub fn default_agent_browser_tool_profiles() -> Vec<String> {
+    vec!["core".into(), "tabs".into()]
+}
 
 pub fn normalize_agent_browser_tool_profiles(
     profiles: impl IntoIterator<Item = String>,
