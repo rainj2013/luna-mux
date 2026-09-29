@@ -8,6 +8,7 @@ import { ChevronDown, ChevronUp, ClipboardPaste, Copy, KeyRound, Palette, Play, 
 import type { TerminalRuntimeEvent, TerminalSettings, TerminalUiDiagnosticEvent, TerminalUiInputPath, TerminalUiKeyCategory } from '../types'
 import { colorWithOpacity } from '../terminal-style'
 import { shouldUseWebglRenderer } from '../terminal-renderer'
+import { serializeTerminalSnapshot } from '../terminal-snapshot'
 import { createTerminalOutputWriter, type TerminalOutputWriter } from '../terminal-output-writer'
 import { agentImagePasteInput, handleCodexMultilinePasteEvent, routeTerminalPaste } from '../terminal-input'
 import { useI18n } from '../i18n'
@@ -816,7 +817,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
             outputCursor: renderedOutputCursor.current,
             cols: term.cols,
             rows: term.rows,
-            serialized: serialize.serialize({ scrollback: 5000 })
+            serialized: serializeTerminalSnapshot(term, serialize)
           })
         } catch {
           terminalSnapshots.delete(paneId)
