@@ -55,13 +55,44 @@ function balancedLayout(nodes: MuxSplitNode[], direction: 'horizontal' | 'vertic
   }
 }
 
-export function layoutForPreset(paneIds: string[], preset: LayoutPreset): MuxSplitNode {
-  const leaves = paneIds.map((paneId): MuxSplitNode => ({ type: 'pane', paneId }))
-  if (preset !== 'twoColumns') return balancedLayout(leaves, preset)
+function layoutForPresetNodes(nodes: MuxSplitNode[], preset: LayoutPreset): MuxSplitNode {
+  if (preset !== 'twoColumns') return balancedLayout(nodes, preset)
   const rows: MuxSplitNode[] = []
-  for (let index = 0; index < leaves.length; index += 2) {
-    const row = leaves.slice(index, index + 2)
+  for (let index = 0; index < nodes.length; index += 2) {
+    const row = nodes.slice(index, index + 2)
     rows.push(row.length === 1 ? row[0]! : balancedLayout(row, 'horizontal'))
   }
   return balancedLayout(rows, 'vertical')
+}
+
+export function layoutForPreset(paneIds: string[], preset: LayoutPreset): MuxSplitNode {
+  return layoutForPresetNodes(paneIds.map((paneId): MuxSplitNode => ({ type: 'pane', paneId })), preset)
+}
+
+// Keep every hidden-only branch beside its nearest visible pane while arranging
+// the visible panes. Projecting the result onto visible panes yields the preset.
+export function layoutForVisiblePreset(layout: MuxSplitNode, visiblePaneIds: ReadonlySet<string>, preset: LayoutPreset): MuxSplitNode {
+  const collect = (node: MuxSplitNode): { visible: MuxSplitNode[]; hidden?: MuxSplitNode } => {
+    if (node.type === 'pane') return visiblePaneIds.has(node.paneId)
+      ? { visible: [node] }
+      : { visible: [], hidden: node }
+
+    const first = collect(node.first)
+    const second = collect(node.second)
+    if (first.visible.length && second.visible.length) return { visible: [...first.visible, ...second.visible] }
+    if (first.visible.length) {
+      const visible = [...first.visible]
+      visible[visible.length - 1] = { ...node, first: visible[visible.length - 1]!, second: second.hidden! }
+      return { visible }
+    }
+    if (second.visible.length) {
+      const visible = [...second.visible]
+      visible[0] = { ...node, first: first.hidden!, second: visible[0]! }
+      return { visible }
+    }
+    return { visible: [], hidden: node }
+  }
+
+  const visible = collect(layout).visible
+  return visible.length ? layoutForPresetNodes(visible, preset) : layout
 }

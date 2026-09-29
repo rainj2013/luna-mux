@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { layoutFromPanes, layoutForPreset, paneIdsInLayout, resizeVisibleSplit } from '../app/frontend/src/mux-layout.ts'
+import { layoutFromPanes, layoutForPreset, layoutForVisiblePreset, paneIdsInLayout, resizeVisibleSplit } from '../app/frontend/src/mux-layout.ts'
 import type { MuxSplitNode } from '../app/frontend/src/types.ts'
 
 const panes = [{ id: 'ssh', kind: 'terminal' }, { id: 'powershell', kind: 'terminal' }, { id: 'db', kind: 'database' }]
@@ -62,4 +62,36 @@ test('four panes use equal rows and keep sidebar order', () => {
   assert.deepEqual(paneIdsInLayout(layout.first), ['ssh', 'powershell'])
   assert.deepEqual(paneIdsInLayout(layout.second), ['db', 'fourth'])
   assert.deepEqual(layoutForPreset(paneIdsInLayout(layout), 'twoColumns'), layout)
+})
+
+test('layout presets rearrange only visible panes and retain a hidden pane beside its neighbor', () => {
+  const fourPanes = [...panes, { id: 'fourth' }]
+  const original: MuxSplitNode = {
+    type: 'split', direction: 'vertical', ratio: 0.6,
+    first: { type: 'split', direction: 'horizontal', ratio: 0.3, first: leaf('ssh'), second: leaf('powershell') },
+    second: { type: 'split', direction: 'horizontal', ratio: 0.4, first: leaf('db'), second: leaf('fourth') }
+  }
+  const visible = new Set(['ssh', 'db', 'fourth'])
+  for (const preset of ['horizontal', 'vertical', 'twoColumns'] as const) {
+    const arranged = layoutForVisiblePreset(original, visible, preset)
+    assert.deepEqual(paneIdsInLayout(arranged).sort(), fourPanes.map((pane) => pane.id).sort())
+    assert.deepEqual(layoutFromPanes(arranged, fourPanes.filter((pane) => visible.has(pane.id))), layoutForPreset(['ssh', 'db', 'fourth'], preset))
+    assert.deepEqual(layoutFromPanes(arranged, panes.slice(0, 2)), original.type === 'split' ? original.first : undefined)
+  }
+})
+
+test('multiple hidden panes retain their own grouping when visible panes are rearranged', () => {
+  const hidden: MuxSplitNode = { type: 'split', direction: 'vertical', ratio: 0.35, first: leaf('hidden-a'), second: leaf('hidden-b') }
+  const original: MuxSplitNode = { type: 'split', direction: 'horizontal', ratio: 0.25, first: hidden, second: grid }
+  const visible = new Set(['ssh', 'powershell', 'db'])
+  const arranged = layoutForVisiblePreset(original, visible, 'vertical')
+  assert.deepEqual(layoutFromPanes(arranged, panes), layoutForPreset(['ssh', 'powershell', 'db'], 'vertical'))
+  assert.deepEqual(paneIdsInLayout(arranged), ['hidden-a', 'hidden-b', 'ssh', 'powershell', 'db'])
+  assert.deepEqual(layoutFromPanes(arranged, [{ id: 'hidden-a' }, { id: 'hidden-b' }, { id: 'ssh' }]), { type: 'split', direction: 'horizontal', ratio: 0.25, first: hidden, second: leaf('ssh') })
+})
+
+test('all-visible and no-visible preset requests keep the expected complete layout', () => {
+  assert.deepEqual(layoutForVisiblePreset(grid, new Set(['ssh', 'powershell', 'db']), 'horizontal'), layoutForPreset(['ssh', 'powershell', 'db'], 'horizontal'))
+  assert.deepEqual(layoutForVisiblePreset(grid, new Set(), 'horizontal'), grid)
+  assert.deepEqual(layoutForVisiblePreset(grid, new Set(['db']), 'horizontal'), grid)
 })

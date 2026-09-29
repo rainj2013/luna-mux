@@ -5,7 +5,7 @@ import type { AgentBrowserToolProfile } from './types'
 import { discardTerminalSnapshot, TerminalPane, type TerminalPaneHandle } from './components/TerminalPane'
 import { DatabasePane, type DatabasePaneHandle } from './components/DatabasePane'
 import type { DatabaseProfile } from './types'
-import { layoutFromPanes, paneIdsInLayout, layoutForPreset, resizeVisibleSplit, type LayoutPreset } from './mux-layout'
+import { layoutFromPanes, paneIdsInLayout, layoutForPreset, layoutForVisiblePreset, resizeVisibleSplit, type LayoutPreset } from './mux-layout'
 import { databasePaneTarget, parseDatabasePaneTarget } from './database-pane-target'
 import { agentAdapterId } from './terminal-input'
 import { SftpPane } from './components/SftpPane'
@@ -1495,9 +1495,9 @@ export function App(): React.JSX.Element {
 
   const applyLayoutPreset = async (preset: LayoutPreset): Promise<void> => {
     if (!activeMuxSession) return
-    const currentLayout = layoutFromPanes(activeMuxSession.layout, visibleSessionTabs)
-    if (!currentLayout) return
-    const layout = layoutForPreset(paneIdsInLayout(currentLayout), preset)
+    const currentLayout = layoutFromPanes(activeMuxSession.layout, sessionTabs)
+    if (!currentLayout || visibleSessionTabs.length < 2) return
+    const layout = layoutForVisiblePreset(currentLayout, new Set(visibleSessionTabs.map((pane) => pane.id)), preset)
     setLayoutMenuOpen(false)
     setMaximizedPaneId('')
     try { await persistSessionLayout(activeMuxSession, layout) }
@@ -1623,7 +1623,7 @@ export function App(): React.JSX.Element {
             {workspaceView === 'files' && activeBookmark && activeSshRuntimeId && <button className="secondary-button" title={t('app.deploy')} onClick={() => setDeploymentDialog(true)}><Rocket size={15} />{t('app.deploy')}</button>}
             {workspaceView === 'terminal' && activeAiCommandTarget && <button className="secondary-button" title={t('app.aiCommand')} onClick={() => setAiDialog(true)}><WandSparkles size={15} />{t('app.aiCommand')}</button>}
             {workspaceView !== 'browser' && activeBookmark && activeTab?.status === 'connected' && activeSshRuntimeId && <button className="secondary-button" title={t('app.portForwarding')} onClick={() => setTunnelDialog(true)}><Network size={15} />{t('app.portForwarding')}</button>}
-            {workspaceView === 'terminal' && sessionTabs.length > 1 && <div className="layout-menu-anchor" onPointerDown={(event) => event.stopPropagation()}>
+            {workspaceView === 'terminal' && visibleSessionTabs.length > 1 && <div className="layout-menu-anchor" onPointerDown={(event) => event.stopPropagation()}>
               <button className="icon-button" title={t('app.arrangePanes')} aria-label={t('app.arrangePanes')} aria-haspopup="menu" aria-expanded={layoutMenuOpen} onClick={() => setLayoutMenuOpen((open) => !open)}><LayoutGrid size={17} /></button>
               {layoutMenuOpen && <div className="layout-menu" role="menu" aria-label={t('app.arrangePanes')}>
                 <button role="menuitem" onClick={() => void applyLayoutPreset('horizontal')}><Columns3 size={16} />{t('app.horizontalLayout')}</button>

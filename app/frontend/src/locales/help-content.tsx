@@ -82,7 +82,7 @@ export function createChineseHelpSections(commandKey: string): HelpSection[] {
           <li>拖动窗格之间的分隔线调整比例，比例会随会话保存。</li>
           <li>最大化按钮临时只显示一个窗格，再次点击恢复完整布局。</li>
           <li>最小化会从当前布局中收起窗格，但不关闭运行时。可在侧栏窗格行或空状态中恢复。</li>
-          <li>两个以上窗格时，顶部布局菜单可改为横向、纵向或每行两列排列。</li>
+          <li>至少两个可见窗格时，顶部布局菜单只调整可见窗格的排列；隐藏窗格恢复后仍在原相邻窗格旁。</li>
           <li>重启会关闭当前运行时并按原目标重新启动；关闭窗格会同时移除它的持久化定义。</li>
         </ul>
         <h3>终端操作</h3>
@@ -453,7 +453,7 @@ export function createEnglishHelpSections(commandKey: string): HelpSection[] {
           <li>Drag dividers to resize. Ratios persist with the Session.</li>
           <li>Maximize temporarily shows one Pane; select it again to restore the full layout.</li>
           <li>Minimize hides a Pane from the current layout without stopping its runtime. Restore it from the sidebar row or the empty-state buttons.</li>
-          <li>With two or more Panes, the toolbar can arrange them horizontally, vertically, or in two columns per row.</li>
+          <li>With at least two visible Panes, the toolbar arranges only those Panes. Hidden Panes return beside their original neighbors.</li>
           <li>Restart closes and relaunches the current runtime. Close also removes the persistent Pane definition.</li>
         </ul>
         <h3>Terminal operations</h3>
