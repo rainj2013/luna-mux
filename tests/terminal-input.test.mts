@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { agentAdapterId, agentImagePasteInput, codexMultilinePastePayload, handleCodexMultilinePasteEvent, routeTerminalPaste } from '../app/frontend/src/terminal-input.ts'
+import { agentAdapterId, agentImagePasteInput, codexControlMInput, codexMultilinePastePayload, handleCodexMultilinePasteEvent, routeTerminalPaste } from '../app/frontend/src/terminal-input.ts'
 
 test('image paste uses each Agent adapter\'s native shortcut', () => {
   assert.equal(agentImagePasteInput('codex', 'win32'), '\x16')
@@ -24,6 +24,11 @@ test('Codex newline-only and trailing-newline pastes remain paste events', () =>
 
 test('single-line text keeps using xterm paste handling', () => {
   assert.equal(codexMultilinePastePayload('single line'), undefined)
+})
+
+test('Codex Ctrl+M inserts a newline without submitting', () => {
+  assert.equal(codexControlMInput(true), '\x1b\r')
+  assert.equal(codexControlMInput(false), undefined)
 })
 
 test('managed Codex is known from its launch profile before the first hook event', () => {

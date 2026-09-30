@@ -10,7 +10,7 @@ import { colorWithOpacity } from '../terminal-style'
 import { shouldUseWebglRenderer } from '../terminal-renderer'
 import { serializeTerminalSnapshot } from '../terminal-snapshot'
 import { createTerminalOutputWriter, type TerminalOutputWriter } from '../terminal-output-writer'
-import { agentImagePasteInput, handleCodexMultilinePasteEvent, routeTerminalPaste } from '../terminal-input'
+import { agentImagePasteInput, codexControlMInput, handleCodexMultilinePasteEvent, routeTerminalPaste } from '../terminal-input'
 import { useI18n } from '../i18n'
 
 const terminalHighWaterMark = 1024 * 1024
@@ -516,6 +516,20 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
 
     term.attachCustomKeyEventHandler((event) => {
       if (event.type === 'keydown') recordUiDiagnostic('keydown', terminalKeyCategory(event), 250)
+      if (event.key.toLowerCase() === 'm' && event.ctrlKey && !event.altKey && !event.metaKey) {
+        const newline = codexControlMInput(activeAgentAdapterIdRef.current === 'codex')
+        if (newline === undefined) return true
+        if (event.type === 'keydown') {
+          event.preventDefault()
+          event.stopPropagation()
+          writer.markInteractive()
+          writeTerminalInput(newline)
+        } else {
+          event.preventDefault()
+          event.stopPropagation()
+        }
+        return event.type === 'keyup'
+      }
       if (event.key === 'Enter' && event.shiftKey) {
         if (event.type === 'keydown') {
           event.preventDefault()
