@@ -655,6 +655,7 @@ impl AgentHookService {
                     signal.into(),
                     None,
                     None,
+                    None,
                     ManagedAgentEvidence::TerminalHeuristic,
                 );
             }
@@ -681,6 +682,7 @@ impl AgentHookService {
                 .get("turn_id")
                 .and_then(Value::as_str)
                 .map(str::to_string),
+            Some(&payload),
             ManagedAgentEvidence::StructuredHook,
         )
     }
@@ -691,12 +693,14 @@ impl AgentHookService {
         hook_event_name: String,
         agent_session_id: Option<String>,
         agent_turn_id: Option<String>,
+        payload: Option<&Value>,
         evidence: ManagedAgentEvidence,
     ) -> ManagedAgentEvent {
         let adapter_id = agent_adapters::adapter_id_for_profile(&context.launch_profile_id)
             .unwrap_or(agent_adapters::CODEX_ADAPTER_ID)
             .to_string();
-        let (status, waiting_reason) = status_for_hook(&hook_event_name, &adapter_id);
+        let (status, waiting_reason) =
+            status_for_hook_with_payload(&hook_event_name, &adapter_id, payload);
         let mut events = self.events.lock().expect("agent event buffer lock");
         let event = ManagedAgentEvent {
             sequence: events.next_sequence,
@@ -1081,14 +1085,35 @@ async fn receive_hook(
     ))
 }
 
+#[cfg(test)]
 fn status_for_hook(
     hook_event_name: &str,
     adapter_id: &str,
 ) -> (ManagedAgentStatus, Option<ManagedAgentWaitingReason>) {
+    status_for_hook_with_payload(hook_event_name, adapter_id, None)
+}
+
+fn status_for_hook_with_payload(
+    hook_event_name: &str,
+    adapter_id: &str,
+    payload: Option<&Value>,
+) -> (ManagedAgentStatus, Option<ManagedAgentWaitingReason>) {
     match hook_event_name {
         "PermissionRequest" => (
-            ManagedAgentStatus::Waiting,
-            Some(ManagedAgentWaitingReason::Permission),
+            if payload.is_some_and(codex_permission_is_auto_approved)
+                && adapter_id == agent_adapters::CODEX_ADAPTER_ID
+            {
+                ManagedAgentStatus::Working
+            } else {
+                ManagedAgentStatus::Waiting
+            },
+            if payload.is_some_and(codex_permission_is_auto_approved)
+                && adapter_id == agent_adapters::CODEX_ADAPTER_ID
+            {
+                None
+            } else {
+                Some(ManagedAgentWaitingReason::Permission)
+            },
         ),
         // Claude Code and Grok Build emit `SubagentStop` for delegated work;
         // that event can fire many times before the main turn finishes.
@@ -1107,6 +1132,26 @@ fn status_for_hook(
         "HookError" | "InvalidHookPayload" => (ManagedAgentStatus::Error, None),
         _ => (ManagedAgentStatus::Working, None),
     }
+}
+
+fn codex_permission_is_auto_approved(payload: &Value) -> bool {
+    [
+        "permission_mode",
+        "permissionMode",
+        "approval_policy",
+        "approvalPolicy",
+        "sandbox_mode",
+        "sandboxMode",
+    ]
+    .iter()
+    .filter_map(|key| payload.get(*key).and_then(Value::as_str))
+    .map(|value| value.to_ascii_lowercase().replace(['-', '_'], ""))
+    .any(|value| {
+        matches!(
+            value.as_str(),
+            "never" | "fullaccess" | "bypass" | "dangerouslybypass" | "dangerfullaccess"
+        )
+    })
 }
 
 pub fn try_run_hook_forwarder(args: &[String]) -> Option<i32> {
@@ -1513,6 +1558,22 @@ mod tests {
         assert_eq!(
             status_for_hook("RuntimeExit", agent_adapters::CODEX_ADAPTER_ID),
             (ManagedAgentStatus::Completed, None)
+        );
+        assert_eq!(
+            status_for_hook_with_payload(
+                "PermissionRequest",
+                agent_adapters::CODEX_ADAPTER_ID,
+                Some(&json!({"permission_mode": "never"})),
+            ),
+            (ManagedAgentStatus::Working, None)
+        );
+        assert_eq!(
+            status_for_hook_with_payload(
+                "PermissionRequest",
+                agent_adapters::CODEX_ADAPTER_ID,
+                Some(&json!({"permissionMode": "full-access"})),
+            ),
+            (ManagedAgentStatus::Working, None)
         );
     }
 
