@@ -2224,7 +2224,6 @@ function BrowserResourceCard({ resource, sourcePane, chromeInstallation, onRefre
   const serviceLabel = sourcePane ? `${t('app.viaSshPane')} ${sourcePane.title}` : t('app.localService')
   const profileLocked = Boolean(resource.runtime) || resource.status === 'starting'
   const selectedCount = AGENT_BROWSER_TOOL_GROUPS.filter((group) => resource.toolProfiles.includes(group.id)).length
-  const selectedToolUpperBound = AGENT_BROWSER_TOOL_GROUPS.filter((group) => resource.toolProfiles.includes(group.id)).reduce((total, group) => total + group.count, 0)
   const toggleGroup = (id: AgentBrowserToolProfile, enabled: boolean): void => {
     if (id === 'core') return
     const selected = new Set(resource.toolProfiles)
@@ -2279,7 +2278,6 @@ function BrowserResourceCard({ resource, sourcePane, chromeInstallation, onRefre
             </span>
           </label>
         })}</div>
-        {selectedToolUpperBound > 64 && <div className="browser-resource-warning browser-tool-warning"><ShieldAlert size={15} /><span><strong>{t('app.browserAgentToolsCodexLimit')}</strong><small>{t('app.browserAgentToolsCodexLimitDescription', { value0: String(selectedToolUpperBound) })}</small></span></div>}
       </section>
     </div>
   </section>

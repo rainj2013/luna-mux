@@ -871,8 +871,6 @@ export default {
   "app.browserAgentToolsRestartNote": "更改会立即用于新连接的 Agent；已经运行的 Agent 需要重启，才能重新发现工具。",
   "app.browserAgentToolCount": "已启用 {{value0}} 个工具组",
   "app.browserAgentToolGroupCount": "最多 {{value0}} 个工具",
-  "app.browserAgentToolsCodexLimit": "当前选择可能超过 Codex 的工具发现上限",
-  "app.browserAgentToolsCodexLimitDescription": "所选分组最多包含 {{value0}} 个工具。在 Codex 支持 MCP 分页工具列表前，第 64 个之后的工具可能不可用。",
   "app.required": "必选",
   "app.browserToolsCore": "Core 基础操作",
   "app.browserToolsCoreDescription": "日常网页操作：打开页面、读取内容、点击填写、等待加载、截图，以及基础标签页切换。",

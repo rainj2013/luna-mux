@@ -566,7 +566,6 @@ export function createEnglishHelpSections(commandKey: string): HelpSection[] {
         <p>The Browser view chooses which <code>agent_browser</code> tool groups Agents can see. Core is always on and Tabs &amp; windows is on by default; Network, Debug, State, React, Mobile, and WebMCP can be enabled as needed so the tool list stays small.</p>
         <ul>
           <li>Changes apply immediately to new Agent connections. Restart a running Agent so it rediscovers the tool list.</li>
-          <li>A large selection can exceed Codex's current discovery limit, so tools after that limit may be unavailable.</li>
         </ul>
         <p>Diagnostics show runtime state, PID, CDP endpoint, Profile path, and startup errors. After installing Chrome, use the refresh button to update availability.</p>
         <div className="help-warning"><TriangleAlert size={15} /><div><strong>Agent browser automation</strong><p>Agents can use the injected <code>agent_browser</code> tools to start and operate the current Session's managed Chrome on demand. The Browser view provides manual start, focus, restart, data retention, and MCP tool controls for the same Browser Resource.</p></div></div>

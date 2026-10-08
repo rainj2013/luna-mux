@@ -420,8 +420,6 @@ body.mux-split-resizing { cursor: col-resize; user-select: none; }
 .browser-tool-group > span > strong small { color: var(--text-muted); }
 .browser-tool-group > span > strong em { color: var(--accent); font-style: normal; }
 .browser-tool-group > span > small { color: var(--text-muted); font-size: 11px; line-height: 1.55; }
-.browser-resource-warning.browser-tool-warning { min-height: 0; margin: 0; padding: 8px 10px; grid-template-columns: 18px minmax(0, 1fr); color: var(--warning); border: 1px solid var(--warning); border-radius: var(--radius-control); background: var(--warning-surface); }
-.browser-resource-warning.browser-tool-warning strong, .browser-resource-warning.browser-tool-warning small { color: var(--warning); font-size: 11px; }
 
 .browser-agent-access { min-width: 0; margin-top: 3px; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; color: var(--text-subtle); font-size: 9px; }
 .browser-agent-access > span { font-weight: 600; }

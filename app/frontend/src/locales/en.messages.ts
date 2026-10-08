@@ -871,8 +871,6 @@ export default {
   "app.browserAgentToolsRestartNote": "Changes apply immediately to new Agent connections; restart a running Agent so it rediscovers the MCP tool list.",
   "app.browserAgentToolCount": "{{value0}} tool groups enabled",
   "app.browserAgentToolGroupCount": "up to {{value0}} tools",
-  "app.browserAgentToolsCodexLimit": "This selection may exceed Codex's current discovery limit",
-  "app.browserAgentToolsCodexLimitDescription": "The selected groups contain up to {{value0}} tools. Until Codex follows paginated MCP tool lists, tools after the first 64 may be unavailable.",
   "app.required": "Required",
   "app.browserToolsCore": "Core",
   "app.browserToolsCoreDescription": "Everyday page work: open a page, read it, click and fill, wait, screenshot, run scripts, and switch basic tabs.",
