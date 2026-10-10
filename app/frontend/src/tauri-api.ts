@@ -209,6 +209,7 @@ export async function createTauriApi(): Promise<AppApi> {
       profiles: () => call('managed_agent_profiles_list'),
       availability: (profileId, targetId) => call('managed_agent_profile_availability', { profileId, targetId }),
       events: () => call('managed_agents_events'),
+      sessionTitle: (runtimeId, paneId) => call('managed_agent_session_title', { runtimeId, paneId }),
       setNotificationFocus: (muxSessionId, paneId, terminalVisible) => call('managed_agents_set_notification_focus', { muxSessionId, paneId, terminalVisible })
     },
     controlAudit: {

@@ -2026,6 +2026,41 @@ pub fn managed_agents_events(state: State<AppState>) -> Vec<ManagedAgentEvent> {
 }
 
 #[tauri::command]
+pub async fn managed_agent_session_title(
+    state: State<'_, AppState>,
+    runtime_id: String,
+    pane_id: String,
+) -> Result<Option<String>, String> {
+    let Some(source) = state.agent_hooks.title_source(&runtime_id, &pane_id) else {
+        return Ok(None);
+    };
+    let Some(runtime) = state.terminal_backend.list()?.into_iter().find(|runtime| {
+        runtime.runtime_id == runtime_id
+            && runtime
+                .context
+                .as_ref()
+                .is_some_and(|context| context.pane_id == pane_id)
+    }) else {
+        return Ok(None);
+    };
+    let title = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        crate::agent_session_title::read_title(source.clone(), runtime.target_id, &state.sessions),
+    )
+    .await
+    .ok()
+    .flatten();
+    // A session may end or switch while disk/SFTP I/O is pending.
+    Ok((state
+        .agent_hooks
+        .title_source(&runtime_id, &pane_id)
+        .as_ref()
+        == Some(&source))
+    .then_some(title)
+    .flatten())
+}
+
+#[tauri::command]
 pub fn managed_agents_set_notification_focus(
     state: State<AppState>,
     mux_session_id: Option<String>,

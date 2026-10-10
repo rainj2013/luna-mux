@@ -2,6 +2,7 @@ mod agent_adapters;
 mod agent_command;
 mod agent_hooks;
 mod agent_profiles;
+mod agent_session_title;
 mod ai;
 mod app_icon;
 mod browser_runtime;
@@ -35,6 +36,7 @@ mod ssh_config;
 mod ssh_terminal_backend;
 mod terminal_backend;
 mod terminal_cli;
+mod terminal_environment;
 mod terminal_input_diagnostics;
 mod terminal_interaction;
 mod terminal_output;
@@ -527,6 +529,7 @@ pub fn run() {
             managed_agent_profiles_list,
             managed_agent_profile_availability,
             managed_agents_events,
+            managed_agent_session_title,
             managed_agents_set_notification_focus,
             managed_agents_activate_notification,
             control_catalog,
@@ -970,6 +973,9 @@ mod exit_tests {
             agent_desktop_notification_body(&permission, "zh-CN"),
             "Agent 正在等待权限确认"
         );
+
+        let full_access = agent_event("PermissionRequest", ManagedAgentStatus::Working);
+        assert!(!should_send_agent_desktop_notification(&full_access));
 
         let completed = agent_event("Stop", ManagedAgentStatus::Completed);
         assert!(should_send_agent_desktop_notification(&completed));

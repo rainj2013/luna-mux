@@ -249,6 +249,8 @@ export default {
   "app.paneName": "窗格名称（可选）",
   "app.paneNamePlaceholder": "未填写则使用终端或目标名称",
   "app.paneNameRequired": "窗格名称",
+  "app.loadingAgentTitle": "正在读取 Agent 标题…",
+  "app.agentTitleUnavailable": "暂无可读取的 Agent 标题，可以手动输入窗格名称。",
   "app.renamePane": "重命名窗格",
   "app.terminalPane": "终端",
   "app.codingAgentPane": "Coding Agent",

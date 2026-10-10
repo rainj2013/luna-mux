@@ -249,6 +249,8 @@ export default {
   "app.paneName": "Pane name (optional)",
   "app.paneNamePlaceholder": "Uses the terminal or target name when empty",
   "app.paneNameRequired": "Pane name",
+  "app.loadingAgentTitle": "Reading agent title…",
+  "app.agentTitleUnavailable": "No agent title is available. You can enter a pane name.",
   "app.renamePane": "Rename pane",
   "app.terminalPane": "Terminal",
   "app.codingAgentPane": "Coding agent",

@@ -251,6 +251,12 @@ impl InProcessLocalPtyTerminalBackend {
                 {
                     command.args(["--cd", cwd]);
                 }
+                command.args([
+                    "--exec",
+                    "/bin/sh",
+                    "-c",
+                    crate::terminal_environment::WSL_COLOR_SHELL,
+                ]);
                 return Ok(command);
             }
             #[cfg(not(windows))]
@@ -623,6 +629,12 @@ impl InProcessLocalPtyTerminalBackend {
 }
 
 fn configure_terminal_environment(command: &mut CommandBuilder, target_id: &str) {
+    // The desktop may be launched by an agent/build tool with NO_COLOR=1.
+    // A terminal runtime has its own color capabilities, regardless of that parent.
+    command.env_remove("NO_COLOR");
+    for (name, value) in crate::terminal_environment::COLOR_ENVIRONMENT {
+        command.env(name, value);
+    }
     if target_id == MACOS_SHELL_TARGET {
         // Finder-launched applications do not inherit terminal capabilities or
         // necessarily receive a UTF-8 locale from a parent terminal. zsh treats
@@ -643,7 +655,6 @@ fn configure_terminal_environment(command: &mut CommandBuilder, target_id: &str)
         });
         if needs_fallback {
             command.env("TERM", XTERM_256COLOR);
-            command.env("COLORTERM", TRUECOLOR);
         }
     }
 }
@@ -758,10 +769,25 @@ fn wsl_environment_bridge(request: &TerminalRuntimeCreateRequest) -> String {
     let mut names = std::env::var("WSLENV")
         .unwrap_or_default()
         .split(':')
-        .filter(|value| !value.is_empty())
+        .filter(|value| {
+            !value.is_empty()
+                && !is_color_environment_name(value.split('/').next().unwrap_or(value))
+        })
         .map(str::to_owned)
         .collect::<Vec<_>>();
-    names.extend(request.launch_environment.keys().cloned());
+    names.extend(
+        request
+            .launch_environment
+            .keys()
+            .filter(|name| !is_color_environment_name(name))
+            .cloned(),
+    );
+    names.extend(
+        crate::terminal_environment::COLOR_ENVIRONMENT
+            .into_iter()
+            .map(|(name, _)| name.to_owned()),
+    );
+    names.push("TERM".into());
     if request.managed_agent.is_some() {
         names.extend(
             [
@@ -778,6 +804,14 @@ fn wsl_environment_bridge(request: &TerminalRuntimeCreateRequest) -> String {
     names.sort();
     names.dedup();
     names.join(":")
+}
+
+fn is_color_environment_name(name: &str) -> bool {
+    name.eq_ignore_ascii_case("NO_COLOR")
+        || name.eq_ignore_ascii_case("TERM")
+        || crate::terminal_environment::COLOR_ENVIRONMENT
+            .iter()
+            .any(|(key, _)| name.eq_ignore_ascii_case(key))
 }
 
 #[async_trait]
@@ -1459,14 +1493,11 @@ mod terminal_environment_tests {
         configure_terminal_environment(&mut command, POWERSHELL_TARGET);
 
         assert_eq!(command.get_env("TERM"), Some(OsStr::new("custom-terminal")));
-        assert_eq!(
-            command.get_env("COLORTERM"),
-            Some(OsStr::new("platform-color"))
-        );
+        assert_eq!(command.get_env("COLORTERM"), Some(OsStr::new(TRUECOLOR)));
     }
 
     #[test]
-    fn wsl_keeps_its_platform_environment() {
+    fn wsl_advertises_color_without_replacing_the_windows_launcher_term() {
         let mut command = CommandBuilder::new("shell");
         command.env("TERM", "platform-default");
         command.env("COLORTERM", "platform-color");
@@ -1477,10 +1508,32 @@ mod terminal_environment_tests {
             command.get_env("TERM"),
             Some(OsStr::new("platform-default"))
         );
-        assert_eq!(
-            command.get_env("COLORTERM"),
-            Some(OsStr::new("platform-color"))
-        );
+        assert_eq!(command.get_env("COLORTERM"), Some(OsStr::new(TRUECOLOR)));
+    }
+
+    #[test]
+    fn all_terminal_targets_remove_inherited_color_suppression() {
+        for target in [
+            POWERSHELL_TARGET,
+            POWERSHELL5_TARGET,
+            MACOS_SHELL_TARGET,
+            "local:wsl:Ubuntu",
+        ] {
+            let mut command = CommandBuilder::new("shell");
+            command.env("NO_COLOR", "1");
+            command.env("FORCE_COLOR", "0");
+            command.env("CLICOLOR", "0");
+            command.env("CLICOLOR_FORCE", "0");
+            configure_terminal_environment(&mut command, target);
+            assert!(command.get_env("NO_COLOR").is_none(), "{target}");
+            for (name, value) in crate::terminal_environment::COLOR_ENVIRONMENT {
+                assert_eq!(
+                    command.get_env(name),
+                    Some(OsStr::new(value)),
+                    "{target}: {name}"
+                );
+            }
+        }
     }
 
     #[cfg(target_os = "macos")]
@@ -1615,11 +1668,19 @@ mod tests {
         )));
         let mut request = request_for_target(
             target_id,
-            Some("Write-Output \"LunaMux local ✓ TERM=$env:TERM\"; exit 0"),
+            Some(
+                "Write-Output \"LunaMux local ✓ TERM=$env:TERM\"; Write-Output ('ColorEnv=' + $env:COLORTERM + ',' + $env:FORCE_COLOR + ',' + [string][bool](Test-Path Env:NO_COLOR)); [Console]::Write(([char]27).ToString() + '[31mColorProbe' + ([char]27).ToString() + '[0m'); exit 0",
+            ),
         );
         request
             .launch_environment
             .insert("TERM".into(), "dumb".into());
+        request
+            .launch_environment
+            .insert("NO_COLOR".into(), "1".into());
+        request
+            .launch_environment
+            .insert("FORCE_COLOR".into(), "0".into());
         let runtime = backend
             .create(request)
             .await
@@ -1651,6 +1712,16 @@ mod tests {
         assert!(
             collected.contains("LunaMux local") && collected.contains("TERM=xterm-256color"),
             "{target_id} output was: {collected:?}"
+        );
+        assert!(
+            collected.contains("ColorEnv=truecolor,3,False"),
+            "{target_id}: {collected:?}"
+        );
+        assert!(
+            collected
+                .split_once("\u{1b}[31m")
+                .is_some_and(|(_, after_color)| after_color.contains("ColorProbe")),
+            "{target_id}: {collected:?}"
         );
         assert_eq!(
             backend
@@ -1831,7 +1902,11 @@ mod tests {
                 "--distribution",
                 "Ubuntu",
                 "--cd",
-                "D:\\code\\project"
+                "D:\\code\\project",
+                "--exec",
+                "/bin/sh",
+                "-c",
+                crate::terminal_environment::WSL_COLOR_SHELL
             ]
         );
         assert_eq!(
@@ -1877,7 +1952,18 @@ mod tests {
         request
             .launch_environment
             .insert("LUNA_MUX_MCP_AUTHORIZATION".into(), "mcp-secret".into());
+        request
+            .launch_environment
+            .insert("NO_COLOR".into(), "1".into());
+        request
+            .launch_environment
+            .insert("FORCE_COLOR".into(), "0".into());
         let bridge = wsl_environment_bridge(&request);
+        assert!(
+            !bridge
+                .split(':')
+                .any(|value| value.eq_ignore_ascii_case("NO_COLOR"))
+        );
         for name in [
             "LUNA_MUX_HOOK_ENDPOINT",
             "LUNA_MUX_HOOK_AUTHORIZATION",
@@ -1886,6 +1972,11 @@ mod tests {
             "LUNA_MUX_SESSION_ID",
             "LUNA_MUX_RUNTIME_ID",
             "LUNA_MUX_AGENT_ID",
+            "COLORTERM",
+            "FORCE_COLOR",
+            "CLICOLOR",
+            "CLICOLOR_FORCE",
+            "TERM",
         ] {
             assert!(bridge.split(':').any(|value| value == name));
         }

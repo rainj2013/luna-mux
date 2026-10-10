@@ -134,6 +134,7 @@ pub struct AgentHookService {
     agents: RwLock<HashMap<String, TerminalManagedAgentContext>>,
     bootstrap_tokens: RwLock<HashMap<String, TerminalRuntimeContext>>,
     agent_sessions: RwLock<HashMap<(String, String), String>>,
+    title_sources: RwLock<HashMap<String, crate::agent_session_title::AgentSessionTitleSource>>,
     events: Mutex<AgentEventBuffer>,
     structured_agents: Mutex<HashSet<String>>,
     terminal_signals: Mutex<HashMap<(String, String), Instant>>,
@@ -158,6 +159,7 @@ impl AgentHookService {
             agents: RwLock::new(HashMap::new()),
             bootstrap_tokens: RwLock::new(HashMap::new()),
             agent_sessions: RwLock::new(HashMap::new()),
+            title_sources: RwLock::new(HashMap::new()),
             events: Mutex::new(AgentEventBuffer::default()),
             structured_agents: Mutex::new(HashSet::new()),
             terminal_signals: Mutex::new(HashMap::new()),
@@ -249,6 +251,9 @@ impl AgentHookService {
     }
 
     pub fn revoke_runtime(&self, runtime_id: &str) {
+        if let Ok(mut sources) = self.title_sources.write() {
+            sources.retain(|_, source| source.runtime_id != runtime_id);
+        }
         self.prune_persisted_authorizations(runtime_id);
         if let Ok(mut tokens) = self.bootstrap_tokens.write() {
             tokens.retain(|_, context| context.runtime_id != runtime_id);
@@ -433,6 +438,9 @@ impl AgentHookService {
     /// session bindings, and its structured-hook marker. This is the single
     /// cleanup path so an exit can never leave an orphan key behind.
     fn remove_agent_by_id(&self, agent_id: &str) {
+        if let Ok(mut sources) = self.title_sources.write() {
+            sources.remove(agent_id);
+        }
         if let Ok(mut agents) = self.agents.write() {
             agents.retain(|_, context| context.agent_id != agent_id);
         }
@@ -511,6 +519,19 @@ impl AgentHookService {
             .lock()
             .map(|events| events.events.iter().cloned().collect())
             .unwrap_or_default()
+    }
+
+    pub(crate) fn title_source(
+        &self,
+        runtime_id: &str,
+        pane_id: &str,
+    ) -> Option<crate::agent_session_title::AgentSessionTitleSource> {
+        let active = self.agents.read().ok()?;
+        let sources = self.title_sources.read().ok()?;
+        active
+            .values()
+            .filter(|context| context.runtime_id == runtime_id && context.pane_id == pane_id)
+            .find_map(|context| sources.get(&context.agent_id).cloned())
     }
 
     pub fn snapshots(&self) -> Vec<ManagedAgentSnapshot> {
@@ -668,6 +689,56 @@ impl AgentHookService {
             .and_then(Value::as_str)
             .unwrap_or("InvalidHookPayload")
             .to_string();
+        if let Ok(mut sources) = self.title_sources.write() {
+            let incoming_session = payload.get("session_id").and_then(Value::as_str);
+            let stale_session = hook_event_name != "SessionStart"
+                && incoming_session.is_some_and(|session| {
+                    sources
+                        .get(&context.agent_id)
+                        .is_some_and(|source| source.session_id != session)
+                });
+            if matches!(
+                hook_event_name.as_str(),
+                "SessionEnd" | "AgentProcessStart" | "AgentProcessExit" | "RuntimeExit"
+            ) && !stale_session
+            {
+                sources.remove(&context.agent_id);
+            } else if !matches!(hook_event_name.as_str(), "SubagentStart" | "SubagentStop")
+                && !stale_session
+                && (hook_event_name == "SessionStart" || sources.contains_key(&context.agent_id))
+                && let Some(session_id) = payload.get("session_id").and_then(Value::as_str)
+            {
+                let source = sources.entry(context.agent_id.clone()).or_insert_with(|| {
+                    crate::agent_session_title::AgentSessionTitleSource {
+                        runtime_id: context.runtime_id.clone(),
+                        pane_id: context.pane_id.clone(),
+                        adapter_id: agent_adapters::adapter_id_for_profile(
+                            &context.launch_profile_id,
+                        )
+                        .unwrap_or(agent_adapters::CODEX_ADAPTER_ID)
+                        .into(),
+                        session_id: session_id.into(),
+                        transcript_path: None,
+                        cwd: None,
+                    }
+                });
+                if source.session_id != session_id {
+                    source.session_id = session_id.into();
+                    source.transcript_path = None;
+                    source.cwd = None;
+                }
+                if let Some(path) = payload
+                    .get("transcript_path")
+                    .and_then(Value::as_str)
+                    .filter(|path| !path.is_empty())
+                {
+                    source.transcript_path = Some(path.into());
+                }
+                if let Some(cwd) = payload.get("cwd").and_then(Value::as_str) {
+                    source.cwd = Some(cwd.into());
+                }
+            }
+        }
         if let Ok(mut agents) = self.structured_agents.lock() {
             agents.insert(context.agent_id.clone());
         }
@@ -1149,7 +1220,12 @@ fn codex_permission_is_auto_approved(payload: &Value) -> bool {
     .any(|value| {
         matches!(
             value.as_str(),
-            "never" | "fullaccess" | "bypass" | "dangerouslybypass" | "dangerfullaccess"
+            "never"
+                | "fullaccess"
+                | "bypass"
+                | "bypasspermissions"
+                | "dangerouslybypass"
+                | "dangerfullaccess"
         )
     })
 }
@@ -1365,6 +1441,70 @@ fn option_value(args: &[String], name: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn title_source_tracks_current_session_without_exposing_transcripts_in_events() {
+        let service = super::AgentHookService::new();
+        let context = crate::terminal_runtime_contract::TerminalManagedAgentContext {
+            mux_session_id: "mux".into(),
+            pane_id: "pane".into(),
+            runtime_id: "runtime".into(),
+            agent_id: "agent".into(),
+            launch_profile_id: "claude-code.default".into(),
+        };
+        service.issue_token(context.clone()).unwrap();
+        service.record(context.clone(), serde_json::json!({ "hook_event_name": "SessionStart", "session_id": "first", "transcript_path": "/custom/first.jsonl", "cwd": "/project" }));
+        let source = service.title_source("runtime", "pane").unwrap();
+        assert_eq!(source.session_id, "first");
+        assert_eq!(
+            source.transcript_path.as_deref(),
+            Some("/custom/first.jsonl")
+        );
+        assert!(service.title_source("other-runtime", "pane").is_none());
+        assert!(service.title_source("runtime", "other-pane").is_none());
+        service.record(context.clone(), serde_json::json!({ "hook_event_name": "SubagentStop", "session_id": "child", "transcript_path": "/child.jsonl" }));
+        assert_eq!(
+            service.title_source("runtime", "pane"),
+            Some(source.clone())
+        );
+        service.record(
+            context.clone(),
+            serde_json::json!({ "hook_event_name": "Stop", "session_id": "first" }),
+        );
+        assert_eq!(service.title_source("runtime", "pane"), Some(source));
+        assert!(
+            !serde_json::to_string(&service.events())
+                .unwrap()
+                .contains("/custom/first.jsonl")
+        );
+        service.record(context.clone(), serde_json::json!({ "hook_event_name": "SessionStart", "session_id": "second", "transcript_path": "/custom/second.jsonl" }));
+        assert_eq!(
+            service.title_source("runtime", "pane").unwrap().session_id,
+            "second"
+        );
+        service.record(
+            context.clone(),
+            serde_json::json!({ "hook_event_name": "SessionEnd", "session_id": "first" }),
+        );
+        service.record(context.clone(), serde_json::json!({ "hook_event_name": "Stop", "session_id": "first", "transcript_path": "/custom/first.jsonl" }));
+        assert_eq!(
+            service.title_source("runtime", "pane").unwrap().session_id,
+            "second"
+        );
+        service.record(
+            context.clone(),
+            serde_json::json!({ "hook_event_name": "SessionEnd", "session_id": "second" }),
+        );
+        assert!(service.title_source("runtime", "pane").is_none());
+        service.record(context.clone(), serde_json::json!({ "hook_event_name": "Stop", "session_id": "first", "transcript_path": "/custom/first.jsonl" }));
+        assert!(service.title_source("runtime", "pane").is_none());
+        service.record(
+            context.clone(),
+            serde_json::json!({ "hook_event_name": "SessionStart", "session_id": "third" }),
+        );
+        service.remove_agent_by_id("agent");
+        assert!(service.title_source("runtime", "pane").is_none());
+        assert!(service.title_sources.read().unwrap().is_empty());
+    }
     use super::*;
     #[cfg(windows)]
     use std::{
@@ -1575,6 +1715,87 @@ mod tests {
             ),
             (ManagedAgentStatus::Working, None)
         );
+    }
+
+    #[test]
+    fn codex_permission_request_uses_actual_hook_modes_without_hiding_other_agents() {
+        // Codex hook_runtime::hook_permission_mode maps AskForApproval::Never
+        // to bypassPermissions, rather than to the underlying config value.
+        for key in ["permission_mode", "permissionMode"] {
+            for mode in ["bypassPermissions", "bypass_permissions"] {
+                let payload = json!({ key: mode });
+                assert_eq!(
+                    status_for_hook_with_payload(
+                        "PermissionRequest",
+                        agent_adapters::CODEX_ADAPTER_ID,
+                        Some(&payload)
+                    ),
+                    (ManagedAgentStatus::Working, None),
+                    "{key}={mode}"
+                );
+                for adapter in [
+                    agent_adapters::CLAUDE_CODE_ADAPTER_ID,
+                    agent_adapters::GROK_BUILD_ADAPTER_ID,
+                ] {
+                    assert_eq!(
+                        status_for_hook_with_payload("PermissionRequest", adapter, Some(&payload)),
+                        (
+                            ManagedAgentStatus::Waiting,
+                            Some(ManagedAgentWaitingReason::Permission)
+                        ),
+                    );
+                }
+            }
+        }
+        for payload in [
+            json!({"permission_mode":"default"}),
+            json!({"permission_mode":"acceptEdits"}),
+            json!({"permission_mode":"plan"}),
+            json!({"permission_mode":"unknown"}),
+            json!({}),
+        ] {
+            assert_eq!(
+                status_for_hook_with_payload(
+                    "PermissionRequest",
+                    agent_adapters::CODEX_ADAPTER_ID,
+                    Some(&payload)
+                ),
+                (
+                    ManagedAgentStatus::Waiting,
+                    Some(ManagedAgentWaitingReason::Permission)
+                ),
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn full_access_permission_hook_emits_working_event_and_keeps_hook_response_advisory() {
+        let service = AgentHookService::new();
+        service.start().unwrap();
+        let token = service
+            .issue_token(TerminalManagedAgentContext {
+                mux_session_id: "session".into(),
+                pane_id: "pane".into(),
+                runtime_id: "runtime".into(),
+                agent_id: "agent".into(),
+                launch_profile_id: "codex.default".into(),
+            })
+            .unwrap();
+        let emitted = Arc::new(Mutex::new(Vec::new()));
+        let sink = emitted.clone();
+        service.set_event_sink(Arc::new(move |event| sink.lock().unwrap().push(event)));
+        let response = reqwest::Client::new().post(service.endpoint().unwrap()).bearer_auth(token)
+            .json(&json!({"hook_event_name":"PermissionRequest", "session_id":"thread", "permission_mode":"bypassPermissions"}))
+            .send().await.unwrap();
+        assert!(response.status().is_success());
+        let body: Value = response.json().await.unwrap();
+        assert!(body.get("sequence").is_some());
+        assert!(body.get("hookSpecificOutput").is_none());
+        let events = emitted.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].status, ManagedAgentStatus::Working);
+        assert_eq!(events[0].waiting_reason, None);
+        assert_eq!(service.snapshots()[0].status, ManagedAgentStatus::Working);
     }
 
     #[test]

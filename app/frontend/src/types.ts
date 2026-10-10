@@ -820,6 +820,7 @@ export interface AppApi {
     profiles(): Promise<AgentLaunchProfile[]>
     availability(profileId: string, targetId: string): Promise<AgentProfileAvailability>
     events(): Promise<ManagedAgentEvent[]>
+    sessionTitle(runtimeId: string, paneId: string): Promise<string | null>
     setNotificationFocus(muxSessionId: string | undefined, paneId: string | undefined, terminalVisible: boolean): Promise<void>
   }
   controlAudit: {
