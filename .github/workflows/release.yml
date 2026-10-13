@@ -169,8 +169,6 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v6
-
       - name: Download build artifacts
         uses: actions/download-artifact@v8
         with:
@@ -186,13 +184,8 @@ jobs:
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" release-assets/* --clobber
           else
-            notes_args=(--generate-notes)
-            notes_file="docs/releases/$GITHUB_REF_NAME.md"
-            if [ -f "$notes_file" ]; then
-              notes_args=(--notes-file "$notes_file")
-            fi
             gh release create "$GITHUB_REF_NAME" release-assets/* \
               --verify-tag \
-              "${notes_args[@]}" \
+              --generate-notes \
               --title "Luna Mux $GITHUB_REF_NAME"
           fi
