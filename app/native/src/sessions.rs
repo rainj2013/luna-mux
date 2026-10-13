@@ -563,6 +563,11 @@ impl SessionManager {
         channel
             .request_pty(false, "xterm-256color", cols, rows, 0, 0, &[])
             .await?;
+        // Environment requests do not assume the remote login shell's syntax.
+        // Servers may ignore these; the PTY still advertises xterm-256color.
+        for (name, value) in crate::terminal_environment::COLOR_ENVIRONMENT {
+            channel.set_env(false, name, value).await?;
+        }
         channel.request_shell(true).await?;
         let (reader, writer) = channel.split();
         *active.handle.lock().await = Some(handle);

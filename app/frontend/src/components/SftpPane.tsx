@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { ArrowLeft, ArrowRight, ArrowUp, ChevronLeft, ChevronRight, Eye, EyeOff, File, FileText, Folder, FolderPlus, Link, Pencil, Plug, RefreshCw, Search, Server, Star, Trash2, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, ArrowUp, ChevronLeft, ChevronRight, Eye, EyeOff, File, FileText, Folder, FolderPlus, HardDrive, Link, Pencil, Plug, RefreshCw, Search, Server, Star, Trash2, X } from 'lucide-react'
 import type { DirectoryEntry, FilePreview } from '../types'
 import { useI18n } from '../i18n'
 
@@ -50,6 +50,13 @@ function FileBrowser(props: BrowserProps): React.JSX.Element {
   const [pathInput, setPathInput] = useState(props.path)
   const [filter, setFilter] = useState('')
   const [showHidden, setShowHidden] = useState(false)
+  const [roots, setRoots] = useState<string[]>([])
+  useEffect(() => {
+    if (props.remote) return
+    let active = true
+    void window.api.files.roots().then((paths) => { if (active) setRoots(paths) }).catch(() => { if (active) setRoots([]) })
+    return () => { active = false }
+  }, [props.remote])
   const scroll = useRef<HTMLDivElement>(null)
   const browser = useRef<HTMLElement>(null)
   useEffect(() => {
@@ -73,7 +80,7 @@ function FileBrowser(props: BrowserProps): React.JSX.Element {
   const selectedEntries = shown.filter((entry) => props.selected.has(entry.path))
   const previewable = selectedEntries.length === 1 && selectedEntries[0]?.kind === 'file'
 
-  return <section ref={browser} data-file-browser-side={props.remote ? 'remote' : 'local'} className={`file-browser ${props.transferDropActive ? 'transfer-drop-target' : ''}`}>
+  return <section ref={browser} data-file-browser-side={props.remote ? 'remote' : 'local'} className={`file-browser ${!props.remote && roots.length ? 'has-drive-shortcuts' : ''} ${props.transferDropActive ? 'transfer-drop-target' : ''}`}>
     <header className="file-toolbar">
       <strong>{props.remote ? <Server size={15} /> : <Folder size={15} />}{props.title}</strong>
       <button className="icon-button" title={t('sftp.back')} disabled={!props.canBack} onClick={props.onBack}><ChevronLeft size={16} /></button>
@@ -82,6 +89,10 @@ function FileBrowser(props: BrowserProps): React.JSX.Element {
       <button className={`icon-button ${props.loading ? 'is-loading' : ''}`} title={t('sftp.refresh')} onClick={props.onRefresh}><RefreshCw size={16} /></button>
       <form onSubmit={(event) => { event.preventDefault(); props.onPath(pathInput) }}><input value={pathInput} onChange={(event) => setPathInput(event.target.value)} aria-label={t('sftp.valuePath', { value0: props.title })} /></form>
     </header>
+    {!props.remote && roots.length > 0 && <nav className="file-dialog-roots" aria-label={t('fileDialog.drives')}>
+      <span className="file-dialog-roots-label"><HardDrive size={13} />{t('fileDialog.drives')}</span>
+      {roots.map((root) => <button type="button" key={root} className={props.path.toLowerCase().startsWith(root.toLowerCase()) ? 'active' : ''} onClick={() => props.onPath(root)}><HardDrive size={14} />{root === '/' ? '/' : root.replace(/[\\/]$/, '')}</button>)}
+    </nav>}
     <div className="file-actions">
       <label className="file-filter"><Search size={14} /><input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder={t('sftp.filterThisDirectory')} /></label>
       <button className={`icon-button ${showHidden ? 'active' : ''}`} title={showHidden ? t('common.hideHiddenFiles') : t('common.showHiddenFiles')} aria-label={showHidden ? t('common.hideHiddenFiles') : t('common.showHiddenFiles')} onClick={() => setShowHidden((value) => !value)}>{showHidden ? <EyeOff size={15} /> : <Eye size={15} />}</button>

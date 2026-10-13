@@ -5,7 +5,7 @@ import type { AgentBrowserToolProfile } from './types'
 import { discardTerminalSnapshot, TerminalPane, type TerminalPaneHandle } from './components/TerminalPane'
 import { DatabasePane, type DatabasePaneHandle } from './components/DatabasePane'
 import type { DatabaseProfile } from './types'
-import { layoutFromPanes, paneIdsInLayout, layoutForPreset, resizeVisibleSplit, type LayoutPreset } from './mux-layout'
+import { layoutFromPanes, paneIdsInLayout, layoutForPreset, layoutForVisiblePreset, resizeVisibleSplit, type LayoutPreset } from './mux-layout'
 import { databasePaneTarget, parseDatabasePaneTarget } from './database-pane-target'
 import { agentAdapterId } from './terminal-input'
 import { SftpPane } from './components/SftpPane'
@@ -1495,9 +1495,9 @@ export function App(): React.JSX.Element {
 
   const applyLayoutPreset = async (preset: LayoutPreset): Promise<void> => {
     if (!activeMuxSession) return
-    const currentLayout = layoutFromPanes(activeMuxSession.layout, visibleSessionTabs)
-    if (!currentLayout) return
-    const layout = layoutForPreset(paneIdsInLayout(currentLayout), preset)
+    const currentLayout = layoutFromPanes(activeMuxSession.layout, sessionTabs)
+    if (!currentLayout || visibleSessionTabs.length < 2) return
+    const layout = layoutForVisiblePreset(currentLayout, new Set(visibleSessionTabs.map((pane) => pane.id)), preset)
     setLayoutMenuOpen(false)
     setMaximizedPaneId('')
     try { await persistSessionLayout(activeMuxSession, layout) }
@@ -1623,7 +1623,7 @@ export function App(): React.JSX.Element {
             {workspaceView === 'files' && activeBookmark && activeSshRuntimeId && <button className="secondary-button" title={t('app.deploy')} onClick={() => setDeploymentDialog(true)}><Rocket size={15} />{t('app.deploy')}</button>}
             {workspaceView === 'terminal' && activeAiCommandTarget && <button className="secondary-button" title={t('app.aiCommand')} onClick={() => setAiDialog(true)}><WandSparkles size={15} />{t('app.aiCommand')}</button>}
             {workspaceView !== 'browser' && activeBookmark && activeTab?.status === 'connected' && activeSshRuntimeId && <button className="secondary-button" title={t('app.portForwarding')} onClick={() => setTunnelDialog(true)}><Network size={15} />{t('app.portForwarding')}</button>}
-            {workspaceView === 'terminal' && sessionTabs.length > 1 && <div className="layout-menu-anchor" onPointerDown={(event) => event.stopPropagation()}>
+            {workspaceView === 'terminal' && visibleSessionTabs.length > 1 && <div className="layout-menu-anchor" onPointerDown={(event) => event.stopPropagation()}>
               <button className="icon-button" title={t('app.arrangePanes')} aria-label={t('app.arrangePanes')} aria-haspopup="menu" aria-expanded={layoutMenuOpen} onClick={() => setLayoutMenuOpen((open) => !open)}><LayoutGrid size={17} /></button>
               {layoutMenuOpen && <div className="layout-menu" role="menu" aria-label={t('app.arrangePanes')}>
                 <button role="menuitem" onClick={() => void applyLayoutPreset('horizontal')}><Columns3 size={16} />{t('app.horizontalLayout')}</button>
@@ -1641,7 +1641,7 @@ export function App(): React.JSX.Element {
             if (!layout) return null
             const shown = session.id === activeMuxSessionId && workspaceView === 'terminal'
             const hasBackgroundImage = Boolean(terminalSettings.backgroundImagePath && terminalBackground)
-            return <div key={session.id} hidden={!shown} className={`terminal-workspace ${hasBackgroundImage ? 'has-background-image' : ''}`} style={terminalBackgroundStyle(terminalSettings, terminalBackground)}><MuxLayout node={layout} panes={panes} bookmarks={bookmarkMap} activePaneId={shown ? activeKey : ''} settings={terminalSettings} backgroundImage={terminalBackground} agentAttentionByPane={agentAttentionByPane} activeAgentAdapterByPane={activeAgentAdapterByPane} terminalPaneRefs={terminalPaneRefs} databasePaneRefs={databasePaneRefs} onDatabaseProfileSelected={saveDatabasePaneProfile} onDatabaseConnectionStateChange={(pane, status, error) => setTabs((current) => current.map((item) => item.id === pane.id ? { ...item, status, error } : item))} onFocus={(pane) => { setActiveKey(pane.key); const agent = allAgents.find((item) => item.paneId === pane.id); if (agent) markAgentRead(agent.agentId) }} onTerminalAgentAction={(pane) => { const agent = allAgents.find((item) => item.paneId === pane.id); if (agent) dismissAgentWaitingAttention(agent) }} onRuntimeError={(pane, runtimeId, message) => { setTabs((current) => current.map((item) => item.key === pane.key && item.runtimeId === runtimeId ? { ...item, status: 'error', error: message } : item)); showError(message) }} onReconnect={reconnectPane} onReauthenticate={reauthenticatePane} onSplit={(pane, direction) => void splitPane(pane, direction)} onClose={closeTab} onResize={resizeLayout} onToggleMaximize={(paneId) => setMaximizedPaneId((current) => current === paneId ? '' : paneId)} onMinimize={minimizePane} onOpenSettings={() => openSettings('terminal')} onManageDatabases={() => setDatabaseLibraryDialog(true)} onConfirm={confirmAction} maximizedPaneId={shown ? visibleMaximizedPaneId : ''} /></div>
+            return <div key={session.id} hidden={!shown} className={`terminal-workspace ${hasBackgroundImage ? 'has-background-image' : ''}`} style={terminalBackgroundStyle(terminalSettings, terminalBackground)}><MuxLayout node={layout} panes={panes} bookmarks={bookmarkMap} activePaneId={shown ? activeKey : ''} settings={terminalSettings} backgroundImage={terminalBackground} agentAttentionByPane={agentAttentionByPane} activeAgentAdapterByPane={activeAgentAdapterByPane} terminalPaneRefs={terminalPaneRefs} databasePaneRefs={databasePaneRefs} onDatabaseProfileSelected={saveDatabasePaneProfile} onDatabaseConnectionStateChange={(pane, status, error) => setTabs((current) => current.map((item) => item.id === pane.id ? { ...item, status, error } : item))} onFocus={(pane) => { setActiveKey(pane.key); const agent = allAgents.find((item) => item.paneId === pane.id); if (agent) markAgentRead(agent.agentId) }} onTerminalAgentAction={(pane) => { const agent = allAgents.find((item) => item.paneId === pane.id); if (agent) dismissAgentWaitingAttention(agent) }} onRuntimeError={(pane, runtimeId, message) => { setTabs((current) => current.map((item) => item.key === pane.key && item.runtimeId === runtimeId ? { ...item, status: 'error', error: message } : item)); showError(message) }} onReconnect={reconnectPane} onReauthenticate={reauthenticatePane} onSplit={(pane, direction) => void splitPane(pane, direction)} onRename={setPaneRenameDialog} onClose={closeTab} onResize={resizeLayout} onToggleMaximize={(paneId) => setMaximizedPaneId((current) => current === paneId ? '' : paneId)} onMinimize={minimizePane} onOpenSettings={() => openSettings('terminal')} onManageDatabases={() => setDatabaseLibraryDialog(true)} onConfirm={confirmAction} maximizedPaneId={shown ? visibleMaximizedPaneId : ''} /></div>
           })}
           {!activeMuxSession ? <div className="welcome-state"><div className="welcome-icon"><SquareTerminal size={30} /></div><h2>{t('app.createYourFirstSession')}</h2><div className="welcome-actions"><button className="primary-button" onClick={() => setMuxSessionDialog({ mode: 'create' })}><CirclePlus size={16} />{t('app.newSession')}</button></div></div>
             : sessionTabs.length === 0 && sessionBrowserResources.length === 0 ? <div className="welcome-state"><div className="welcome-icon"><SquareTerminal size={30} /></div><h2>{activeMuxSession.name}</h2>{activeMuxSession.rootPath && <p>{activeMuxSession.rootPath}</p>}<div className="welcome-actions"><button className="primary-button" onClick={() => void openPaneLauncher()}><CirclePlus size={16} />{t('app.addFirstPane')}</button></div></div>
@@ -1721,7 +1721,7 @@ export function App(): React.JSX.Element {
     }} />}
     {databaseLibraryDialog && <Modal title={t('database.manageConnections')} onClose={() => { void (async () => { if (await databaseManagerRef.current?.confirmClose()) setDatabaseLibraryDialog(false) })() }} wide className="database-library-dialog"><DatabasePane ref={databaseManagerRef} onConfirm={confirmAction} visible managementOnly onOpen={(profile, readOnly) => openDatabasePane(profile, '', readOnly)} /></Modal>}
     {muxSessionDialog && <MuxSessionDialog mode={muxSessionDialog.mode} session={muxSessionDialog.session} onClose={() => setMuxSessionDialog(null)} onSave={(name, rootPath) => void saveMuxSession(name, rootPath)} />}
-    {paneRenameDialog && <PaneNameDialog pane={paneRenameDialog} onClose={() => setPaneRenameDialog(null)} onSave={(title) => void renamePane(paneRenameDialog, title)} />}
+    {paneRenameDialog && <PaneNameDialog key={`${paneRenameDialog.id}:${paneRenameDialog.runtimeId ?? ''}`} pane={paneRenameDialog} onClose={() => setPaneRenameDialog(null)} onSave={(title) => void renamePane(paneRenameDialog, title)} />}
     {bookmarkDialog && <BookmarkDialog bookmark={bookmarkDialog === 'new' ? undefined : bookmarkDialog} connections={bookmarks} groups={bookmarkGroupNames} onClose={() => setBookmarkDialog(null)} onSaved={async () => { setBookmarkDialog(null); await reloadSidebarData() }} onError={showError} />}
     {authRequest && <AuthDialog bookmark={authRequest.bookmark} jumpBookmark={authRequest.bookmark.jumpBookmarkId ? bookmarkMap.get(authRequest.bookmark.jumpBookmarkId) : undefined} onClose={() => setAuthRequest(null)} onConnect={(credentials) => void connect(authRequest.bookmark, credentials, authRequest.target)} />}
     {hostPrompts[0] && <HostKeyDialog prompt={hostPrompts[0]} onDecision={(accept) => { const prompt = hostPrompts[0]; if (!prompt) return; window.api.sessions.hostKeyDecision(prompt.sessionId, accept); setHostPrompts((current) => current.filter((item) => item !== prompt)) }} />}
@@ -2128,6 +2128,7 @@ interface MuxLayoutProps {
   onRuntimeError(pane: WorkspaceTab, runtimeId: string, message: string): void
   onReconnect(pane: WorkspaceTab): void
   onReauthenticate(pane: WorkspaceTab): void
+  onRename(pane: WorkspaceTab): void
   onSplit(pane: WorkspaceTab, direction: 'horizontal' | 'vertical'): void
   onClose(pane: WorkspaceTab): void
   onResize(path: string, ratio: number, persist: boolean): void
@@ -2140,7 +2141,7 @@ interface MuxLayoutProps {
   path?: string
 }
 
-function MuxLayout({ node, panes, bookmarks, activePaneId, settings, backgroundImage, agentAttentionByPane, activeAgentAdapterByPane, terminalPaneRefs, databasePaneRefs, onDatabaseProfileSelected, onDatabaseConnectionStateChange, onFocus, onTerminalAgentAction, onRuntimeError, onReconnect, onReauthenticate, onSplit, onClose, onResize, onToggleMaximize, onMinimize, onOpenSettings, onManageDatabases, onConfirm, maximizedPaneId, path = '' }: MuxLayoutProps): React.JSX.Element | null {
+function MuxLayout({ node, panes, bookmarks, activePaneId, settings, backgroundImage, agentAttentionByPane, activeAgentAdapterByPane, terminalPaneRefs, databasePaneRefs, onDatabaseProfileSelected, onDatabaseConnectionStateChange, onFocus, onTerminalAgentAction, onRuntimeError, onReconnect, onReauthenticate, onSplit, onRename, onClose, onResize, onToggleMaximize, onMinimize, onOpenSettings, onManageDatabases, onConfirm, maximizedPaneId, path = '' }: MuxLayoutProps): React.JSX.Element | null {
   const { t } = useI18n()
   if (node.type === 'pane') {
     const pane = panes.find((item) => item.id === node.paneId)
@@ -2164,6 +2165,7 @@ function MuxLayout({ node, panes, bookmarks, activePaneId, settings, backgroundI
         {pane.kind === 'database' ? <DatabaseIcon size={13} /> : pane.bookmarkId ? <Server size={13} /> : <SquareTerminal size={13} />}
         <strong title={pane.title}>{pane.title}</strong>
         <div className="mux-leaf-actions">
+          <button className="icon-button" title={t('app.renamePane')} aria-label={t('app.renamePane')} onClick={() => onRename(pane)}><Edit3 size={14} /></button>
           <button className="icon-button" title={t('app.splitRight')} aria-label={t('app.splitRight')} onClick={() => onSplit(pane, 'horizontal')}><Columns2 size={14} /></button>
           <button className="icon-button" title={t('app.splitDown')} aria-label={t('app.splitDown')} onClick={() => onSplit(pane, 'vertical')}><Rows2 size={14} /></button>
           <button className="icon-button" title={maximizedPaneId ? t('app.restorePane') : t('app.maximizePane')} aria-label={maximizedPaneId ? t('app.restorePane') : t('app.maximizePane')} onClick={() => onToggleMaximize(pane.id)}>{maximizedPaneId ? <Minimize size={14} /> : <Maximize2 size={14} />}</button>
@@ -2201,9 +2203,9 @@ function MuxLayout({ node, panes, bookmarks, activePaneId, settings, backgroundI
     : { gridTemplateRows: `minmax(0, ${node.ratio}fr) 5px minmax(0, ${1 - node.ratio}fr)` }
   const maximizeClass = maximizedPaneId ? paneIdsInLayout(node).includes(maximizedPaneId) ? 'maximized-branch' : 'maximize-hidden' : ''
   return <div className={['mux-split', direction, maximizeClass].filter(Boolean).join(' ')} style={style}>
-    <MuxLayout node={node.first} panes={panes} bookmarks={bookmarks} activePaneId={activePaneId} settings={settings} backgroundImage={backgroundImage} agentAttentionByPane={agentAttentionByPane} activeAgentAdapterByPane={activeAgentAdapterByPane} terminalPaneRefs={terminalPaneRefs} databasePaneRefs={databasePaneRefs} onDatabaseProfileSelected={onDatabaseProfileSelected} onDatabaseConnectionStateChange={onDatabaseConnectionStateChange} onFocus={onFocus} onTerminalAgentAction={onTerminalAgentAction} onRuntimeError={onRuntimeError} onReconnect={onReconnect} onReauthenticate={onReauthenticate} onSplit={onSplit} onClose={onClose} onResize={onResize} onToggleMaximize={onToggleMaximize} onMinimize={onMinimize} onOpenSettings={onOpenSettings} onManageDatabases={onManageDatabases} onConfirm={onConfirm} maximizedPaneId={maximizedPaneId} path={`${path}0`} />
+    <MuxLayout node={node.first} panes={panes} bookmarks={bookmarks} activePaneId={activePaneId} settings={settings} backgroundImage={backgroundImage} agentAttentionByPane={agentAttentionByPane} activeAgentAdapterByPane={activeAgentAdapterByPane} terminalPaneRefs={terminalPaneRefs} databasePaneRefs={databasePaneRefs} onDatabaseProfileSelected={onDatabaseProfileSelected} onDatabaseConnectionStateChange={onDatabaseConnectionStateChange} onFocus={onFocus} onTerminalAgentAction={onTerminalAgentAction} onRuntimeError={onRuntimeError} onReconnect={onReconnect} onReauthenticate={onReauthenticate} onSplit={onSplit} onRename={onRename} onClose={onClose} onResize={onResize} onToggleMaximize={onToggleMaximize} onMinimize={onMinimize} onOpenSettings={onOpenSettings} onManageDatabases={onManageDatabases} onConfirm={onConfirm} maximizedPaneId={maximizedPaneId} path={`${path}0`} />
     <div className="mux-split-divider" role="separator" aria-orientation={direction === 'horizontal' ? 'vertical' : 'horizontal'} onPointerDown={startResize} />
-    <MuxLayout node={node.second} panes={panes} bookmarks={bookmarks} activePaneId={activePaneId} settings={settings} backgroundImage={backgroundImage} agentAttentionByPane={agentAttentionByPane} activeAgentAdapterByPane={activeAgentAdapterByPane} terminalPaneRefs={terminalPaneRefs} databasePaneRefs={databasePaneRefs} onDatabaseProfileSelected={onDatabaseProfileSelected} onDatabaseConnectionStateChange={onDatabaseConnectionStateChange} onFocus={onFocus} onTerminalAgentAction={onTerminalAgentAction} onRuntimeError={onRuntimeError} onReconnect={onReconnect} onReauthenticate={onReauthenticate} onSplit={onSplit} onClose={onClose} onResize={onResize} onToggleMaximize={onToggleMaximize} onMinimize={onMinimize} onOpenSettings={onOpenSettings} onManageDatabases={onManageDatabases} onConfirm={onConfirm} maximizedPaneId={maximizedPaneId} path={`${path}1`} />
+    <MuxLayout node={node.second} panes={panes} bookmarks={bookmarks} activePaneId={activePaneId} settings={settings} backgroundImage={backgroundImage} agentAttentionByPane={agentAttentionByPane} activeAgentAdapterByPane={activeAgentAdapterByPane} terminalPaneRefs={terminalPaneRefs} databasePaneRefs={databasePaneRefs} onDatabaseProfileSelected={onDatabaseProfileSelected} onDatabaseConnectionStateChange={onDatabaseConnectionStateChange} onFocus={onFocus} onTerminalAgentAction={onTerminalAgentAction} onRuntimeError={onRuntimeError} onReconnect={onReconnect} onReauthenticate={onReauthenticate} onSplit={onSplit} onRename={onRename} onClose={onClose} onResize={onResize} onToggleMaximize={onToggleMaximize} onMinimize={onMinimize} onOpenSettings={onOpenSettings} onManageDatabases={onManageDatabases} onConfirm={onConfirm} maximizedPaneId={maximizedPaneId} path={`${path}1`} />
   </div>
 }
 
@@ -2224,7 +2226,6 @@ function BrowserResourceCard({ resource, sourcePane, chromeInstallation, onRefre
   const serviceLabel = sourcePane ? `${t('app.viaSshPane')} ${sourcePane.title}` : t('app.localService')
   const profileLocked = Boolean(resource.runtime) || resource.status === 'starting'
   const selectedCount = AGENT_BROWSER_TOOL_GROUPS.filter((group) => resource.toolProfiles.includes(group.id)).length
-  const selectedToolUpperBound = AGENT_BROWSER_TOOL_GROUPS.filter((group) => resource.toolProfiles.includes(group.id)).reduce((total, group) => total + group.count, 0)
   const toggleGroup = (id: AgentBrowserToolProfile, enabled: boolean): void => {
     if (id === 'core') return
     const selected = new Set(resource.toolProfiles)
@@ -2279,7 +2280,6 @@ function BrowserResourceCard({ resource, sourcePane, chromeInstallation, onRefre
             </span>
           </label>
         })}</div>
-        {selectedToolUpperBound > 64 && <div className="browser-resource-warning browser-tool-warning"><ShieldAlert size={15} /><span><strong>{t('app.browserAgentToolsCodexLimit')}</strong><small>{t('app.browserAgentToolsCodexLimitDescription', { value0: String(selectedToolUpperBound) })}</small></span></div>}
       </section>
     </div>
   </section>
@@ -2538,6 +2538,8 @@ function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, u
   const [systemFonts, setSystemFonts] = useState<string[] | null>(null)
   const [manualFontMode, setManualFontMode] = useState(false)
   const [manualFontName, setManualFontName] = useState(() => primaryFontName(settings.fontFamily))
+  const [backgroundPicker, setBackgroundPicker] = useState(false)
+  const [backgroundDirectory, setBackgroundDirectory] = useState<string>()
   const set = <K extends keyof TerminalSettings>(key: K, value: TerminalSettings[K]): void => setForm((current) => ({ ...current, [key]: value }))
   const setAi = <K extends keyof AiSettings>(key: K, value: AiSettings[K]): void => { setAiTested(false); setAiForm((current) => ({ ...current, [key]: value })) }
   const aiInput = (): AiSettingsInput => ({ baseUrl: aiForm.baseUrl, model: aiForm.model, defaultShell: aiForm.defaultShell, provider: aiForm.provider, thinkingMode: aiForm.thinkingMode, ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}) })
@@ -2551,13 +2553,8 @@ function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, u
     return () => { active = false }
   }, [section, systemFonts])
   const chooseBackground = async (): Promise<void> => {
-    try {
-      const path = await window.api.settings.chooseTerminalBackground()
-      if (!path) return
-      const image = await window.api.settings.loadTerminalBackground(path)
-      set('backgroundImagePath', path)
-      setPreviewImage(image)
-    } catch (error) { onError(errorMessage(error)) }
+    setBackgroundDirectory(form.backgroundImagePath ? await window.api.files.parentLocal(form.backgroundImagePath).catch(() => undefined) : undefined)
+    setBackgroundPicker(true)
   }
   const reset = (): void => {
     if (section === 'ai') { setAiForm({ ...DEFAULT_AI_SETTINGS, apiKeyConfigured: aiForm.apiKeyConfigured }); setApiKey(''); setAiTested(false); return }
@@ -2614,7 +2611,7 @@ function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, u
   const installedFonts = (systemFonts ?? []).filter((font) => font.toLocaleLowerCase() !== 'jetbrains mono')
   const installedFont = installedFonts.find((font) => font.toLocaleLowerCase() === currentFontName.toLocaleLowerCase())
   const fontChoice = manualFontMode ? '__manual__' : currentFontName === 'JetBrains Mono' ? '__bundled__' : currentFontName === 'monospace' ? '__system__' : systemFonts === null ? '__current__' : installedFont ?? '__manual__'
-  return <Modal title={t('common.settings')} onClose={onClose} wide className="settings-dialog"><form className="form-grid terminal-settings-form" onSubmit={(event) => { event.preventDefault(); onSave(form, previewImage, appIcon, theme, language, aiInput(), remoteAgentIntegration) }}>
+  return <><Modal title={t('common.settings')} onClose={onClose} wide className="settings-dialog"><form className="form-grid terminal-settings-form" onSubmit={(event) => { event.preventDefault(); onSave(form, previewImage, appIcon, theme, language, aiInput(), remoteAgentIntegration) }}>
     <div className="settings-tabs" role="tablist" aria-label={t('app.settingsCategories')}>
       <div className="settings-nav-group" role="presentation"><span>{t('app.generalSettings')}</span>
         <button type="button" role="tab" aria-selected={section === 'appearance'} className={section === 'appearance' ? 'active' : ''} onClick={() => setSection('appearance')}><Palette size={15} />{t('app.appearance')}</button>
@@ -2659,7 +2656,7 @@ function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, u
     </>}
     </div>
     <div className={`dialog-actions ${section === 'about' ? '' : 'spread'}`}>{section !== 'about' && <button type="button" className="secondary-button" onClick={reset}><RotateCcw size={15} />{t('app.restoreDefaults')}</button>}<div><button type="button" className="secondary-button" onClick={onClose}>{section === 'about' ? t('common.close') : t('common.cancel')}</button>{section !== 'about' && <button className="primary-button" type="submit">{t('common.save')}</button>}</div></div>
-  </form></Modal>
+  </form></Modal>{backgroundPicker && <FileDialog mode="open" title={t('app.backgroundImage')} initialDirectory={backgroundDirectory} filters={[{ label: t('fileDialog.imageFiles'), extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif'] }, { label: t('fileDialog.allFiles'), extensions: [] }]} onCancel={() => setBackgroundPicker(false)} onConfirm={(path) => { setBackgroundPicker(false); void window.api.settings.loadTerminalBackground(path).then((image) => { set('backgroundImagePath', path); setPreviewImage(image) }).catch((error) => onError(errorMessage(error))) }} />}</>
 }
 
 function parseRuntimeEnvironmentDetail(detail: string): DiagnosticsRuntimeEnvironment[] {
@@ -3072,9 +3069,26 @@ function PaneLauncherDialog({ targets, loading, onClose, onManageConnections, on
 function PaneNameDialog({ pane, onClose, onSave }: { pane: WorkspaceTab; onClose(): void; onSave(title: string): void }): React.JSX.Element {
   const { t } = useI18n()
   const [title, setTitle] = useState(pane.title)
-  return <Modal title={t('app.renamePane')} onClose={onClose}><form className="form-grid compact-form" onSubmit={(event) => { event.preventDefault(); onSave(title.trim()) }}>
-    <label>{t('app.paneNameRequired')}<input autoFocus required value={title} onChange={(event) => setTitle(event.target.value)} /></label>
-    <div className="dialog-actions"><button type="button" className="secondary-button" onClick={onClose}>{t('common.cancel')}</button><button type="submit" className="primary-button">{t('common.save')}</button></div>
+  const [loading, setLoading] = useState(Boolean(pane.runtimeId && pane.kind !== 'database'))
+  const [titleUnavailable, setTitleUnavailable] = useState(false)
+  const edited = useRef(false)
+  useEffect(() => {
+    if (!pane.runtimeId || pane.kind === 'database') return
+    let stopped = false
+    void window.api.managedAgents.sessionTitle(pane.runtimeId, pane.id).then((suggestion) => {
+      if (!stopped && !edited.current && suggestion) setTitle(suggestion)
+      if (!stopped) setTitleUnavailable(!suggestion)
+    }).catch(() => {
+      // Missing or unreadable agent metadata leaves the existing pane name editable.
+      if (!stopped) setTitleUnavailable(true)
+    }).finally(() => { if (!stopped) setLoading(false) })
+    return () => { stopped = true }
+  }, [pane.id, pane.runtimeId, pane.kind])
+  return <Modal title={t('app.renamePane')} onClose={onClose}><form className="form-grid compact-form" onSubmit={(event) => { event.preventDefault(); if (title.trim()) onSave(title.trim()) }}>
+    <label>{t('app.paneNameRequired')}<input autoFocus required value={title} onChange={(event) => { edited.current = true; setTitle(event.target.value) }} /></label>
+    {loading && <span className="field-hint" role="status">{t('app.loadingAgentTitle')}</span>}
+    {!loading && titleUnavailable && <span className="field-hint" role="status">{t('app.agentTitleUnavailable')}</span>}
+    <div className="dialog-actions"><button type="button" className="secondary-button" onClick={onClose}>{t('common.cancel')}</button><button type="submit" className="primary-button" disabled={!title.trim()}>{t('common.save')}</button></div>
   </form></Modal>
 }
 

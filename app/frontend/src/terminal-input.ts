@@ -1,5 +1,6 @@
 const bracketedPasteStart = '\x1b[200~'
 const bracketedPasteEnd = '\x1b[201~'
+const codexInsertNewline = '\x1b\r'
 const launchProfileAdapters: Record<string, string> = {
   'codex.default': 'codex',
   'claude-code.default': 'claude-code',
@@ -34,6 +35,15 @@ export function codexMultilinePastePayload(text: string): string | undefined {
   if (!/[\r\n]/.test(text)) return undefined
   const normalized = text.replace(/\r\n|\r|\n/g, '\r')
   return `${bracketedPasteStart}${normalized}${bracketedPasteEnd}`
+}
+
+/**
+ * Codex treats Ctrl+M as an editor newline, while a terminal normally emits
+ * the same carriage return as Enter.  ESC+CR is the portable Alt+Enter form
+ * that Codex accepts without submitting the draft.
+ */
+export function codexControlMInput(codexTui: boolean): string | undefined {
+  return codexTui ? codexInsertNewline : undefined
 }
 
 export function routeTerminalPaste(

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ArrowUp, Eye, EyeOff, File, Folder, Link as LinkIcon, RefreshCw, Search, X } from 'lucide-react'
+import { ArrowUp, File, Folder, FolderOpen, HardDrive, Eye, EyeOff, Link as LinkIcon, RefreshCw, Search, X } from 'lucide-react'
 import type { DirectoryEntry } from '../types'
 import { useI18n } from '../i18n'
 import { fileDialogExtension, fileDialogJoin, fileDialogSegments, fileDialogWithExtension } from '../file-dialog-path'
@@ -30,9 +30,9 @@ function errorText(error: unknown): string {
 }
 
 function EntryIcon({ kind }: { kind: DirectoryEntry['kind'] }): React.JSX.Element {
-  if (kind === 'directory') return <Folder size={15} className="file-folder" />
-  if (kind === 'symlink') return <LinkIcon size={14} />
-  return <File size={14} />
+  if (kind === 'directory') return <Folder size={17} strokeWidth={1.8} className="file-dialog-entry-icon file-dialog-folder" />
+  if (kind === 'symlink') return <LinkIcon size={16} strokeWidth={1.8} className="file-dialog-entry-icon file-dialog-link" />
+  return <File size={16} strokeWidth={1.8} className="file-dialog-entry-icon file-dialog-file" />
 }
 
 export function FileDialog({ mode, title, defaultFileName = '', filters, initialDirectory, confirmLabel, onConfirm, onCancel }: FileDialogOptions): React.JSX.Element {
@@ -47,6 +47,7 @@ export function FileDialog({ mode, title, defaultFileName = '', filters, initial
   const [search, setSearch] = useState('')
   const [showHidden, setShowHidden] = useState(false)
   const [pathInput, setPathInput] = useState('')
+  const [roots, setRoots] = useState<string[]>([])
   const requestId = useRef(0)
   const listRef = useRef<HTMLDivElement>(null)
   const nameRef = useRef<HTMLInputElement>(null)
@@ -83,6 +84,8 @@ export function FileDialog({ mode, title, defaultFileName = '', filters, initial
     })()
     return () => { cancelled = true }
   }, [initialDirectory, load])
+
+  useEffect(() => { void window.api.files.roots().then(setRoots).catch(() => setRoots([])) }, [])
 
   useEffect(() => {
     const escape = (event: KeyboardEvent): void => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onCancel() } }
@@ -148,20 +151,18 @@ export function FileDialog({ mode, title, defaultFileName = '', filters, initial
   // `.app-shell` rather than `:root`, and stays above every pane regardless of pane transforms.
   return createPortal(<div className="modal-backdrop file-dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onCancel() }}>
     <section className="modal file-dialog" role="dialog" aria-modal="true" aria-label={title}>
-      <header><strong>{title}</strong><button type="button" className="icon-button" title={t('common.close')} aria-label={t('common.close')} onClick={onCancel}><X size={18} /></button></header>
+      <header><span className="file-dialog-title-icon"><FolderOpen size={17} /></span><strong>{title}</strong><button type="button" className="icon-button" title={t('common.close')} aria-label={t('common.close')} onClick={onCancel}><X size={18} /></button></header>
       <div className="file-dialog-toolbar">
-        <button type="button" className="icon-button" title={t('fileDialog.parent')} aria-label={t('fileDialog.parent')} disabled={!directory || crumbs.length <= 1} onClick={goParent}><ArrowUp size={15} /></button>
-        <button type="button" className={`icon-button ${state.loading ? 'is-loading' : ''}`} title={t('fileDialog.refresh')} aria-label={t('fileDialog.refresh')} disabled={!directory} onClick={() => void load(directory)}><RefreshCw size={15} /></button>
         <form className="file-dialog-path" onSubmit={(event) => { event.preventDefault(); const next = pathInput.trim(); if (next) void load(next) }}>
           <input value={pathInput} onChange={(event) => setPathInput(event.target.value)} aria-label={t('fileDialog.path')} spellCheck={false} autoComplete="off" />
         </form>
+        <button type="button" className="icon-button" title={t('fileDialog.parent')} aria-label={t('fileDialog.parent')} disabled={!directory || crumbs.length <= 1} onClick={goParent}><ArrowUp size={15} /></button>
+        <button type="button" className={`icon-button ${state.loading ? 'is-loading' : ''}`} title={t('fileDialog.refresh')} aria-label={t('fileDialog.refresh')} disabled={!directory} onClick={() => void load(directory)}><RefreshCw size={15} /></button>
       </div>
-      <nav className="file-dialog-crumbs" aria-label={t('fileDialog.path')}>
-        {crumbs.map((crumb, index) => <span key={crumb.path}>
-          {index > 0 && <small>/</small>}
-          <button type="button" className={index === crumbs.length - 1 ? 'active' : ''} onClick={() => void load(crumb.path)}>{crumb.name}</button>
-        </span>)}
-      </nav>
+      {roots.length > 0 && <nav className="file-dialog-roots" aria-label={t('fileDialog.drives')}>
+        <span className="file-dialog-roots-label"><HardDrive size={13} />{t('fileDialog.drives')}</span>
+        {roots.map((root) => <button type="button" key={root} className={directory.toLowerCase() === root.toLowerCase() ? 'active' : ''} onClick={() => void load(root)}><HardDrive size={14} />{root === '/' ? '/' : root.replace(/[\\/]$/, '')}</button>)}
+      </nav>}
       <div className="file-dialog-search">
         <label className="file-filter"><Search size={13} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t('fileDialog.filterPlaceholder')} /></label>
         {normalizedFilters.length > 1 && <select aria-label={t('fileDialog.fileType')} value={String(filterIndex)} onChange={(event) => { setFilterIndex(Number(event.target.value)); setSelected('') }}>{normalizedFilters.map((filter, index) => <option key={filter.label} value={index}>{filter.label}</option>)}</select>}
