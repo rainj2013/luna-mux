@@ -218,6 +218,7 @@ export async function createTauriApi(): Promise<AppApi> {
     },
     files: {
       home: () => call('files_home'),
+      roots: () => call('files_roots'),
       parentLocal: (path) => call('files_parent_local', { path }),
       remoteHome: (sessionId) => call('files_remote_home', { sessionId }),
       listLocal: (path) => call('files_list_local', { path }),

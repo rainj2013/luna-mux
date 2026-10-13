@@ -2538,6 +2538,8 @@ function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, u
   const [systemFonts, setSystemFonts] = useState<string[] | null>(null)
   const [manualFontMode, setManualFontMode] = useState(false)
   const [manualFontName, setManualFontName] = useState(() => primaryFontName(settings.fontFamily))
+  const [backgroundPicker, setBackgroundPicker] = useState(false)
+  const [backgroundDirectory, setBackgroundDirectory] = useState<string>()
   const set = <K extends keyof TerminalSettings>(key: K, value: TerminalSettings[K]): void => setForm((current) => ({ ...current, [key]: value }))
   const setAi = <K extends keyof AiSettings>(key: K, value: AiSettings[K]): void => { setAiTested(false); setAiForm((current) => ({ ...current, [key]: value })) }
   const aiInput = (): AiSettingsInput => ({ baseUrl: aiForm.baseUrl, model: aiForm.model, defaultShell: aiForm.defaultShell, provider: aiForm.provider, thinkingMode: aiForm.thinkingMode, ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}) })
@@ -2551,13 +2553,8 @@ function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, u
     return () => { active = false }
   }, [section, systemFonts])
   const chooseBackground = async (): Promise<void> => {
-    try {
-      const path = await window.api.settings.chooseTerminalBackground()
-      if (!path) return
-      const image = await window.api.settings.loadTerminalBackground(path)
-      set('backgroundImagePath', path)
-      setPreviewImage(image)
-    } catch (error) { onError(errorMessage(error)) }
+    setBackgroundDirectory(form.backgroundImagePath ? await window.api.files.parentLocal(form.backgroundImagePath).catch(() => undefined) : undefined)
+    setBackgroundPicker(true)
   }
   const reset = (): void => {
     if (section === 'ai') { setAiForm({ ...DEFAULT_AI_SETTINGS, apiKeyConfigured: aiForm.apiKeyConfigured }); setApiKey(''); setAiTested(false); return }
@@ -2614,7 +2611,7 @@ function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, u
   const installedFonts = (systemFonts ?? []).filter((font) => font.toLocaleLowerCase() !== 'jetbrains mono')
   const installedFont = installedFonts.find((font) => font.toLocaleLowerCase() === currentFontName.toLocaleLowerCase())
   const fontChoice = manualFontMode ? '__manual__' : currentFontName === 'JetBrains Mono' ? '__bundled__' : currentFontName === 'monospace' ? '__system__' : systemFonts === null ? '__current__' : installedFont ?? '__manual__'
-  return <Modal title={t('common.settings')} onClose={onClose} wide className="settings-dialog"><form className="form-grid terminal-settings-form" onSubmit={(event) => { event.preventDefault(); onSave(form, previewImage, appIcon, theme, language, aiInput(), remoteAgentIntegration) }}>
+  return <><Modal title={t('common.settings')} onClose={onClose} wide className="settings-dialog"><form className="form-grid terminal-settings-form" onSubmit={(event) => { event.preventDefault(); onSave(form, previewImage, appIcon, theme, language, aiInput(), remoteAgentIntegration) }}>
     <div className="settings-tabs" role="tablist" aria-label={t('app.settingsCategories')}>
       <div className="settings-nav-group" role="presentation"><span>{t('app.generalSettings')}</span>
         <button type="button" role="tab" aria-selected={section === 'appearance'} className={section === 'appearance' ? 'active' : ''} onClick={() => setSection('appearance')}><Palette size={15} />{t('app.appearance')}</button>
@@ -2659,7 +2656,7 @@ function SettingsDialog({ initialSection, settings, backgroundImage, appIcons, u
     </>}
     </div>
     <div className={`dialog-actions ${section === 'about' ? '' : 'spread'}`}>{section !== 'about' && <button type="button" className="secondary-button" onClick={reset}><RotateCcw size={15} />{t('app.restoreDefaults')}</button>}<div><button type="button" className="secondary-button" onClick={onClose}>{section === 'about' ? t('common.close') : t('common.cancel')}</button>{section !== 'about' && <button className="primary-button" type="submit">{t('common.save')}</button>}</div></div>
-  </form></Modal>
+  </form></Modal>{backgroundPicker && <FileDialog mode="open" title={t('app.backgroundImage')} initialDirectory={backgroundDirectory} filters={[{ label: t('fileDialog.imageFiles'), extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif'] }, { label: t('fileDialog.allFiles'), extensions: [] }]} onCancel={() => setBackgroundPicker(false)} onConfirm={(path) => { setBackgroundPicker(false); void window.api.settings.loadTerminalBackground(path).then((image) => { set('backgroundImagePath', path); setPreviewImage(image) }).catch((error) => onError(errorMessage(error))) }} />}</>
 }
 
 function parseRuntimeEnvironmentDetail(detail: string): DiagnosticsRuntimeEnvironment[] {

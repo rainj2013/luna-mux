@@ -539,6 +539,7 @@ pub fn run() {
             control_audit_list,
             control_audit_clear,
             files_home,
+            files_roots,
             files_parent_local,
             files_remote_home,
             files_list_local,

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { Check, ChevronDown, ChevronLeft, ChevronRight, ClipboardPaste, Copy, Database, Download, Edit3, Eye, EyeOff, FileCode2, Folder, GripVertical, HardDrive, KeyRound, LoaderCircle, Lock, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Play, Plus, Power, RefreshCw, Search, Server, Settings2, ShieldCheck, Table2, TextSelect, Trash2, Upload, X } from 'lucide-react'
-import { open as openNativeDialog, type DialogFilter } from '@tauri-apps/plugin-dialog'
+import { FileDialog } from './FileDialog'
+import type { FileDialogFilter } from './FileDialog'
 import { DatabaseMenu, DatabaseResultGrid } from './DatabaseUi'
 import type { DatabaseMenuItem, DatabaseResultSelection } from './DatabaseUi'
 import { DatabaseFileDialog } from './DatabaseFileDialog'
@@ -29,10 +30,6 @@ const SQLITE_FILE_FILTERS = (t: ReturnType<typeof useI18n>['t']): DatabaseFileDi
   { label: t('fileDialog.sqliteFiles'), extensions: ['db', 'sqlite', 'sqlite3'] },
   { label: t('fileDialog.allFiles'), extensions: [] }
 ]
-
-function nativeDialogFilters(filters: DatabaseFileDialogFilter[]): DialogFilter[] {
-  return filters.filter((filter) => filter.extensions.length > 0).map((filter) => ({ name: filter.label, extensions: filter.extensions }))
-}
 
 // Export/import notices report file sizes, which grow past raw byte counts very quickly.
 function databaseByteSize(bytes: number): string {
@@ -129,6 +126,8 @@ export function DatabasePane({ ref, onConfirm, visible, paneId = '', initialProf
   const [profileDrop, setProfileDrop] = useState<{ id: string; position: 'before' | 'after' } | null>(null)
   const [menu, setMenu] = useState<{ x: number; y: number; anchor: HTMLElement; items: DatabaseMenuItem[] } | null>(null)
   const [fileDialog, setFileDialog] = useState<DatabaseFileDialogProps | null>(null)
+  const [sqlitePicker, setSqlitePicker] = useState(false)
+  const [sqliteDirectory, setSqliteDirectory] = useState<string>()
   const [permissionsOpen, setPermissionsOpen] = useState(false)
   const [tableResult, setTableResult] = useState<DatabaseQueryResult | null>(null)
   const [tablePage, setTablePage] = useState(0)
@@ -448,12 +447,8 @@ export function DatabasePane({ ref, onConfirm, visible, paneId = '', initialProf
     })
   }
   const chooseSqlitePath = async (): Promise<void> => {
-    try {
-      const selected = await openNativeDialog({ title: t('database.chooseDatabaseFile'), defaultPath: path || undefined, filters: nativeDialogFilters(SQLITE_FILE_FILTERS(t)), multiple: false, directory: false })
-      if (typeof selected === 'string') setPath(selected)
-    } catch (caught) {
-      setError(String(caught))
-    }
+    setSqliteDirectory(path ? await window.api.files.parentLocal(path).catch(() => undefined) : undefined)
+    setSqlitePicker(true)
   }
   const inspectTable = async (table: string): Promise<void> => {
     if (!runtimeId || !table) return
@@ -929,5 +924,6 @@ export function DatabasePane({ ref, onConfirm, visible, paneId = '', initialProf
     {feedback}
     {menu && <DatabaseMenu {...menu} onClose={() => setMenu(null)} />}
     {fileDialog && <DatabaseFileDialog {...fileDialog} />}
+    {sqlitePicker && <FileDialog mode="open" title={t('database.chooseDatabaseFile')} initialDirectory={sqliteDirectory} filters={SQLITE_FILE_FILTERS(t) as FileDialogFilter[]} onCancel={() => setSqlitePicker(false)} onConfirm={(selected) => { setSqlitePicker(false); setPath(selected) }} />}
   </div>
 }

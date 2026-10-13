@@ -467,10 +467,11 @@ body.mux-split-resizing { cursor: col-resize; user-select: none; }
 .sftp-disabled .secondary-button { margin-top: 6px; }
 .sftp-pane { height: 100%; min-height: 0; display: grid; grid-template-columns: minmax(260px, 1fr) auto minmax(260px, 1fr); gap: 12px; }
 .file-browser { min-width: 0; min-height: 0; overflow: hidden; display: grid; grid-template-rows: auto auto 28px minmax(0, 1fr); border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--surface); }
+.file-browser.has-drive-shortcuts { grid-template-rows: auto auto auto 28px minmax(0, 1fr); }
 .file-browser.transfer-drop-target { border-color: var(--accent); background: var(--selection-bg); }
 .file-toolbar { min-width: 0; padding: 8px 10px; display: flex; align-items: center; gap: 4px; border-bottom: 1px solid var(--border-soft); background: transparent; }
 .file-toolbar strong { min-width: 52px; display: inline-flex; align-items: center; gap: 6px; color: var(--text-strong); font-size: 13px; }
-.file-browser[data-file-browser-side="local"] .file-toolbar strong svg { color: var(--warning); }
+.file-browser[data-file-browser-side="local"] .file-toolbar strong svg { color: var(--text-muted); }
 .file-browser[data-file-browser-side="remote"] .file-toolbar strong svg { color: var(--accent-text); }
 .file-toolbar form { min-width: 80px; flex: 1; }
 .file-toolbar input { width: 100%; height: 30px; padding: 0 8px; border: 1px solid var(--border-strong); border-radius: var(--radius-control); outline: 0; background: var(--input-bg); font-size: 12px; }
@@ -503,7 +504,7 @@ body.mux-split-resizing { cursor: col-resize; user-select: none; }
 .file-name { min-width: 0; display: flex; align-items: center; gap: 6px; }
 .file-name svg { flex: none; }
 .file-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.file-folder { color: var(--warning); fill: var(--warning-surface); }
+.file-folder { color: var(--accent-text); fill: var(--accent-surface); }
 .file-message { padding: 28px 12px; text-align: center; color: var(--text-subtle); font-size: 11px; }
 .transfer-arrows { align-self: center; width: 48px; padding: 10px 6px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--surface); }
 .transfer-button { width: 32px; height: 32px; border: 1px solid var(--border); background: var(--surface); }
@@ -613,32 +614,41 @@ body.mux-split-resizing { cursor: col-resize; user-select: none; }
 /* Custom file picker: same layout on every platform, so no native panel chrome (macOS would add
    a Tags field, for example) and no platform-specific path navigation. */
 .file-dialog-backdrop { z-index: 186; }
-.file-dialog { width: min(720px, 100%); height: min(560px, calc(100vh - 60px)); display: grid; grid-template-rows: 46px 40px 30px 37px minmax(0, 1fr) auto; overflow: hidden; }
-.file-dialog-toolbar { padding: 4px 8px; display: flex; align-items: center; gap: 5px; border-bottom: 1px solid var(--border-soft); }
+.file-dialog { width: min(780px, calc(100vw - 32px)); height: min(600px, calc(100vh - 44px)); display: flex; flex-direction: column; overflow: hidden; }
+.file-dialog > header { height: 50px; flex: none; min-width: 0; padding: 0 12px 0 16px; display: flex; align-items: center; justify-content: flex-start; gap: 9px; border-bottom: 1px solid var(--border); background: var(--surface-raised); }
+.file-dialog > header .icon-button { margin-left: auto; }
+.file-dialog > header strong { min-width: 0; flex: 1; overflow: hidden; color: var(--text-strong); font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.file-dialog-title-icon { width: 28px; height: 28px; display: grid; place-items: center; flex: none; color: var(--accent-text); border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--selection-bg); }
+.file-dialog-toolbar { padding: 6px 12px; display: flex; align-items: center; gap: 6px; border-bottom: 1px solid var(--border-soft); background: var(--surface); }
 .file-dialog-toolbar .is-loading svg { animation: spin .8s linear infinite; }
 .file-dialog-path { min-width: 0; flex: 1; }
-.file-dialog-path input { width: 100%; height: 28px; padding: 0 9px; border: 1px solid var(--border-strong); border-radius: 5px; outline: 0; color: var(--text); background: var(--input-bg); font-size: 11px; }
+.file-dialog-path input { width: 100%; height: 30px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-control); outline: 0; color: var(--text); background: var(--input-bg); font: 11px/1.2 Consolas, "SFMono-Regular", monospace; }
+.file-dialog-roots { min-width: 0; padding: 6px 12px; display: flex; align-items: center; gap: 6px; overflow-x: auto; border-bottom: 1px solid var(--border-soft); background: var(--surface-subtle); }
+.file-dialog-roots-label { display: inline-flex; align-items: center; gap: 5px; flex: none; color: var(--text-muted); font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.file-dialog-roots svg { width: 12px; height: 12px; flex: none; }
+.file-dialog-roots button { height: 28px; padding: 0 9px; display: inline-flex; align-items: center; gap: 6px; flex: none; border: 1px solid var(--border); border-radius: var(--radius-control); color: var(--text-muted); background: var(--surface); cursor: pointer; font: 11px inherit; }
+.file-dialog-roots button:hover, .file-dialog-roots button.active { color: var(--text-strong); border-color: var(--accent); background: var(--selection-bg); }
 .file-dialog-path input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--focus-ring); }
-.file-dialog-crumbs { min-width: 0; padding: 0 10px; display: flex; align-items: center; gap: 2px; overflow-x: auto; border-bottom: 1px solid var(--border-soft); }
-.file-dialog-crumbs > span { flex: none; display: inline-flex; align-items: center; gap: 2px; }
-.file-dialog-crumbs small { color: var(--text-subtle); font-size: 10px; }
-.file-dialog-crumbs button { max-width: 180px; height: 22px; padding: 0 5px; overflow: hidden; color: var(--text-muted); background: transparent; border: 0; border-radius: 4px; cursor: pointer; font-size: 11px; white-space: nowrap; text-overflow: ellipsis; }
-.file-dialog-crumbs button:hover:not(.active) { color: var(--text-strong); background: var(--surface-hover); }
-.file-dialog-crumbs button.active { color: var(--text-strong); font-weight: 500; }
-.file-dialog-search { padding: 4px 8px; display: flex; align-items: center; gap: 5px; }
-.file-dialog-search .icon-button { width: 27px; height: 27px; }
+.file-dialog-search { padding: 6px 12px; display: flex; align-items: center; gap: 6px; background: var(--surface); }
+.file-dialog-toolbar .icon-button, .file-dialog-search .icon-button { width: 30px; height: 30px; flex: none; }
+.file-dialog-search .file-filter { max-width: none; min-width: 0; height: 30px; }
+.file-dialog-search .file-filter input { width: 100%; }
 .file-dialog-search .icon-button.active { color: var(--accent-text); background: var(--selection-bg); }
 .file-dialog-search select { min-width: 90px; max-width: 200px; height: 27px; border: 1px solid var(--border-strong); border-radius: 5px; font-size: 10px; }
-.file-dialog-list { min-height: 0; padding: 2px 6px 6px; overflow: auto; border-top: 1px solid var(--border-soft); }
+.file-dialog-list { flex: 1; min-height: 0; padding: 6px 10px 8px; overflow: auto; border-top: 1px solid var(--border-soft); background: var(--surface); }
 .file-dialog-list:focus { outline: none; }
 .file-dialog-list:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
-.file-dialog-list .file-row { border-radius: 4px; }
-.file-dialog-footer { padding: 10px 12px 12px; display: flex; align-items: flex-end; gap: 10px; border-top: 1px solid var(--border); background: var(--surface-muted); }
+.file-dialog-list .file-row { height: 35px; padding: 0 10px; font-size: 12px; }
+.file-dialog-entry-icon { flex: none; }
+.file-dialog-folder { color: var(--accent-text); fill: var(--accent-surface); }
+.file-dialog-file { color: var(--text-muted); }
+.file-dialog-link { color: var(--accent-text); }
+.file-dialog-footer { flex: none; padding: 9px 12px 10px; display: flex; align-items: center; gap: 10px; border-top: 1px solid var(--border); background: var(--surface-muted); }
 .file-dialog-name { min-width: 0; flex: 1; }
 .file-dialog-name label { display: grid; gap: 5px; color: var(--text-muted); font-size: 11px; }
 .file-dialog-name input { width: 100%; height: 30px; padding: 0 9px; border: 1px solid var(--border-strong); border-radius: 5px; outline: 0; color: var(--text); background: var(--input-bg); font-size: 11px; }
 .file-dialog-name input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--focus-ring); }
-.file-dialog-footer .dialog-actions { flex: none; margin: 0; }
+.file-dialog-footer .dialog-actions { flex: none; margin: 0 0 0 auto; }
 .database-file-dialog-backdrop { z-index: 186; }
 .database-file-dialog { width: min(560px, calc(100vw - 40px)); max-height: calc(100vh - 40px); min-width: 0; min-height: 0; overflow: hidden; }
 .database-file-dialog .form-grid { min-width: 0; min-height: 0; gap: 10px; padding: 13px 14px 14px; overflow: hidden; }

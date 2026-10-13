@@ -2673,6 +2673,20 @@ pub fn files_home() -> String {
         .into_owned()
 }
 #[tauri::command]
+pub fn files_roots() -> Vec<String> {
+    #[cfg(windows)]
+    {
+        (b'A'..=b'Z')
+            .map(|letter| format!("{}:\\", letter as char))
+            .filter(|path| Path::new(path).is_dir())
+            .collect()
+    }
+    #[cfg(not(windows))]
+    {
+        vec![String::from("/")]
+    }
+}
+#[tauri::command]
 pub fn files_parent_local(path: String) -> String {
     Path::new(&path)
         .parent()
@@ -2687,7 +2701,9 @@ pub fn files_list_local(path: String) -> Result<Vec<DirectoryEntry>, String> {
         .map(|entry| {
             let entry = entry.map_err(|e| e.to_string())?;
             let metadata = fs::symlink_metadata(entry.path()).map_err(|e| e.to_string())?;
-            let kind = if metadata.file_type().is_symlink() {
+            let kind = if metadata.file_type().is_symlink() && entry.path().is_dir() {
+                EntryKind::Directory
+            } else if metadata.file_type().is_symlink() {
                 EntryKind::Symlink
             } else if metadata.is_dir() {
                 EntryKind::Directory

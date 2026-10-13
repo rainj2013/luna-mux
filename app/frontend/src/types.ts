@@ -829,6 +829,7 @@ export interface AppApi {
   }
   files: {
     home(): Promise<string>
+    roots(): Promise<string[]>
     parentLocal(path: string): Promise<string>
     remoteHome(sessionId: string): Promise<string>
     listLocal(path: string): Promise<DirectoryEntry[]>
