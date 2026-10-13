@@ -112,6 +112,7 @@ export interface BrowserResource {
   bookmarkId: string
   url: string
   retainProfile: boolean
+  proxyServer: string
   toolProfiles: AgentBrowserToolProfile[]
   sortOrder: number
   createdAt: string
@@ -126,6 +127,7 @@ export interface BrowserResourceInput {
   bookmarkId?: string
   url?: string
   retainProfile?: boolean
+  proxyServer?: string
   toolProfiles?: AgentBrowserToolProfile[]
 }
 

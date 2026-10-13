@@ -605,6 +605,7 @@ pub async fn browser_runtime_create(
         return Err("浏览器资源与会话不匹配".into());
     }
     request.tool_profiles.clone_from(&resource.tool_profiles);
+    request.proxy_server = resource.proxy_server;
     let runtime = state
         .browser_runtimes
         .create(request, resource.retain_profile)

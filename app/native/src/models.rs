@@ -276,6 +276,8 @@ pub struct BrowserResource {
     pub url: String,
     pub retain_profile: bool,
     pub tool_profiles: Vec<String>,
+    #[serde(default)]
+    pub proxy_server: String,
     pub sort_order: i64,
     pub created_at: String,
     pub updated_at: String,
@@ -298,6 +300,8 @@ pub struct BrowserResourceInput {
     pub retain_profile: Option<bool>,
     #[serde(default)]
     pub tool_profiles: Option<Vec<String>>,
+    #[serde(default)]
+    pub proxy_server: Option<String>,
 }
 
 pub const AGENT_BROWSER_TOOL_PROFILES: [&str; 8] = [

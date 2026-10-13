@@ -364,6 +364,11 @@ export function App(): React.JSX.Element {
     await startBrowserResource({ ...resource, runtime: undefined, tunnel: undefined, status: 'stopped', error: undefined })
   }
 
+  const saveBrowserProxy = async (resource: BrowserResourceState, proxyServer: string): Promise<void> => {
+    const saved = await window.api.browserResources.save({ id: resource.id, muxSessionId: resource.muxSessionId, name: resource.name, sourcePaneId: resource.sourcePaneId, bookmarkId: resource.bookmarkId, url: resource.url, proxyServer })
+    setBrowserResources((current) => current.map((item) => item.id === saved.id ? { ...item, ...saved } : item))
+  }
+
   const setBrowserProfileRetention = async (resource: BrowserResourceState, retainProfile: boolean): Promise<void> => {
     try {
       const saved = await window.api.browserResources.save({
@@ -1647,7 +1652,7 @@ export function App(): React.JSX.Element {
             : sessionTabs.length === 0 && sessionBrowserResources.length === 0 ? <div className="welcome-state"><div className="welcome-icon"><SquareTerminal size={30} /></div><h2>{activeMuxSession.name}</h2>{activeMuxSession.rootPath && <p>{activeMuxSession.rootPath}</p>}<div className="welcome-actions"><button className="primary-button" onClick={() => void openPaneLauncher()}><CirclePlus size={16} />{t('app.addFirstPane')}</button></div></div>
             : workspaceView === 'terminal' && visibleSessionTabs.length === 0 ? <div className="welcome-state pane-empty-state"><div className="welcome-icon"><Minus size={30} /></div><h2>{t('app.minimizedPanes')}</h2><p>{t('app.restoreMinimizedPaneDescription')}</p><div className="welcome-actions">{sessionTabs.filter((pane) => minimizedPaneIds.has(pane.id)).map((pane) => <button key={pane.id} className="secondary-button" onClick={() => void restorePane(pane)}><Eye size={15} />{pane.title}</button>)}</div></div>
                 : workspaceView === 'agents' ? <AgentEnvironmentPanel agents={allAgents} panes={sessionTabs} bookmarks={bookmarks} agentAttentionByPane={agentAttentionByPane} onOpenPane={(agent) => { setActiveKey(agent.paneId); setWorkspaceView('terminal'); markAgentRead(agent.agentId) }} onDismissWaiting={dismissAgentWaitingAttention} />
-                  : workspaceView === 'browser' ? <BrowserResourceManager resources={sessionBrowserResources} panes={sessionTabs} chromeInstallation={chromeInstallation} onRefreshChrome={refreshChromeInstallation} onStart={(resource) => void startBrowserResource(resource)} onFocus={(resource) => { if (resource.runtime) void window.api.browserRuntimes.focusExternal(resource.runtime.id).catch((error) => showError(errorMessage(error))) }} onRestart={(resource) => void restartBrowserResource(resource)} onStop={(resource) => void stopBrowserResource(resource)} onRetainProfile={(resource, retain) => void setBrowserProfileRetention(resource, retain)} onToolProfiles={(resource, profiles) => void setBrowserToolProfiles(resource, profiles)} />
+                  : workspaceView === 'browser' ? <BrowserResourceManager resources={sessionBrowserResources} panes={sessionTabs} chromeInstallation={chromeInstallation} onRefreshChrome={refreshChromeInstallation} onSaveProxy={saveBrowserProxy} onStart={(resource) => void startBrowserResource(resource)} onFocus={(resource) => { if (resource.runtime) void window.api.browserRuntimes.focusExternal(resource.runtime.id).catch((error) => showError(errorMessage(error))) }} onRestart={(resource) => void restartBrowserResource(resource)} onStop={(resource) => void stopBrowserResource(resource)} onRetainProfile={(resource, retain) => void setBrowserProfileRetention(resource, retain)} onToolProfiles={(resource, profiles) => void setBrowserToolProfiles(resource, profiles)} />
                     : workspaceView === 'files' && activeTab && activeBookmark ? <div className="session-view active files"><div className="sftp-region"><SftpPane sessionId={activeSshRuntimeId} bookmarkId={activeTab.bookmarkId} connected={activeTab.status === 'connected'} visible onError={showError} onConnect={() => reconnectPane(activeTab)} /></div><TransferPanel transfers={transfers} view={transferView} setView={setTransferView} onRetry={(task) => void retryTransfer(task)} onCancel={(task) => void cancelTransfer(task)} onClear={() => void clearCompletedTransfers()} /></div>
                       : null}
         </div>
@@ -2209,16 +2214,16 @@ function MuxLayout({ node, panes, bookmarks, activePaneId, settings, backgroundI
   </div>
 }
 
-function BrowserResourceManager({ resources, panes, chromeInstallation, onRefreshChrome, onStart, onFocus, onRestart, onStop, onRetainProfile, onToolProfiles }: { resources: BrowserResourceState[]; panes: WorkspaceTab[]; chromeInstallation: ChromeInstallation | null | undefined; onRefreshChrome(): void; onStart(resource: BrowserResourceState): void; onFocus(resource: BrowserResourceState): void; onRestart(resource: BrowserResourceState): void; onStop(resource: BrowserResourceState): void; onRetainProfile(resource: BrowserResourceState, retain: boolean): void; onToolProfiles(resource: BrowserResourceState, profiles: AgentBrowserToolProfile[]): void }): React.JSX.Element {
+function BrowserResourceManager({ resources, panes, chromeInstallation, onRefreshChrome, onSaveProxy, onStart, onFocus, onRestart, onStop, onRetainProfile, onToolProfiles }: { resources: BrowserResourceState[]; panes: WorkspaceTab[]; chromeInstallation: ChromeInstallation | null | undefined; onRefreshChrome(): void; onSaveProxy(resource: BrowserResourceState, proxyServer: string): Promise<void>; onStart(resource: BrowserResourceState): void; onFocus(resource: BrowserResourceState): void; onRestart(resource: BrowserResourceState): void; onStop(resource: BrowserResourceState): void; onRetainProfile(resource: BrowserResourceState, retain: boolean): void; onToolProfiles(resource: BrowserResourceState, profiles: AgentBrowserToolProfile[]): void }): React.JSX.Element {
   const { t } = useI18n()
   const paneMap = new Map(panes.map((pane) => [pane.id, pane]))
   if (!resources.length) return <div className="browser-resource-manager empty"><Globe2 size={30} /><strong>{t('app.noBrowserResources')}</strong></div>
   return <div className="browser-resource-manager">
-    <div className="browser-resource-list">{resources.map((resource) => <BrowserResourceCard key={resource.id} resource={resource} sourcePane={resource.sourcePaneId ? paneMap.get(resource.sourcePaneId) : undefined} chromeInstallation={chromeInstallation} onRefreshChrome={onRefreshChrome} onStart={onStart} onFocus={onFocus} onRestart={onRestart} onStop={onStop} onRetainProfile={onRetainProfile} onToolProfiles={onToolProfiles} />)}</div>
+    <div className="browser-resource-list">{resources.map((resource) => <BrowserResourceCard key={resource.id} resource={resource} sourcePane={resource.sourcePaneId ? paneMap.get(resource.sourcePaneId) : undefined} chromeInstallation={chromeInstallation} onRefreshChrome={onRefreshChrome} onSaveProxy={onSaveProxy} onStart={onStart} onFocus={onFocus} onRestart={onRestart} onStop={onStop} onRetainProfile={onRetainProfile} onToolProfiles={onToolProfiles} />)}</div>
   </div>
 }
 
-function BrowserResourceCard({ resource, sourcePane, chromeInstallation, onRefreshChrome, onStart, onFocus, onRestart, onStop, onRetainProfile, onToolProfiles }: { resource: BrowserResourceState; sourcePane?: WorkspaceTab; chromeInstallation: ChromeInstallation | null | undefined; onRefreshChrome(): void; onStart(resource: BrowserResourceState): void; onFocus(resource: BrowserResourceState): void; onRestart(resource: BrowserResourceState): void; onStop(resource: BrowserResourceState): void; onRetainProfile(resource: BrowserResourceState, retain: boolean): void; onToolProfiles(resource: BrowserResourceState, profiles: AgentBrowserToolProfile[]): void }): React.JSX.Element {
+function BrowserResourceCard({ resource, sourcePane, chromeInstallation, onRefreshChrome, onSaveProxy, onStart, onFocus, onRestart, onStop, onRetainProfile, onToolProfiles }: { resource: BrowserResourceState; sourcePane?: WorkspaceTab; chromeInstallation: ChromeInstallation | null | undefined; onRefreshChrome(): void; onSaveProxy(resource: BrowserResourceState, proxyServer: string): Promise<void>; onStart(resource: BrowserResourceState): void; onFocus(resource: BrowserResourceState): void; onRestart(resource: BrowserResourceState): void; onStop(resource: BrowserResourceState): void; onRetainProfile(resource: BrowserResourceState, retain: boolean): void; onToolProfiles(resource: BrowserResourceState, profiles: AgentBrowserToolProfile[]): void }): React.JSX.Element {
   const { t } = useI18n()
   const live = resource.status === 'running' && Boolean(resource.runtime)
   const statusLabel = resource.status === 'starting' ? t('app.connecting') : live ? t('app.browserRunning') : resource.status === 'error' ? t('app.browserRuntimeFailed') : t('app.browserRuntimeStopped')
@@ -2251,10 +2256,11 @@ function BrowserResourceCard({ resource, sourcePane, chromeInstallation, onRefre
       <div><dt>{t('app.chromeProcess')}</dt><dd><code>{resource.runtime ? `PID ${resource.runtime.processId} · CDP ${resource.runtime.cdpPort}` : '—'}</code></dd></div>
     </dl>
     <div className="browser-resource-settings">
-      <section className="browser-setting-block">
+      <BrowserProxySettings resource={resource} onSave={onSaveProxy} />
+      <section className="browser-setting-block browser-profile-settings">
         <header><strong>{t('app.browserProfileSettings')}</strong></header>
-        <div className="browser-tool-groups">
-          <label className={`browser-tool-group ${resource.retainProfile ? 'selected' : ''} ${profileLocked ? 'locked' : ''}`} title={profileLocked ? t('app.stopBrowserBeforeProfileChange') : undefined}>
+        <div className="browser-profile-controls">
+          <label className={`browser-tool-group browser-profile-option ${resource.retainProfile ? 'selected' : ''} ${profileLocked ? 'locked' : ''}`} title={profileLocked ? t('app.stopBrowserBeforeProfileChange') : undefined}>
             <input type="checkbox" checked={resource.retainProfile} disabled={profileLocked} onChange={(event) => onRetainProfile(resource, event.target.checked)} />
             <span>
               <strong>{t('app.retainBrowserData')}</strong>
@@ -2263,7 +2269,7 @@ function BrowserResourceCard({ resource, sourcePane, chromeInstallation, onRefre
           </label>
         </div>
       </section>
-      <section className="browser-setting-block">
+      <section className="browser-setting-block browser-tools-settings">
         <header>
           <strong>{t('app.browserAgentTools')}</strong>
           <span>{t('app.browserAgentToolCount', { value0: String(selectedCount) })}</span>
@@ -2282,6 +2288,34 @@ function BrowserResourceCard({ resource, sourcePane, chromeInstallation, onRefre
         })}</div>
       </section>
     </div>
+  </section>
+}
+
+function BrowserProxySettings({ resource, onSave }: { resource: BrowserResourceState; onSave(resource: BrowserResourceState, proxyServer: string): Promise<void> }): React.JSX.Element {
+  const { t } = useI18n()
+  const [proxyServer, setProxyServer] = useState(resource.proxyServer || '')
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [error, setError] = useState('')
+  useEffect(() => { setProxyServer(resource.proxyServer || '') }, [resource.proxyServer])
+  const save = async (): Promise<void> => {
+    if (saving) return
+    setSaving(true)
+    setError('')
+    setSaved(false)
+    try { await onSave(resource, proxyServer); setSaved(true) }
+    catch { setError(t('app.browserProxySaveFailed')) }
+    finally { setSaving(false) }
+  }
+  return <section className="browser-setting-block browser-proxy-settings">
+    <header><strong>{t('app.browserProxySettings')}</strong></header>
+    <form className="form-grid browser-proxy-form" onSubmit={(event) => { event.preventDefault(); void save() }}>
+      <label>{t('app.browserProxyServer')}<span className="browser-proxy-controls"><input value={proxyServer} onChange={(event) => { setProxyServer(event.target.value); setSaved(false); setError('') }} placeholder="http://127.0.0.1:7890" disabled={saving} autoComplete="off" spellCheck={false} maxLength={2048} /><button type="submit" className="primary-button" disabled={saving || resource.status === 'starting' || proxyServer.trim() === (resource.proxyServer || '')}>{t('common.save')}</button></span></label>
+      <p className="browser-setting-copy">{t('app.browserProxyHelp')}</p>
+      <p className="browser-setting-copy">{t('app.browserProxyRestart')}</p>
+      {error && <div className="browser-resource-error" role="alert">{error}</div>}
+      {saved && <p className="browser-setting-copy" role="status">{t('app.browserProxySaved')}</p>}
+    </form>
   </section>
 }
 
