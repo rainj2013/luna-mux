@@ -488,6 +488,20 @@ impl BrowserRuntimeManager {
             &runtime_id,
             retain_profile,
         );
+        // A retained profile can still belong to Chrome after its Runtime was
+        // lost. Check before touching Preferences or asking Chrome to reuse it:
+        // Chrome's singleton handoff would otherwise leave our new CDP port idle.
+        if retain_profile {
+            let profile = profile_path.clone();
+            let owner = tokio::task::spawn_blocking(move || chrome_profile_owner(&profile))
+                .await
+                .map_err(|_| "无法检查旧浏览器进程，请稍后重试".to_string())?;
+            if let Some(process_id) = owner {
+                return Err(format!(
+                    "该会话的浏览器数据仍被旧 Chrome 窗口占用（PID {process_id}），但窗口未关联到当前运行时。请关闭旧窗口后再启动；浏览器数据会保留。"
+                ));
+            }
+        }
         std::fs::create_dir_all(&profile_path).map_err(|error| {
             format!(
                 "无法创建 Chrome 配置目录 {}: {error}",
@@ -549,7 +563,9 @@ impl BrowserRuntimeManager {
             status: BrowserRuntimeStatus::Starting,
             error: None,
         };
-        if let Err(error) = wait_for_cdp(port, Duration::from_secs(8)).await {
+        if let Err(error) =
+            wait_for_chrome_cdp(port, Duration::from_secs(8), Some(&mut child)).await
+        {
             cleanup_failed_browser_start(&mut child);
             summary.status = BrowserRuntimeStatus::Error;
             summary.error = Some(error.clone());
@@ -2515,6 +2531,74 @@ fn validate_id(name: &str, value: &str) -> Result<String, String> {
     Ok(value.into())
 }
 
+fn chrome_profile_owner(profile: &Path) -> Option<u32> {
+    chrome_process_profiles()
+        .into_iter()
+        .find_map(|(pid, actual)| chrome_profile_paths_equal(&actual, profile).then_some(pid))
+}
+
+/// Read native process metadata rather than invoking WMIC or a shell. No
+/// browser is launched, adopted, or terminated by this probe.
+fn chrome_process_profiles() -> Vec<(u32, PathBuf)> {
+    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+    let mut system = System::new();
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true,
+        ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always),
+    );
+    system
+        .processes()
+        .iter()
+        .filter_map(|(pid, process)| {
+            let profile = chrome_main_process_profile(process.name(), process.cmd())?;
+            Some((pid.as_u32(), profile))
+        })
+        .collect()
+}
+
+fn chrome_main_process_profile(
+    name: &std::ffi::OsStr,
+    args: &[std::ffi::OsString],
+) -> Option<PathBuf> {
+    let name = name.to_string_lossy();
+    if !matches!(name.as_ref(), "chrome.exe" | "Google Chrome" | "chrome")
+        || args
+            .iter()
+            .any(|arg| arg.to_string_lossy().starts_with("--type="))
+    {
+        return None;
+    }
+    chrome_profile_from_args(args)
+}
+
+fn chrome_profile_from_args(args: &[std::ffi::OsString]) -> Option<PathBuf> {
+    args.iter().find_map(|arg| {
+        let arg = arg.to_str()?;
+        let profile = arg.strip_prefix("--user-data-dir=")?;
+        (!profile.is_empty()).then(|| PathBuf::from(profile))
+    })
+}
+
+fn chrome_profile_paths_equal(actual: &Path, expected: &Path) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        // Windows paths are insensitive to case and separator style. Compare
+        // the whole path; prefix matching can capture another resource.
+        let normalize = |path: &Path| {
+            path.to_string_lossy()
+                .replace('\\', "/")
+                .trim_end_matches('/')
+                .to_lowercase()
+        };
+        normalize(actual) == normalize(expected)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        actual == expected
+    }
+}
+
 fn normalize_url(value: &str) -> Result<String, String> {
     let value = value.trim();
     if value.is_empty() || value.eq_ignore_ascii_case("about:blank") {
@@ -2547,14 +2631,35 @@ fn reserve_loopback_listener() -> Result<TcpListener, String> {
         .map_err(|error| format!("无法分配 Chrome CDP 端口: {error}"))
 }
 
+#[cfg(test)]
 async fn wait_for_cdp(port: u16, timeout: Duration) -> Result<(), String> {
+    wait_for_chrome_cdp(port, timeout, None).await
+}
+
+async fn wait_for_chrome_cdp(
+    port: u16,
+    timeout: Duration,
+    mut child: Option<&mut Child>,
+) -> Result<(), String> {
     let deadline = Instant::now() + timeout;
     let client = reqwest::Client::builder()
+        .no_proxy()
         .timeout(Duration::from_millis(500))
         .build()
         .map_err(|error| format!("无法创建 CDP 检查客户端: {error}"))?;
     let endpoint = format!("http://127.0.0.1:{port}/json/version");
     while Instant::now() < deadline {
+        if let Some(child) = child.as_deref_mut() {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    return Err(format!(
+                        "Chrome 在调试接口就绪前已退出（{status}）。可能已将启动请求转交给旧窗口，请关闭该会话的旧 Chrome 窗口后重试。"
+                    ));
+                }
+                Ok(None) => {}
+                Err(_) => return Err("无法检查 Chrome 启动状态，请重新启动浏览器".into()),
+            }
+        }
         if let Ok(response) = client.get(&endpoint).send().await
             && response.status().is_success()
         {
@@ -2562,9 +2667,7 @@ async fn wait_for_cdp(port: u16, timeout: Duration) -> Result<(), String> {
         }
         tokio::time::sleep(Duration::from_millis(120)).await;
     }
-    Err(format!(
-        "Chrome 已启动，但 CDP 端口 {port} 未在限定时间内就绪"
-    ))
+    Err("Chrome 调试接口未在限定时间内就绪。请检查该会话是否有旧 Chrome 窗口未关闭，关闭后再启动浏览器。".into())
 }
 
 async fn page_websocket_url(port: u16, preferred_url: &str) -> Result<String, String> {
@@ -2932,6 +3035,117 @@ mod tests {
         page_websocket_url, parse_shortcut, reserve_loopback_port, resolve_agent_browser_binary,
         select_page_websocket_url, wait_for_cdp, warm_agent_browser_session,
     };
+
+    #[test]
+    fn chrome_profile_probe_matches_only_main_processes_and_exact_profiles() {
+        use std::ffi::{OsStr, OsString};
+        use std::path::Path;
+        let profile = Path::new("C:/Users/Test User/browser-profiles/sessions/fc/resource");
+        let args = vec![
+            OsString::from("chrome.exe"),
+            OsString::from(format!("--user-data-dir={}", profile.display())),
+            OsString::from("--new-window"),
+        ];
+        for name in ["chrome.exe", "Google Chrome", "chrome"] {
+            assert_eq!(
+                super::chrome_main_process_profile(OsStr::new(name), &args),
+                Some(profile.into())
+            );
+        }
+        assert!(super::chrome_main_process_profile(OsStr::new("other.exe"), &args).is_none());
+        let mut helper_args = args.clone();
+        helper_args.push(OsString::from("--type=renderer"));
+        assert!(
+            super::chrome_main_process_profile(OsStr::new("chrome.exe"), &helper_args).is_none()
+        );
+        assert!(super::chrome_main_process_profile(OsStr::new("chrome.exe"), &[]).is_none());
+        assert!(super::chrome_profile_paths_equal(profile, profile));
+        for other in [
+            "C:/Users/Test User/browser-profiles/sessions/fc/resource-other",
+            "C:/Users/Test User/browser-profiles/sessions/fc/resource/child",
+            "C:/Users/Test User/browser-profiles/sessions/other/resource",
+        ] {
+            assert!(!super::chrome_profile_paths_equal(
+                Path::new(other),
+                profile
+            ));
+        }
+        #[cfg(windows)]
+        assert!(super::chrome_profile_paths_equal(
+            Path::new(r"c:\users\test user\browser-profiles\sessions\FC\resource\"),
+            profile,
+        ));
+    }
+
+    #[test]
+    #[ignore = "requires an already running Chrome; never launches a browser"]
+    fn chrome_profile_probe_reads_existing_native_process_metadata() {
+        let profiles = super::chrome_process_profiles();
+        assert!(
+            !profiles.is_empty(),
+            "open the Session browser before running this test"
+        );
+        for (_, profile) in profiles {
+            assert!(super::chrome_profile_owner(&profile).is_some());
+        }
+    }
+
+    #[tokio::test]
+    async fn chrome_cdp_wait_reports_early_exit_without_waiting_for_timeout() {
+        #[cfg(windows)]
+        let mut command = crate::local_pty_backend::windows_no_window_command("cmd.exe");
+        #[cfg(windows)]
+        command.args(["/C", "exit 17"]);
+        #[cfg(not(windows))]
+        let mut command = std::process::Command::new("sh");
+        #[cfg(not(windows))]
+        command.args(["-c", "exit 17"]);
+        let mut child = command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        child.wait().unwrap();
+        let port = reserve_loopback_port().unwrap();
+        let started = std::time::Instant::now();
+        let error = super::wait_for_chrome_cdp(port, Duration::from_secs(8), Some(&mut child))
+            .await
+            .unwrap_err();
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(error.contains("已退出"));
+        assert!(error.contains("旧窗口"));
+        assert!(!error.contains(&port.to_string()));
+    }
+
+    #[tokio::test]
+    async fn chrome_cdp_wait_timeout_explains_recovery_without_exposing_endpoint() {
+        let port = reserve_loopback_port().unwrap();
+        let error = wait_for_cdp(port, Duration::from_millis(200))
+            .await
+            .unwrap_err();
+        assert!(error.contains("未在限定时间内就绪"));
+        assert!(error.contains("旧 Chrome 窗口"));
+        assert!(!error.contains(&port.to_string()));
+    }
+
+    #[tokio::test]
+    async fn chrome_cdp_wait_accepts_ready_loopback_endpoint() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0; 1024];
+            socket.read(&mut request).await.unwrap();
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+                .await
+                .unwrap();
+        });
+        wait_for_cdp(port, Duration::from_secs(2)).await.unwrap();
+        server.await.unwrap();
+    }
 
     #[tokio::test]
     async fn browser_warmup_gate_runs_once_per_runtime_and_retries_failures() {

@@ -116,6 +116,8 @@ Browser Resource 持有“保留浏览器数据”设置，默认关闭。关闭
 
 BrowserRuntimeManager 通过 CDP 让绑定页面的配色跟随应用主题，选择“跟随系统”时由 Chrome 跟随操作系统。截图默认开启元素标注。
 
+复用固定配置目录前，BrowserRuntimeManager 通过原生进程元数据检查是否仍有未关联的 Chrome 主进程使用该目录。匹配限定为完整目录路径，排除其他资源和 Chrome 子进程；发现占用时，在修改配置和启动进程前提示用户关闭旧窗口，保留浏览器数据。检测只读取进程信息，不接管或关闭未关联窗口。Chrome 在 CDP 就绪前退出时立即返回退出原因；就绪检查直接访问回环地址，不经过系统代理。
+
 应用负责浏览器生命周期，`agent_browser` 负责页面自动化。自动化绑定 Session 的现有页面，普通导航复用该页面；网页操作不能自行启动或替换浏览器进程。
 
 Browser Resource 按上游 profile 持久化 Agent 工具组选择：Core 始终启用；Network、Debug、Tabs、State/Auth Vault、React、Mobile 与 WebMCP 默认关闭，可在 Browser 页分类勾选。本地和远程 Agent 使用同一选择。保存会更新当前 Runtime 的注册信息，新 MCP 连接立即采用；已运行的 Agent 需重启后重新发现工具，因为当前客户端不会响应工具列表热变更。Browser Runtime 始终启用 Chrome WebMCP 接口，但只有启用 WebMCP 工具组后 Agent 才能发现页面注册的工具。React 检查须在打开页面时启用 `react-devtools`。Luna Mux 不附带上游 skills，以免其 CLI 和具名会话指引与受管浏览器契约冲突。
