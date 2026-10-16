@@ -30,10 +30,10 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 regex = "1"
-rmcp = { version = "3.4.0", features = ["client", "transport-io", "transport-streamable-http-client-reqwest", "transport-streamable-http-server"] }
+rmcp = { version = "3.5.1", features = ["client", "transport-io", "transport-streamable-http-client-reqwest", "transport-streamable-http-server"] }
 rusqlite = { version = "0.37", features = ["bundled"] }
-russh = "0.63.3"
-russh-sftp = "3.0.0"
+russh = "0.64.1"
+russh-sftp = "3.0.1"
 portable-pty = "0.9"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
