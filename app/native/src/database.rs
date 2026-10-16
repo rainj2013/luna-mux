@@ -567,7 +567,16 @@ impl Database {
             if !has_proxy_server {
                 transaction.execute("ALTER TABLE browser_resources ADD COLUMN proxyServer TEXT NOT NULL DEFAULT ''", [])?;
             }
-            transaction.execute_batch("PRAGMA user_version = 11;")?;
+            let has_proxy_enabled = {
+                let mut statement = transaction.prepare("PRAGMA table_info(browser_resources)")?;
+                let columns = statement.query_map([], |row| row.get::<_, String>(1))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                columns.iter().any(|column| column == "proxyEnabled")
+            };
+            if !has_proxy_enabled {
+                transaction.execute_batch("ALTER TABLE browser_resources ADD COLUMN proxyEnabled INTEGER NOT NULL DEFAULT 0; UPDATE browser_resources SET proxyEnabled = CASE WHEN proxyServer <> '' THEN 1 ELSE 0 END;")?;
+            }
+            transaction.execute_batch("PRAGMA user_version = 12;")?;
             transaction.commit()
         })?;
         let has_sort_order = self.with_conn(|db| {
@@ -917,9 +926,9 @@ impl Database {
     ) -> Result<Vec<BrowserResource>, String> {
         self.with_conn(|db| {
             let sql = if mux_session_id.is_some() {
-                "SELECT id,muxSessionId,name,sourcePaneId,bookmarkId,url,reuseLocalProfile,retainProfile,toolProfilesJson,sortOrder,createdAt,updatedAt,proxyServer FROM browser_resources WHERE muxSessionId=? ORDER BY sortOrder ASC,createdAt ASC"
+                "SELECT id,muxSessionId,name,sourcePaneId,bookmarkId,url,reuseLocalProfile,retainProfile,toolProfilesJson,sortOrder,createdAt,updatedAt,proxyServer,proxyEnabled FROM browser_resources WHERE muxSessionId=? ORDER BY sortOrder ASC,createdAt ASC"
             } else {
-                "SELECT id,muxSessionId,name,sourcePaneId,bookmarkId,url,reuseLocalProfile,retainProfile,toolProfilesJson,sortOrder,createdAt,updatedAt,proxyServer FROM browser_resources ORDER BY muxSessionId ASC,sortOrder ASC,createdAt ASC"
+                "SELECT id,muxSessionId,name,sourcePaneId,bookmarkId,url,reuseLocalProfile,retainProfile,toolProfilesJson,sortOrder,createdAt,updatedAt,proxyServer,proxyEnabled FROM browser_resources ORDER BY muxSessionId ASC,sortOrder ASC,createdAt ASC"
             };
             let mut statement = db.prepare(sql)?;
             let read = |row: &rusqlite::Row<'_>| {
@@ -940,6 +949,7 @@ impl Database {
                     created_at: row.get(10)?,
                     updated_at: row.get(11)?,
                     proxy_server: row.get(12)?,
+                    proxy_enabled: row.get(13)?,
                 })
             };
             if let Some(id) = mux_session_id {
@@ -988,6 +998,7 @@ impl Database {
             retain_profile: Some(false),
             tool_profiles: Some(crate::models::default_agent_browser_tool_profiles()),
             proxy_server: None,
+            proxy_enabled: None,
         })
     }
 
@@ -1041,10 +1052,24 @@ impl Database {
             return Err("每个 Mux Session 只能关联一个浏览器资源".into());
         }
         let existing = existing.into_iter().find(|resource| resource.id == id);
+        let proxy_was_supplied = input.proxy_server.is_some();
         let proxy_server = match input.proxy_server {
             Some(value) => crate::browser_proxy::normalize_proxy_server(&value)?,
-            None => existing.as_ref().map(|resource| resource.proxy_server.clone()).unwrap_or_default(),
+            None => existing
+                .as_ref()
+                .map(|resource| resource.proxy_server.clone())
+                .unwrap_or_default(),
         };
+        let proxy_enabled = input.proxy_enabled.unwrap_or_else(|| {
+            if proxy_was_supplied {
+                !proxy_server.is_empty()
+            } else {
+                existing
+                    .as_ref()
+                    .map(|resource| resource.proxy_enabled)
+                    .unwrap_or(false)
+            }
+        });
         let retain_profile = input
             .retain_profile
             .or_else(|| existing.as_ref().map(|resource| resource.retain_profile))
@@ -1078,6 +1103,7 @@ impl Database {
             retain_profile,
             tool_profiles,
             proxy_server,
+            proxy_enabled,
             sort_order,
             created_at: existing
                 .as_ref()
@@ -1088,8 +1114,8 @@ impl Database {
         let tool_profiles_json =
             serde_json::to_string(&resource.tool_profiles).map_err(|error| error.to_string())?;
         self.with_conn(|db| db.execute(
-            "INSERT INTO browser_resources(id,muxSessionId,name,sourcePaneId,bookmarkId,url,reuseLocalProfile,retainProfile,toolProfilesJson,sortOrder,createdAt,updatedAt,proxyServer) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET muxSessionId=excluded.muxSessionId,name=excluded.name,sourcePaneId=excluded.sourcePaneId,bookmarkId=excluded.bookmarkId,url=excluded.url,reuseLocalProfile=excluded.reuseLocalProfile,retainProfile=excluded.retainProfile,toolProfilesJson=excluded.toolProfilesJson,updatedAt=excluded.updatedAt,proxyServer=excluded.proxyServer",
-            params![resource.id,resource.mux_session_id,resource.name,resource.source_pane_id,resource.bookmark_id,resource.url,0_i64,resource.retain_profile as i64,tool_profiles_json,resource.sort_order,resource.created_at,resource.updated_at,resource.proxy_server],
+            "INSERT INTO browser_resources(id,muxSessionId,name,sourcePaneId,bookmarkId,url,reuseLocalProfile,retainProfile,toolProfilesJson,sortOrder,createdAt,updatedAt,proxyServer,proxyEnabled) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET muxSessionId=excluded.muxSessionId,name=excluded.name,sourcePaneId=excluded.sourcePaneId,bookmarkId=excluded.bookmarkId,url=excluded.url,reuseLocalProfile=excluded.reuseLocalProfile,retainProfile=excluded.retainProfile,toolProfilesJson=excluded.toolProfilesJson,updatedAt=excluded.updatedAt,proxyServer=excluded.proxyServer,proxyEnabled=excluded.proxyEnabled",
+            params![resource.id,resource.mux_session_id,resource.name,resource.source_pane_id,resource.bookmark_id,resource.url,0_i64,resource.retain_profile as i64,tool_profiles_json,resource.sort_order,resource.created_at,resource.updated_at,resource.proxy_server,resource.proxy_enabled as i64],
         ).map(|_| ()))?;
         Ok(resource)
     }
@@ -2238,6 +2264,7 @@ mod tests {
                 retain_profile: Some(false),
                 tool_profiles: None,
                 proxy_server: None,
+                proxy_enabled: None,
             })
             .unwrap();
         assert!(browser.url.is_empty());
@@ -2255,6 +2282,7 @@ mod tests {
                     retain_profile: Some(false),
                     tool_profiles: None,
                     proxy_server: None,
+                    proxy_enabled: None,
                 })
                 .unwrap_err()
                 .contains("只能关联一个浏览器资源")
@@ -2270,6 +2298,7 @@ mod tests {
                 retain_profile: Some(true),
                 tool_profiles: Some(vec!["debug".into(), "network".into()]),
                 proxy_server: None,
+                proxy_enabled: None,
             })
             .unwrap();
         assert_eq!(renamed.id, browser.id);
@@ -2287,6 +2316,7 @@ mod tests {
                 retain_profile: None,
                 tool_profiles: None,
                 proxy_server: None,
+                proxy_enabled: None,
             })
             .unwrap();
         assert!(
@@ -2335,6 +2365,7 @@ mod tests {
                 retain_profile: Some(false),
                 tool_profiles: Some(vec!["core".into()]),
                 proxy_server: None,
+                proxy_enabled: None,
             })
             .unwrap();
         assert_eq!(browser.tool_profiles, vec!["core"]);
@@ -2373,6 +2404,7 @@ mod tests {
                 retain_profile: None,
                 tool_profiles: Some(vec!["core".into()]),
                 proxy_server: None,
+                proxy_enabled: None,
             })
             .unwrap();
         assert_eq!(core_only.tool_profiles, vec!["core"]);
@@ -2452,6 +2484,7 @@ mod tests {
                 retain_profile: None,
                 tool_profiles: None,
                 proxy_server: None,
+                proxy_enabled: None,
             })
             .unwrap();
         assert!(
@@ -2514,21 +2547,32 @@ mod tests {
     fn browser_proxy_persists_preserves_other_settings_and_migrates() {
         let path = std::env::temp_dir().join(format!("browser-proxy-{}.db", Uuid::new_v4()));
         let database = Database::open(&path, "browser-proxy-test").unwrap();
-        let session = database.save_mux_session(MuxSessionInput {
-            id: None, name: "Proxy Session".into(), root_path: String::new(), layout: None,
-        }).unwrap();
-        let resource = database.ensure_session_browser_resource(&session.id).unwrap();
+        let session = database
+            .save_mux_session(MuxSessionInput {
+                id: None,
+                name: "Proxy Session".into(),
+                root_path: String::new(),
+                layout: None,
+            })
+            .unwrap();
+        let resource = database
+            .ensure_session_browser_resource(&session.id)
+            .unwrap();
         assert!(resource.proxy_server.is_empty());
         let mut input: BrowserResourceInput = serde_json::from_value(serde_json::json!({
             "id": resource.id, "muxSessionId": session.id, "name": resource.name,
             "retainProfile": true, "toolProfiles": ["core", "debug"],
             "proxyServer": " http://127.0.0.1:7890/ "
-        })).unwrap();
+        }))
+        .unwrap();
         let saved = database.save_browser_resource(input.clone()).unwrap();
         assert_eq!(saved.proxy_server, "http://127.0.0.1:7890");
         drop(database);
         let database = Database::open(&path, "browser-proxy-test").unwrap();
-        assert_eq!(database.list_browser_resources(Some(&session.id)).unwrap(), vec![saved.clone()]);
+        assert_eq!(
+            database.list_browser_resources(Some(&session.id)).unwrap(),
+            vec![saved.clone()]
+        );
         input.proxy_server = None;
         input.retain_profile = None;
         input.tool_profiles = None;
@@ -2538,18 +2582,103 @@ mod tests {
         assert_eq!(preserved.tool_profiles, saved.tool_profiles);
         input.proxy_server = Some("http://user:secret@localhost:7890".into());
         assert!(database.save_browser_resource(input.clone()).is_err());
-        assert_eq!(database.list_browser_resources(Some(&session.id)).unwrap()[0].proxy_server, saved.proxy_server);
+        assert_eq!(
+            database.list_browser_resources(Some(&session.id)).unwrap()[0].proxy_server,
+            saved.proxy_server
+        );
         input.proxy_server = Some(String::new());
-        assert!(database.save_browser_resource(input).unwrap().proxy_server.is_empty());
+        assert!(
+            database
+                .save_browser_resource(input)
+                .unwrap()
+                .proxy_server
+                .is_empty()
+        );
         database.with_conn(|db| db.execute_batch("ALTER TABLE browser_resources DROP COLUMN proxyServer; PRAGMA user_version = 10;")).unwrap();
         drop(database);
         let database = Database::open(&path, "browser-proxy-test").unwrap();
-        let migrated = database.list_browser_resources(Some(&session.id)).unwrap().remove(0);
+        let migrated = database
+            .list_browser_resources(Some(&session.id))
+            .unwrap()
+            .remove(0);
         assert!(migrated.proxy_server.is_empty());
         assert!(migrated.retain_profile);
         assert_eq!(migrated.tool_profiles, saved.tool_profiles);
         drop(database);
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn browser_proxy_switch_retains_address_and_migrates_existing_configuration() {
+        let path = std::env::temp_dir().join(format!("browser-proxy-switch-{}.db", Uuid::new_v4()));
+        let database = Database::open(&path, "proxy-switch-test").unwrap();
+        let session = database
+            .save_mux_session(MuxSessionInput {
+                id: None,
+                name: "Proxy".into(),
+                root_path: String::new(),
+                layout: None,
+            })
+            .unwrap();
+        let resource = database
+            .ensure_session_browser_resource(&session.id)
+            .unwrap();
+        assert!(!resource.proxy_enabled);
+        let mut input: BrowserResourceInput = serde_json::from_value(serde_json::json!({
+            "id":resource.id, "muxSessionId":session.id, "name":resource.name,
+            "proxyServer":"http://localhost:7890"
+        }))
+        .unwrap();
+        let enabled = database.save_browser_resource(input.clone()).unwrap();
+        assert!(
+            enabled.proxy_enabled,
+            "old clients supplying an endpoint must still enable it"
+        );
+        assert_eq!(enabled.proxy_for_launch(), "http://localhost:7890");
+        input.proxy_server = None;
+        input.proxy_enabled = Some(false);
+        let disabled = database.save_browser_resource(input.clone()).unwrap();
+        assert_eq!(disabled.proxy_server, enabled.proxy_server);
+        assert!(disabled.proxy_for_launch().is_empty());
+        drop(database);
+        let database = Database::open(&path, "proxy-switch-test").unwrap();
+        let restored = database
+            .list_browser_resources(Some(&session.id))
+            .unwrap()
+            .remove(0);
+        assert!(!restored.proxy_enabled);
+        assert_eq!(restored.proxy_server, enabled.proxy_server);
+        input.proxy_enabled = None;
+        assert!(
+            !database
+                .save_browser_resource(input.clone())
+                .unwrap()
+                .proxy_enabled,
+            "unrelated saves must preserve the switch"
+        );
+        input.proxy_enabled = Some(true);
+        assert_eq!(
+            database
+                .save_browser_resource(input)
+                .unwrap()
+                .proxy_for_launch(),
+            enabled.proxy_server
+        );
+        database.with_conn(|db| db.execute_batch("ALTER TABLE browser_resources DROP COLUMN proxyEnabled; PRAGMA user_version=11;")).unwrap();
+        drop(database);
+        let database = Database::open(&path, "proxy-switch-test").unwrap();
+        let migrated = database
+            .list_browser_resources(Some(&session.id))
+            .unwrap()
+            .remove(0);
+        assert!(migrated.proxy_enabled);
+        assert_eq!(migrated.proxy_for_launch(), enabled.proxy_server);
+        let mut legacy_json = serde_json::to_value(&migrated).unwrap();
+        legacy_json.as_object_mut().unwrap().remove("proxyEnabled");
+        let legacy: crate::models::BrowserResource = serde_json::from_value(legacy_json).unwrap();
+        assert_eq!(legacy.proxy_for_launch(), enabled.proxy_server);
+        drop(database);
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

@@ -113,6 +113,7 @@ export interface BrowserResource {
   url: string
   retainProfile: boolean
   proxyServer: string
+  proxyEnabled: boolean
   toolProfiles: AgentBrowserToolProfile[]
   sortOrder: number
   createdAt: string
@@ -128,6 +129,7 @@ export interface BrowserResourceInput {
   url?: string
   retainProfile?: boolean
   proxyServer?: string
+  proxyEnabled?: boolean
   toolProfiles?: AgentBrowserToolProfile[]
 }
 
