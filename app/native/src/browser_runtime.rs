@@ -136,6 +136,9 @@ struct AgentBrowserMcpConfig {
     max_output: u32,
     pin_tab: bool,
     annotate: bool,
+    /// CLI HTTPS requests should use the same OS trust store as managed Chrome,
+    /// including enterprise CAs. This does not disable certificate verification.
+    use_system_ca: bool,
     /// Keep page-initiated downloads inside the product data directory instead
     /// of the user's default Downloads folder, so browser downloads stay
     /// isolated with the rest of the Session's browser state.
@@ -1707,6 +1710,7 @@ fn write_agent_browser_mcp_config(path: &Path, scope: &str, cdp_port: u16) -> Re
         max_output: 50_000,
         pin_tab: true,
         annotate: true,
+        use_system_ca: true,
         download_path: agent_browser_download_dir(scope)
             .to_string_lossy()
             .into_owned(),
@@ -3628,6 +3632,8 @@ mod tests {
         assert_eq!(config["maxOutput"], 50_000);
         assert_eq!(config["pinTab"], true);
         assert_eq!(config["annotate"], true);
+        assert_eq!(config["useSystemCa"], true);
+        assert!(config.get("ignoreHttpsErrors").is_none());
         assert!(
             config["downloadPath"]
                 .as_str()
@@ -4031,7 +4037,9 @@ mod tests {
             .map(|profile| (*profile).to_string())
             .collect::<Vec<_>>();
         let tools_arg = super::agent_browser_tools_arg(&all_profiles);
-        let mut mcp = std::process::Command::new(binary)
+        let mut command = std::process::Command::new(binary);
+        super::configure_agent_browser_command(&mut command);
+        let mut mcp = command
             // No browser is needed: the tool surface is static and the server
             // answers discovery before anything is attached.
             .args(["mcp", "--tools", &tools_arg])
@@ -4076,6 +4084,7 @@ mod tests {
         );
 
         let mut names = Vec::new();
+        let mut schemas = std::collections::HashMap::new();
         let mut cursor: Option<String> = None;
         let mut pages = 0;
         loop {
@@ -4100,6 +4109,10 @@ mod tests {
             let tools = page["result"]["tools"].as_array().expect("tools array");
             for tool in tools {
                 names.push(tool["name"].as_str().expect("tool name").to_string());
+                schemas.insert(
+                    tool["name"].as_str().unwrap().to_string(),
+                    tool["inputSchema"].clone(),
+                );
             }
             match page["result"]["nextCursor"].as_str() {
                 Some(next) if !next.is_empty() => cursor = Some(next.to_string()),
@@ -4148,6 +4161,15 @@ mod tests {
         ] {
             assert!(has(tool), "{tool} disappeared from the tool list");
         }
+        // These fields are used by the shared Codex/Claude instructions and
+        // must remain available across sidecar upgrades, including remote MCP.
+        let snapshot = &schemas["agent_browser_snapshot"]["properties"];
+        for field in ["selector", "interactive", "delta", "full"] {
+            assert!(snapshot.get(field).is_some(), "snapshot is missing {field}");
+        }
+        let read = &schemas["agent_browser_read"]["properties"];
+        assert_eq!(read["useSystemCa"]["type"], "boolean");
+        assert_eq!(read["caCert"]["type"], "string");
     }
 
     #[tokio::test]

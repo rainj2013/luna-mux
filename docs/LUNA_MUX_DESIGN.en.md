@@ -128,6 +128,8 @@ Each Browser Resource persists an Agent tool-group selection using upstream prof
 
 Injected Agent instructions describe the optional groups and, when Debug is enabled, batch calls, accessibility audits, and screenshot/snapshot comparisons. Core incremental observation and output filtering remain available.
 
+The bundled agent-browser is pinned to 0.39.1, with release SHA-256 checks for Windows x64 and macOS x64/ARM64. Browser MCP config enables `useSystemCa` by default so the CLI's own HTTPS requests trust the operating system certificate store while retaining certificate verification; managed Chrome's certificate settings are unaffected. A tool's `caCert` is a PEM path on the Luna Mux host, including for WSL/SSH Agents. The MCP bridge preserves upstream `structuredContent.response.code`; `outcome_unknown` means an operation may already have executed, so Agents must inspect read-only state before deciding whether to retry. Scoped snapshots can read the selected custom element's Shadow DOM. The experimental Obscura engine is not integrated into the existing Chrome/CDP Runtime.
+
 CDP binds only to local loopback, with ports and connection details kept as temporary runtime state. Remote Agents access the Session browser through authenticated Runtime communication bridges; raw CDP is not forwarded remotely. Remote development services use separate SSH tunnels, which browser resources do not own.
 
 Tool routing follows resource ownership: Luna MCP controls application resources, `agent_browser` operates web content, and native tools handle development and host work. Terminal Panes and browser tabs are distinct resources.

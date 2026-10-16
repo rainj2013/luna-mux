@@ -128,6 +128,8 @@ Browser Resource 按上游 profile 持久化 Agent 工具组选择：Core 始终
 
 Agent 注入指引说明可选工具组，以及启用 Debug 后的批量调用、无障碍审计、截图与快照差异比较；Core 的增量观察和输出收窄始终可用。
 
+内置 agent-browser 固定为 0.39.1，下载脚本分别校验 Windows x64、macOS x64/ARM64 的发布 SHA-256。Browser MCP 配置默认启用 `useSystemCa`，让 CLI 自身的 HTTPS 请求信任操作系统证书库，同时保留证书验证；不会改变受管 Chrome 的证书设置。工具的 `caCert` 指向 Luna Mux 主机上的 PEM 文件，WSL/SSH Agent 也使用该主机路径。MCP 桥直接保留上游 `structuredContent.response.code`；返回 `outcome_unknown` 表示操作可能已经执行，Agent 必须先用只读状态检查结果再决定是否重试。作用域快照可以读取所选自定义元素的 Shadow DOM。实验性 Obscura 不接入现有 Chrome/CDP Runtime。
+
 CDP 仅绑定本地回环地址，端口和连接信息属于临时运行状态。远程 Agent 通过经认证的 Runtime 通信桥访问 Session 浏览器，原始 CDP 不转发到远端。远程开发服务使用独立 SSH 隧道，浏览器资源不拥有隧道。
 
 工具按资源归属路由：应用资源由 Luna MCP 控制，网页内容由 `agent_browser` 操作，开发与主机工作使用对应原生工具。终端 Pane 与浏览器标签页是不同资源。
