@@ -182,6 +182,8 @@ pub struct BrowserRuntimeCreateRequest {
     pub url: String,
     #[serde(default = "default_agent_browser_tool_profiles")]
     pub tool_profiles: Vec<String>,
+    #[serde(skip)]
+    pub proxy_server: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -484,6 +486,7 @@ impl BrowserRuntimeManager {
             "未找到 Google Chrome。请先在本机安装 Chrome 后再创建浏览器资源。".to_string()
         })?;
         let url = normalize_url(&request.url)?;
+        let proxy_arg = crate::browser_proxy::proxy_launch_arg(&request.proxy_server)?;
         let runtime_id = Uuid::new_v4().to_string();
         let profile_path = self.profile_path(
             &mux_session_id,
@@ -546,6 +549,9 @@ impl BrowserRuntimeManager {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
+        if let Some(proxy_arg) = proxy_arg {
+            command.arg(proxy_arg);
+        }
         configure_process_group(&mut command);
         let mut child = match command.spawn() {
             Ok(child) => child,
@@ -4385,6 +4391,7 @@ mod tests {
                     browser_resource_id: "browser-resource".into(),
                     url: "about:blank".into(),
                     tool_profiles: super::default_agent_browser_tool_profiles(),
+                    proxy_server: String::new(),
                 },
                 false,
             )
@@ -4524,6 +4531,7 @@ mod tests {
                     browser_resource_id: "browser-resource".into(),
                     url: format!("http://127.0.0.1:{port}"),
                     tool_profiles: super::default_agent_browser_tool_profiles(),
+                    proxy_server: String::new(),
                 },
                 false,
             )
@@ -4571,6 +4579,7 @@ mod tests {
                     browser_resource_id: "browser-resource-2".into(),
                     url: "about:blank".into(),
                     tool_profiles: super::default_agent_browser_tool_profiles(),
+                    proxy_server: String::new(),
                 },
                 false,
             )

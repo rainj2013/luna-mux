@@ -589,6 +589,18 @@ pub fn browser_chrome_discover(state: State<AppState>) -> Option<ChromeInstallat
     state.browser_runtimes.discover_chrome()
 }
 
+fn prepare_browser_runtime_request(
+    request: &mut BrowserRuntimeCreateRequest,
+    resource: &BrowserResource,
+) -> Result<(), String> {
+    if resource.mux_session_id != request.mux_session_id {
+        return Err("浏览器资源与会话不匹配".into());
+    }
+    request.tool_profiles.clone_from(&resource.tool_profiles);
+    request.proxy_server = resource.proxy_for_launch().to_owned();
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn browser_runtime_create(
     state: State<'_, AppState>,
@@ -601,10 +613,7 @@ pub async fn browser_runtime_create(
         .into_iter()
         .find(|resource| resource.id == browser_resource_id)
         .ok_or_else(|| "浏览器资源不存在".to_string())?;
-    if resource.mux_session_id != request.mux_session_id {
-        return Err("浏览器资源与会话不匹配".into());
-    }
-    request.tool_profiles.clone_from(&resource.tool_profiles);
+    prepare_browser_runtime_request(&mut request, &resource)?;
     let runtime = state
         .browser_runtimes
         .create(request, resource.retain_profile)
@@ -617,6 +626,42 @@ pub async fn browser_runtime_create(
         return Err(error);
     }
     Ok(runtime)
+}
+
+#[cfg(test)]
+mod browser_runtime_request_tests {
+    use super::*;
+
+    #[test]
+    fn desktop_launch_uses_persisted_proxy_switch_and_profiles() {
+        let mut resource: BrowserResource = serde_json::from_value(json!({
+            "id": "browser", "muxSessionId": "session", "name": "Browser",
+            "sourcePaneId": "", "bookmarkId": "", "url": "about:blank",
+            "retainProfile": true, "toolProfiles": ["core", "tabs"],
+            "proxyServer": "http://localhost:7890", "proxyEnabled": false,
+            "sortOrder": 0, "createdAt": "", "updatedAt": ""
+        }))
+        .unwrap();
+        let mut request = BrowserRuntimeCreateRequest {
+            mux_session_id: "session".into(),
+            browser_resource_id: "browser".into(),
+            url: "about:blank".into(),
+            tool_profiles: vec!["debug".into()],
+            proxy_server: "http://localhost:9999".into(),
+        };
+        prepare_browser_runtime_request(&mut request, &resource).unwrap();
+        assert!(request.proxy_server.is_empty());
+        assert_eq!(request.tool_profiles, resource.tool_profiles);
+        assert_eq!(resource.proxy_server, "http://localhost:7890");
+        resource.proxy_enabled = true;
+        prepare_browser_runtime_request(&mut request, &resource).unwrap();
+        assert_eq!(request.proxy_server, resource.proxy_server);
+        resource.proxy_server.clear();
+        prepare_browser_runtime_request(&mut request, &resource).unwrap();
+        assert!(request.proxy_server.is_empty());
+        request.mux_session_id = "another-session".into();
+        assert!(prepare_browser_runtime_request(&mut request, &resource).is_err());
+    }
 }
 
 #[tauri::command]

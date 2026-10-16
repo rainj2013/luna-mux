@@ -218,6 +218,33 @@ git tag v1.0.0
 git push origin v1.0.0
 ```
 
+### Release Note Guidelines
+
+Release notes are written for people who use Luna Mux, not as a commit log or an inventory of implementation details. Start with the problems the upgrade solves and the workflows it improves, then describe the main changes. Include technical detail only when it affects installation, compatibility, data, security, or an action the user must take.
+
+Use this recommended structure:
+
+1. A `# Luna Mux vX.Y.Z` heading.
+2. A short summary of the overall value of the upgrade.
+3. A `### Changes and improvements` section covering every meaningful, user-visible change in the release.
+4. An `### Installer notes` section covering macOS architectures and the choice between the standard and bundled-WebView2 Windows installers.
+5. A GitHub Compare link from the previous version to the current version.
+
+Describe each change objectively, then explain its user-visible effect. For example, write “scrolling keeps working after restoring a pane,” not “serialize the xterm SGR encoding”; write “Agent status is more accurate in full-access mode,” not a list of hook fields and internal state transitions.
+
+Follow these principles when writing:
+
+- Group related commits by user task and experience instead of listing every commit, file, module, function, or test.
+- Do not impose a fixed item count for brevity. A large release may list all relevant changes, while still merging duplicate or closely related items and retaining every important feature, fix, and compatibility change.
+- Prioritize new capabilities, meaningful experience improvements, user-visible fixes, and compatibility changes that require action.
+- Keep the tone restrained, accurate, and factual, using neutral headings such as “Changes and improvements.” Avoid promotional or exaggerated wording such as “Highlights,” “at a glance,” “completely transformed,” or “smoother than ever.”
+- State platform limitations, migration steps, known constraints, and behavior changes that may affect existing workflows explicitly.
+- Use product UI terms and plain language. When a technical term is unavoidable, explain what it means for the user.
+- Do not present refactoring, dependency updates, added tests, or protocol-field changes as standalone highlights unless they directly change the user experience or a security boundary.
+- Do not overstate unverified results. Check every claim against the version diff and test evidence, and verify the version number and Compare link before publishing.
+
+The tag workflow generates notes automatically when no Release exists, but an official release should use reviewed notes. Create the matching Release immediately after pushing the tag, or edit the generated body after the workflow finishes. When the Release already exists, the workflow uploads installers without replacing its body.
+
 macOS installers use ad-hoc signing and do not require an Apple developer certificate. They are not notarized, so first-time users still need to confirm in "Privacy & Security" settings. Windows installers are unsigned, so the system may show an unknown publisher or SmartScreen prompt.
 
 ## FAQ

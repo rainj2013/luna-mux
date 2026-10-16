@@ -5,6 +5,7 @@ mod agent_profiles;
 mod agent_session_title;
 mod ai;
 mod app_icon;
+mod browser_proxy;
 mod browser_runtime;
 mod claude_code_adapter;
 mod clipboard;
@@ -318,6 +319,7 @@ pub fn run() {
                             browser_resource_id: resource.id.clone(),
                             url: String::new(),
                             tool_profiles: resource.tool_profiles.clone(),
+                            proxy_server: resource.proxy_for_launch().to_owned(),
                         }, resource.retain_profile)
                         .await?;
                     if let Err(error) = luna_mcp.refresh_target_resource("browser", &resource.id) {
