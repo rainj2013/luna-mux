@@ -457,7 +457,10 @@ impl BrowserRuntimeManager {
             }
         };
         if let Some(runtime) = stale_runtime {
-            cleanup_runtime_profile(&runtime);
+            cleanup_stale_runtime_profile(
+                Path::new(&runtime.summary.profile_path),
+                runtime.retain_profile,
+            );
         }
         let another_runtime = self
             .runtimes
@@ -580,14 +583,20 @@ impl BrowserRuntimeManager {
                 return Err(error);
             }
         };
-        let cdp_socket = match connect_async(&websocket_url).await {
-            Ok((socket, _)) => socket,
-            Err(error) => {
-                cleanup_failed_browser_start(&mut child);
-                self.reserve_session_cdp_port(&mux_session_id, port);
-                return Err(format!("无法连接 Chrome CDP: {error}"));
-            }
-        };
+        let cdp_socket =
+            match tokio::time::timeout(Duration::from_secs(2), connect_async(&websocket_url)).await
+            {
+                Ok(Ok((socket, _))) => socket,
+                result => {
+                    cleanup_failed_browser_start(&mut child);
+                    self.reserve_session_cdp_port(&mux_session_id, port);
+                    return Err(if result.is_err() {
+                        "连接 Chrome CDP 超时".into()
+                    } else {
+                        "无法连接 Chrome CDP".into()
+                    });
+                }
+            };
         let (cdp_tx, cdp_rx) = mpsc::unbounded_channel();
         summary.status = BrowserRuntimeStatus::Running;
         self.runtimes
@@ -2222,11 +2231,11 @@ async fn close_managed_runtime(mut runtime: ManagedBrowserRuntime) {
     .await;
 }
 
-fn cleanup_runtime_profile(runtime: &ManagedBrowserRuntime) {
-    let profile_path = PathBuf::from(&runtime.summary.profile_path);
-    if runtime.retain_profile {
-        let _ = mark_chrome_profile_clean(&profile_path);
-    } else {
+fn cleanup_stale_runtime_profile(profile_path: &Path, retain_profile: bool) {
+    // Retained Preferences may belong to an unassociated Chrome. The create
+    // path checks ownership before preparing them; stale-record cleanup must
+    // not write them first. Disposable profiles are unique to the old Runtime.
+    if !retain_profile {
         let _ = std::fs::remove_dir_all(profile_path);
     }
 }
@@ -2636,17 +2645,39 @@ async fn wait_for_cdp(port: u16, timeout: Duration) -> Result<(), String> {
     wait_for_chrome_cdp(port, timeout, None).await
 }
 
+fn local_cdp_client(timeout: Duration) -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(timeout)
+        .build()
+        .map_err(|_| "无法创建本地 CDP 客户端".into())
+}
+
+fn local_cdp_request_error(context: &str, error: reqwest::Error) -> String {
+    // reqwest's Display includes the request URL (and therefore the private
+    // CDP port). Return a category/status instead of the raw error or body.
+    let reason = if error.is_timeout() {
+        "请求超时".to_string()
+    } else if let Some(status) = error.status() {
+        format!("HTTP {}", status.as_u16())
+    } else if error.is_connect() {
+        "连接失败".to_string()
+    } else if error.is_decode() {
+        "响应格式无效".to_string()
+    } else {
+        "请求失败".to_string()
+    };
+    format!("{context}: {reason}")
+}
+
 async fn wait_for_chrome_cdp(
     port: u16,
     timeout: Duration,
     mut child: Option<&mut Child>,
 ) -> Result<(), String> {
     let deadline = Instant::now() + timeout;
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        .timeout(Duration::from_millis(500))
-        .build()
-        .map_err(|error| format!("无法创建 CDP 检查客户端: {error}"))?;
+    let client = local_cdp_client(Duration::from_millis(500))?;
     let endpoint = format!("http://127.0.0.1:{port}/json/version");
     while Instant::now() < deadline {
         if let Some(child) = child.as_deref_mut() {
@@ -2678,16 +2709,16 @@ async fn page_websocket_url(port: u16, preferred_url: &str) -> Result<String, St
 
 async fn cdp_targets(port: u16) -> Result<Vec<Value>, String> {
     let endpoint = format!("http://127.0.0.1:{port}/json/list");
-    reqwest::Client::new()
+    local_cdp_client(Duration::from_secs(2))?
         .get(endpoint)
         .send()
         .await
-        .map_err(|error| format!("无法读取 Chrome CDP 目标: {error}"))?
+        .map_err(|error| local_cdp_request_error("无法读取 Chrome CDP 目标", error))?
         .error_for_status()
-        .map_err(|error| format!("Chrome CDP 目标请求失败: {error}"))?
+        .map_err(|error| local_cdp_request_error("Chrome CDP 目标请求失败", error))?
         .json::<Vec<Value>>()
         .await
-        .map_err(|error| format!("无法解析 Chrome CDP 目标: {error}"))
+        .map_err(|error| local_cdp_request_error("无法解析 Chrome CDP 目标", error))
 }
 
 async fn sole_blank_page_target(port: u16) -> Result<Option<String>, String> {
@@ -2728,15 +2759,15 @@ async fn close_replaced_bootstrap_target(
         return Ok(());
     }
 
-    reqwest::Client::new()
+    local_cdp_client(Duration::from_secs(2))?
         .get(format!(
             "http://127.0.0.1:{port}/json/close/{bootstrap_target_id}"
         ))
         .send()
         .await
-        .map_err(|error| format!("无法关闭 Chrome 启动标签页: {error}"))?
+        .map_err(|error| local_cdp_request_error("无法关闭 Chrome 启动标签页", error))?
         .error_for_status()
-        .map_err(|error| format!("关闭 Chrome 启动标签页失败: {error}"))?;
+        .map_err(|error| local_cdp_request_error("关闭 Chrome 启动标签页失败", error))?;
 
     // /json/close acknowledges before Chrome has necessarily removed the
     // target. Waiting here prevents the caller (and the first MCP command)
@@ -3035,6 +3066,191 @@ mod tests {
         page_websocket_url, parse_shortcut, reserve_loopback_port, resolve_agent_browser_binary,
         select_page_websocket_url, wait_for_cdp, warm_agent_browser_session,
     };
+
+    #[test]
+    fn stale_runtime_cleanup_preserves_retained_preferences_before_owner_check() {
+        let root = std::env::temp_dir().join(format!("luna-stale-profile-{}", Uuid::new_v4()));
+        let profile = root.join("retained");
+        let preferences = profile.join("Default").join("Preferences");
+        std::fs::create_dir_all(preferences.parent().unwrap()).unwrap();
+        let contents =
+            br#"{"profile":{"exit_type":"Crashed","exited_cleanly":false},"custom":"keep"}"#;
+        std::fs::write(&preferences, contents).unwrap();
+        super::cleanup_stale_runtime_profile(&profile, true);
+        assert_eq!(std::fs::read(&preferences).unwrap(), contents);
+        let absent = root.join("absent-retained");
+        super::cleanup_stale_runtime_profile(&absent, true);
+        assert!(
+            !absent.exists(),
+            "stale retained cleanup must not create Preferences"
+        );
+        let disposable = root.join("disposable");
+        std::fs::create_dir_all(&disposable).unwrap();
+        std::fs::write(disposable.join("cookie-data"), "temporary").unwrap();
+        super::cleanup_stale_runtime_profile(&disposable, false);
+        assert!(!disposable.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn local_cdp_initialization_ignores_inherited_proxy() {
+        const CHILD: &str = "LUNA_MUX_CDP_PROXY_TEST_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            tokio::runtime::Runtime::new().unwrap().block_on(async {
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let port = listener.local_addr().unwrap().port();
+                let server = tokio::spawn(async move {
+                    for (index, expected_path) in ["/json/version", "/json/list", "/json/list", "/json/close/blank", "/json/list"].into_iter().enumerate() {
+                        let (mut socket, _) = listener.accept().await.unwrap();
+                        let mut request = [0; 2048];
+                        let length = socket.read(&mut request).await.unwrap();
+                        assert!(String::from_utf8_lossy(&request[..length]).starts_with(&format!("GET {expected_path} ")));
+                        let body = if expected_path == "/json/version" || expected_path == "/json/close/blank" {
+                            "{}".to_string()
+                        } else if expected_path == "/json/list" {
+                            // The close call observes two targets, then just the replacement.
+                            let mut targets = vec![
+                                json!({"id":"blank", "type":"page", "url":"about:blank", "webSocketDebuggerUrl":format!("ws://127.0.0.1:{port}/devtools/page/blank")}),
+                                json!({"id":"replacement", "type":"page", "url":"https://example.com", "webSocketDebuggerUrl":format!("ws://127.0.0.1:{port}/devtools/page/replacement")}),
+                            ];
+                            if index == 4 { targets.remove(0); }
+                            serde_json::to_string(&targets).unwrap()
+                        } else { unreachable!() };
+                        let response = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                        socket.write_all(response.as_bytes()).await.unwrap();
+                    }
+                });
+                wait_for_cdp(port, Duration::from_secs(2)).await.unwrap();
+                let websocket = page_websocket_url(port, "https://example.com").await.unwrap();
+                assert!(websocket.ends_with("/replacement"));
+                // The final response must no longer contain the bootstrap target.
+                let result = super::close_replaced_bootstrap_target(port, "blank").await;
+                assert!(result.is_ok(), "bootstrap cleanup must use the direct CDP client");
+                server.await.unwrap();
+            });
+            return;
+        }
+        // Set proxy variables only in a child test process; never mutate the
+        // environment of parallel tests. The dummy proxy deliberately stalls.
+        let proxy_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let proxy = format!(
+            "http://127.0.0.1:{}",
+            proxy_listener.local_addr().unwrap().port()
+        );
+        let log_path =
+            std::env::temp_dir().join(format!("luna-cdp-proxy-test-{}.log", Uuid::new_v4()));
+        let log = std::fs::File::create(&log_path).unwrap();
+        #[cfg(windows)]
+        let mut command =
+            crate::local_pty_backend::windows_no_window_command(std::env::current_exe().unwrap());
+        #[cfg(not(windows))]
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "browser_runtime::tests::local_cdp_initialization_ignores_inherited_proxy",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env_remove("NO_PROXY")
+            .env_remove("no_proxy");
+        for name in [
+            "HTTP_PROXY",
+            "http_proxy",
+            "HTTPS_PROXY",
+            "https_proxy",
+            "ALL_PROXY",
+            "all_proxy",
+        ] {
+            command.env(name, &proxy);
+        }
+        let mut child = command
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(log.try_clone().unwrap()))
+            .stderr(Stdio::from(log))
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        let success = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status.success();
+            }
+            if std::time::Instant::now() >= deadline {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                break false;
+            }
+            std::thread::sleep(Duration::from_millis(40));
+        };
+        let output = std::fs::read_to_string(&log_path).unwrap();
+        std::fs::remove_file(log_path).unwrap();
+        assert!(success, "CDP proxy subprocess failed: {output}");
+    }
+
+    #[tokio::test]
+    async fn local_cdp_target_errors_hide_endpoint_and_response_body() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for response_kind in ["status", "decode", "disconnect"] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0; 1024];
+                socket.read(&mut request).await.unwrap();
+                if response_kind == "disconnect" {
+                    return;
+                }
+                let body = format!("private-body http://127.0.0.1:{port}/json/list");
+                let status = if response_kind == "status" {
+                    "503 Service Unavailable"
+                } else {
+                    "200 OK"
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                socket.write_all(response.as_bytes()).await.unwrap();
+            });
+            let error = super::cdp_targets(port).await.unwrap_err();
+            assert!(!error.contains(&port.to_string()));
+            assert!(!error.contains("127.0.0.1"));
+            assert!(!error.contains("private-body"));
+            if response_kind == "status" {
+                assert!(error.contains("HTTP 503"));
+            }
+            if response_kind == "decode" {
+                assert!(error.contains("响应格式无效"));
+            }
+            server.await.unwrap();
+        }
+        // A refused connection also must not disclose the request URL.
+        let port = reserve_loopback_port().unwrap();
+        let error = super::cdp_targets(port).await.unwrap_err();
+        assert!(!error.contains(&port.to_string()));
+        assert!(!error.contains("127.0.0.1"));
+    }
+
+    #[tokio::test]
+    async fn local_cdp_target_request_has_a_bounded_timeout() {
+        use tokio::io::AsyncReadExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0; 1024];
+            socket.read(&mut request).await.unwrap();
+            std::future::pending::<()>().await;
+        });
+        let started = std::time::Instant::now();
+        let error = super::cdp_targets(port).await.unwrap_err();
+        assert!(started.elapsed() < Duration::from_secs(4));
+        assert!(error.contains("请求超时"));
+        assert!(!error.contains(&port.to_string()));
+        server.abort();
+        let _ = server.await;
+    }
 
     #[test]
     fn chrome_profile_probe_matches_only_main_processes_and_exact_profiles() {
