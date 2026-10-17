@@ -319,7 +319,7 @@ pub fn run() {
                             browser_resource_id: resource.id.clone(),
                             url: String::new(),
                             tool_profiles: resource.tool_profiles.clone(),
-                            proxy_server: resource.proxy_server.clone(),
+                            proxy_server: resource.proxy_for_launch().to_owned(),
                         }, resource.retain_profile)
                         .await?;
                     if let Err(error) = luna_mcp.refresh_target_resource("browser", &resource.id) {

@@ -1524,6 +1524,74 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn http_clients_support_both_lifecycles_and_recover_from_invalid_tool_params() {
+        use rmcp::{
+            model::ClientConfig,
+            service::{ClientLifecycleMode, ClientServiceExt},
+            transport::{
+                StreamableHttpClientTransport,
+                streamable_http_client::StreamableHttpClientTransportConfig,
+            },
+        };
+
+        let service = Arc::new(RecordingService {
+            seen: RwLock::new(Vec::new()),
+        });
+        let adapter = AuthenticatedControlAdapter::new(service.clone());
+        let (mcp, path) = test_mcp(adapter);
+        mcp.start().unwrap();
+        let token = mcp.issue_runtime_token(&context("runtime-1")).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(20), async {
+            for lifecycle in [
+                ClientLifecycleMode::Initialize,
+                ClientLifecycleMode::Discover {
+                    preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+                },
+            ] {
+                let transport = StreamableHttpClientTransport::from_config(
+                    StreamableHttpClientTransportConfig::with_uri(mcp.endpoint().unwrap())
+                        .auth_header(token.clone()),
+                );
+                let client = ClientConfig::default()
+                    .serve_with_lifecycle(transport, lifecycle)
+                    .await
+                    .expect("authenticated MCP client should connect");
+                let tools = client.list_tools(None).await.unwrap();
+                assert_eq!(tools.tools.len(), 1);
+                assert_eq!(tools.tools[0].name, "terminal.runtimes.list");
+
+                let invalid = client
+                    .call_tool(
+                        CallToolRequestParams::new("terminal.runtimes.list").with_arguments(
+                            json!({ "arguments": [] }).as_object().unwrap().clone(),
+                        ),
+                    )
+                    .await
+                    .expect_err("invalid operation arguments must be rejected");
+                match invalid {
+                    rmcp::ServiceError::McpError(error) => {
+                        assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
+                    }
+                    other => panic!("expected an in-band MCP error, got {other}"),
+                }
+                // A handler error must not terminate the connection or reach
+                // the control service; a subsequent valid call still routes.
+                client
+                    .call_tool(CallToolRequestParams::new("terminal.runtimes.list"))
+                    .await
+                    .expect("connection should remain usable after invalid params");
+                client.cancel().await.unwrap();
+            }
+        })
+        .await
+        .expect("MCP lifecycle compatibility test timed out");
+        assert_eq!(service.seen.read().unwrap().len(), 2);
+        mcp.shutdown();
+        drop(mcp);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
     async fn session_members_share_live_panes_and_terminal_runtimes_by_default() {
         let service = Arc::new(RecordingService {
             seen: RwLock::new(Vec::new()),

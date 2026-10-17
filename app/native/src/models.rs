@@ -278,6 +278,8 @@ pub struct BrowserResource {
     pub tool_profiles: Vec<String>,
     #[serde(default)]
     pub proxy_server: String,
+    #[serde(default = "default_proxy_enabled")]
+    pub proxy_enabled: bool,
     pub sort_order: i64,
     pub created_at: String,
     pub updated_at: String,
@@ -302,6 +304,23 @@ pub struct BrowserResourceInput {
     pub tool_profiles: Option<Vec<String>>,
     #[serde(default)]
     pub proxy_server: Option<String>,
+    #[serde(default)]
+    pub proxy_enabled: Option<bool>,
+}
+
+fn default_proxy_enabled() -> bool {
+    // Older resource JSON applied every nonempty proxy address.
+    true
+}
+
+impl BrowserResource {
+    pub fn proxy_for_launch(&self) -> &str {
+        if self.proxy_enabled {
+            &self.proxy_server
+        } else {
+            ""
+        }
+    }
 }
 
 pub const AGENT_BROWSER_TOOL_PROFILES: [&str; 8] = [

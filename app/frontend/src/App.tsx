@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowRight, Bookmark as BookmarkIcon, Bot, Check, ChevronDown, ChevronRight, CircleHelp, CirclePlus, Columns2, Columns3, Copy, Database as DatabaseIcon, Download, Edit3, ExternalLink, Eye, EyeOff, FileInput, FileJson2, Folder, FolderOpen, FolderPlus, Globe2, Grid2x2, GripVertical, History as HistoryIcon, Image as ImageIcon, Info, KeyRound, Languages, LayoutGrid, Maximize2, Minimize, Minus, Monitor, Moon, Network, Palette, PanelLeftClose, PanelLeftOpen, Play, Plus, Power, Rocket, RotateCcw, Rows2, Rows3, Search, Send, Server, Settings as SettingsIcon, ShieldAlert, Sparkles, Square, SquareTerminal, Star, Stethoscope, Sun, Trash2, Upload, WandSparkles, X } from 'lucide-react'
-import { BUNDLED_TERMINAL_FONT, DEFAULT_AI_SETTINGS, DEFAULT_TERMINAL_SETTINGS, type AgentLaunchProfile, type AiCommandHistoryEntry, type AiCommandSuggestion, type AiProvider, type AiRawExchange, type AiRiskAssessment, type AiSettings, type AiSettingsInput, type AiShell, type AiThinkingMode, type AppEvent, type AppIconId, type AppIconSettings, type AppLanguage, type Bookmark, type BookmarkArchivePreview, type BookmarkArchiveSource, type BookmarkInput, type BrowserResource, type BrowserRuntime, type BrowserRuntimeStatus, type BrowserTunnel, type ChromeInstallation, type ConflictResolution, type ConnectInput, type DeploymentDiffEntry, type DeploymentProfile, type DoctorCheck, type DoctorCheckStatus, type DoctorManagedAgent, type DoctorReport, type DoctorRuntimeCheck, type HostKeyPrompt, type LunaRemoteImportPreview, type LunaRemoteImportResult, type LunaRemoteSource, type ManagedAgentEvent, type ManagedAgentStatus, type MuxPane, type MuxSession, type MuxSplitNode, type PortForwardProfile, type SessionStatus, type SshConfigPreview, type TerminalRuntime, type TerminalRuntimeEvent, type TerminalSettings, type TerminalTarget, type TransferTask, type TunnelSummary, type UiTheme } from './types'
+import { BUNDLED_TERMINAL_FONT, DEFAULT_AI_SETTINGS, DEFAULT_TERMINAL_SETTINGS, type AgentLaunchProfile, type AiCommandHistoryEntry, type AiCommandSuggestion, type AiProvider, type AiRawExchange, type AiRiskAssessment, type AiSettings, type AiSettingsInput, type AiShell, type AiThinkingMode, type AppEvent, type AppIconId, type AppIconSettings, type AppLanguage, type Bookmark, type BookmarkArchivePreview, type BookmarkArchiveSource, type BookmarkInput, type BrowserRuntime, type BrowserTunnel, type ChromeInstallation, type ConflictResolution, type ConnectInput, type DeploymentDiffEntry, type DeploymentProfile, type DoctorCheck, type DoctorCheckStatus, type DoctorManagedAgent, type DoctorReport, type DoctorRuntimeCheck, type HostKeyPrompt, type LunaRemoteImportPreview, type LunaRemoteImportResult, type LunaRemoteSource, type ManagedAgentEvent, type ManagedAgentStatus, type MuxPane, type MuxSession, type MuxSplitNode, type PortForwardProfile, type SessionStatus, type SshConfigPreview, type TerminalRuntime, type TerminalRuntimeEvent, type TerminalSettings, type TerminalTarget, type TransferTask, type TunnelSummary, type UiTheme } from './types'
 import type { AgentBrowserToolProfile } from './types'
 import { discardTerminalSnapshot, TerminalPane, type TerminalPaneHandle } from './components/TerminalPane'
 import { DatabasePane, type DatabasePaneHandle } from './components/DatabasePane'
@@ -11,6 +11,7 @@ import { agentAdapterId } from './terminal-input'
 import { SftpPane } from './components/SftpPane'
 import { HelpDialog } from './components/HelpDialog'
 import { FileDialog } from './components/FileDialog'
+import { BrowserResourceCard, type BrowserResourceState } from './components/BrowserResourceCard'
 import { colorWithOpacity, terminalBackgroundStyle } from './terminal-style'
 import { availableLanguages, getNativeMenuLabels, useI18n, type MessageKey } from './i18n'
 import { PRODUCT_INFO } from './product-info'
@@ -18,17 +19,6 @@ import { BUILD_TIME } from 'virtual:build-time'
 
 interface WorkspaceTab extends MuxPane { databaseRevision?: number; initialDatabaseProfile?: DatabaseProfile; initialDatabaseReadOnly?: boolean; key: string; sessionId?: string; runtimeId?: string; agentId?: string; status: SessionStatus; error?: string }
 interface AiCommandTarget { name: string; detail: string; runtimeId?: string; connected: boolean; remote: boolean; initialShell: AiShell }
-interface BrowserResourceState extends BrowserResource { runtime?: BrowserRuntime; tunnel?: BrowserTunnel; status: BrowserRuntimeStatus | 'stopped'; error?: string }
-const AGENT_BROWSER_TOOL_GROUPS: ReadonlyArray<{ id: AgentBrowserToolProfile; count: number; label: MessageKey; description: MessageKey }> = [
-  { id: 'core', count: 29, label: 'app.browserToolsCore', description: 'app.browserToolsCoreDescription' },
-  { id: 'tabs', count: 13, label: 'app.browserToolsTabs', description: 'app.browserToolsTabsDescription' },
-  { id: 'network', count: 9, label: 'app.browserToolsNetwork', description: 'app.browserToolsNetworkDescription' },
-  { id: 'debug', count: 40, label: 'app.browserToolsDebug', description: 'app.browserToolsDebugDescription' },
-  { id: 'state', count: 27, label: 'app.browserToolsState', description: 'app.browserToolsStateDescription' },
-  { id: 'react', count: 8, label: 'app.browserToolsReact', description: 'app.browserToolsReactDescription' },
-  { id: 'mobile', count: 15, label: 'app.browserToolsMobile', description: 'app.browserToolsMobileDescription' },
-  { id: 'webmcp', count: 4, label: 'app.browserToolsWebmcp', description: 'app.browserToolsWebmcpDescription' }
-]
 interface ManagedAgentSummary { agentId: string; paneId: string; runtimeId: string; status: ManagedAgentStatus | 'starting' | 'stopped'; waitingReason?: string; timestamp?: string; eventCount: number; unread: boolean; hasStructuredEvents: boolean; latest?: ManagedAgentEvent; latestAttention?: ManagedAgentEvent }
 interface DiagnosticsRuntimeEnvironment { runtimeId: string; hook: string; mcp: string; tokens: string }
 type AgentAttentionTone = 'info' | 'warning' | 'error'
@@ -364,8 +354,8 @@ export function App(): React.JSX.Element {
     await startBrowserResource({ ...resource, runtime: undefined, tunnel: undefined, status: 'stopped', error: undefined })
   }
 
-  const saveBrowserProxy = async (resource: BrowserResourceState, proxyServer: string): Promise<void> => {
-    const saved = await window.api.browserResources.save({ id: resource.id, muxSessionId: resource.muxSessionId, name: resource.name, sourcePaneId: resource.sourcePaneId, bookmarkId: resource.bookmarkId, url: resource.url, proxyServer })
+  const saveBrowserProxy = async (resource: BrowserResourceState, proxyServer: string, proxyEnabled: boolean): Promise<void> => {
+    const saved = await window.api.browserResources.save({ id: resource.id, muxSessionId: resource.muxSessionId, name: resource.name, sourcePaneId: resource.sourcePaneId, bookmarkId: resource.bookmarkId, url: resource.url, proxyServer, proxyEnabled })
     setBrowserResources((current) => current.map((item) => item.id === saved.id ? { ...item, ...saved } : item))
   }
 
@@ -2214,109 +2204,13 @@ function MuxLayout({ node, panes, bookmarks, activePaneId, settings, backgroundI
   </div>
 }
 
-function BrowserResourceManager({ resources, panes, chromeInstallation, onRefreshChrome, onSaveProxy, onStart, onFocus, onRestart, onStop, onRetainProfile, onToolProfiles }: { resources: BrowserResourceState[]; panes: WorkspaceTab[]; chromeInstallation: ChromeInstallation | null | undefined; onRefreshChrome(): void; onSaveProxy(resource: BrowserResourceState, proxyServer: string): Promise<void>; onStart(resource: BrowserResourceState): void; onFocus(resource: BrowserResourceState): void; onRestart(resource: BrowserResourceState): void; onStop(resource: BrowserResourceState): void; onRetainProfile(resource: BrowserResourceState, retain: boolean): void; onToolProfiles(resource: BrowserResourceState, profiles: AgentBrowserToolProfile[]): void }): React.JSX.Element {
+function BrowserResourceManager({ resources, panes, chromeInstallation, onRefreshChrome, onSaveProxy, onStart, onFocus, onRestart, onStop, onRetainProfile, onToolProfiles }: { resources: BrowserResourceState[]; panes: WorkspaceTab[]; chromeInstallation: ChromeInstallation | null | undefined; onRefreshChrome(): void; onSaveProxy(resource: BrowserResourceState, proxyServer: string, proxyEnabled: boolean): Promise<void>; onStart(resource: BrowserResourceState): void; onFocus(resource: BrowserResourceState): void; onRestart(resource: BrowserResourceState): void; onStop(resource: BrowserResourceState): void; onRetainProfile(resource: BrowserResourceState, retain: boolean): void; onToolProfiles(resource: BrowserResourceState, profiles: AgentBrowserToolProfile[]): void }): React.JSX.Element {
   const { t } = useI18n()
   const paneMap = new Map(panes.map((pane) => [pane.id, pane]))
   if (!resources.length) return <div className="browser-resource-manager empty"><Globe2 size={30} /><strong>{t('app.noBrowserResources')}</strong></div>
   return <div className="browser-resource-manager">
     <div className="browser-resource-list">{resources.map((resource) => <BrowserResourceCard key={resource.id} resource={resource} sourcePane={resource.sourcePaneId ? paneMap.get(resource.sourcePaneId) : undefined} chromeInstallation={chromeInstallation} onRefreshChrome={onRefreshChrome} onSaveProxy={onSaveProxy} onStart={onStart} onFocus={onFocus} onRestart={onRestart} onStop={onStop} onRetainProfile={onRetainProfile} onToolProfiles={onToolProfiles} />)}</div>
   </div>
-}
-
-function BrowserResourceCard({ resource, sourcePane, chromeInstallation, onRefreshChrome, onSaveProxy, onStart, onFocus, onRestart, onStop, onRetainProfile, onToolProfiles }: { resource: BrowserResourceState; sourcePane?: WorkspaceTab; chromeInstallation: ChromeInstallation | null | undefined; onRefreshChrome(): void; onSaveProxy(resource: BrowserResourceState, proxyServer: string): Promise<void>; onStart(resource: BrowserResourceState): void; onFocus(resource: BrowserResourceState): void; onRestart(resource: BrowserResourceState): void; onStop(resource: BrowserResourceState): void; onRetainProfile(resource: BrowserResourceState, retain: boolean): void; onToolProfiles(resource: BrowserResourceState, profiles: AgentBrowserToolProfile[]): void }): React.JSX.Element {
-  const { t } = useI18n()
-  const live = resource.status === 'running' && Boolean(resource.runtime)
-  const statusLabel = resource.status === 'starting' ? t('app.connecting') : live ? t('app.browserRunning') : resource.status === 'error' ? t('app.browserRuntimeFailed') : t('app.browserRuntimeStopped')
-  const agentAccessLabel = live ? t('app.browserAgentAccessReady') : chromeInstallation ? t('app.browserAgentAccessOnStart') : t('app.browserAgentAccessBlocked')
-  const serviceLabel = sourcePane ? `${t('app.viaSshPane')} ${sourcePane.title}` : t('app.localService')
-  const profileLocked = Boolean(resource.runtime) || resource.status === 'starting'
-  const selectedCount = AGENT_BROWSER_TOOL_GROUPS.filter((group) => resource.toolProfiles.includes(group.id)).length
-  const toggleGroup = (id: AgentBrowserToolProfile, enabled: boolean): void => {
-    if (id === 'core') return
-    const selected = new Set(resource.toolProfiles)
-    if (enabled) selected.add(id); else selected.delete(id)
-    selected.add('core')
-    onToolProfiles(resource, AGENT_BROWSER_TOOL_GROUPS.map((group) => group.id).filter((profile) => selected.has(profile)))
-  }
-  return <section className={`browser-resource-detail ${live ? 'running' : resource.status}`}>
-    <header>
-      <div className="browser-resource-identity"><span className={`status-dot ${live ? 'connected' : resource.status === 'error' ? 'error' : resource.status === 'starting' ? 'connecting' : 'disconnected'}`} /><Globe2 size={18} /><span><strong>{resource.name}</strong><small>{serviceLabel}</small></span></div>
-      <div className="browser-resource-actions">
-        {live ? <button className="secondary-button" onClick={() => onFocus(resource)}><ExternalLink size={15} />{t('app.openManagedChrome')}</button> : <button className="primary-button" disabled={!chromeInstallation || resource.status === 'starting'} onClick={() => onStart(resource)}><Play size={15} />{t('app.startBrowser')}</button>}
-        <button className="icon-button" title={t('app.restartBrowser')} aria-label={t('app.restartBrowser')} disabled={!resource.runtime || resource.status === 'starting'} onClick={() => onRestart(resource)}><RotateCcw size={15} /></button>
-        <button className="icon-button" title={t('app.stopBrowser')} aria-label={t('app.stopBrowser')} disabled={!resource.runtime} onClick={() => onStop(resource)}><Power size={15} /></button>
-      </div>
-    </header>
-    {chromeInstallation === null && <div className="browser-resource-warning"><ShieldAlert size={16} /><span><strong>{t('app.chromeNotFound')}</strong><small>{t('app.installChromeFirst')}</small></span><button className="icon-button" title={t('app.recheckBrowser')} aria-label={t('app.recheckBrowser')} onClick={onRefreshChrome}><RotateCcw size={15} /></button></div>}
-    {resource.error && <div className="browser-resource-error" title={resource.error}><ShieldAlert size={15} />{resource.error}</div>}
-    <dl className="browser-resource-diagnostics">
-      <div><dt>{t('app.runtimeStatus')}</dt><dd><span className={`status-dot ${live ? 'connected' : resource.status === 'error' ? 'error' : resource.status === 'starting' ? 'connecting' : 'disconnected'}`} />{statusLabel}</dd></div>
-      <div><dt>{t('app.agentBrowserAccess')}</dt><dd>{agentAccessLabel}</dd></div>
-      <div><dt>{sourcePane ? t('app.remoteServiceUrl') : t('app.initialUrl')}</dt><dd><code title={resource.url || 'about:blank'}>{resource.url || 'about:blank'}</code></dd></div>
-      <div><dt>{t('app.chromeProcess')}</dt><dd><code>{resource.runtime ? `PID ${resource.runtime.processId} · CDP ${resource.runtime.cdpPort}` : '—'}</code></dd></div>
-    </dl>
-    <div className="browser-resource-settings">
-      <BrowserProxySettings resource={resource} onSave={onSaveProxy} />
-      <section className="browser-setting-block browser-profile-settings">
-        <header><strong>{t('app.browserProfileSettings')}</strong></header>
-        <div className="browser-profile-controls">
-          <label className={`browser-tool-group browser-profile-option ${resource.retainProfile ? 'selected' : ''} ${profileLocked ? 'locked' : ''}`} title={profileLocked ? t('app.stopBrowserBeforeProfileChange') : undefined}>
-            <input type="checkbox" checked={resource.retainProfile} disabled={profileLocked} onChange={(event) => onRetainProfile(resource, event.target.checked)} />
-            <span>
-              <strong>{t('app.retainBrowserData')}</strong>
-              <small>{t('app.browserProfileRetained')}</small>
-            </span>
-          </label>
-        </div>
-      </section>
-      <section className="browser-setting-block browser-tools-settings">
-        <header>
-          <strong>{t('app.browserAgentTools')}</strong>
-          <span>{t('app.browserAgentToolCount', { value0: String(selectedCount) })}</span>
-        </header>
-        <p className="browser-setting-copy">{t('app.browserAgentToolsDescription')} {t('app.browserAgentToolsRestartNote')}</p>
-        <div className="browser-tool-groups">{AGENT_BROWSER_TOOL_GROUPS.map((group) => {
-          const checked = resource.toolProfiles.includes(group.id)
-          const required = group.id === 'core'
-          return <label className={`browser-tool-group ${checked ? 'selected' : ''} ${required ? 'locked' : ''}`} key={group.id}>
-            <input type="checkbox" checked={checked} disabled={required} onChange={(event) => toggleGroup(group.id, event.target.checked)} />
-            <span>
-              <strong>{t(group.label)} <small>{group.count}</small>{required && <em>{t('app.required')}</em>}</strong>
-              <small>{t(group.description)}</small>
-            </span>
-          </label>
-        })}</div>
-      </section>
-    </div>
-  </section>
-}
-
-function BrowserProxySettings({ resource, onSave }: { resource: BrowserResourceState; onSave(resource: BrowserResourceState, proxyServer: string): Promise<void> }): React.JSX.Element {
-  const { t } = useI18n()
-  const [proxyServer, setProxyServer] = useState(resource.proxyServer || '')
-  const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState(false)
-  const [error, setError] = useState('')
-  useEffect(() => { setProxyServer(resource.proxyServer || '') }, [resource.proxyServer])
-  const save = async (): Promise<void> => {
-    if (saving) return
-    setSaving(true)
-    setError('')
-    setSaved(false)
-    try { await onSave(resource, proxyServer); setSaved(true) }
-    catch { setError(t('app.browserProxySaveFailed')) }
-    finally { setSaving(false) }
-  }
-  return <section className="browser-setting-block browser-proxy-settings">
-    <header><strong>{t('app.browserProxySettings')}</strong></header>
-    <form className="form-grid browser-proxy-form" onSubmit={(event) => { event.preventDefault(); void save() }}>
-      <label>{t('app.browserProxyServer')}<span className="browser-proxy-controls"><input value={proxyServer} onChange={(event) => { setProxyServer(event.target.value); setSaved(false); setError('') }} placeholder="http://127.0.0.1:7890" disabled={saving} autoComplete="off" spellCheck={false} maxLength={2048} /><button type="submit" className="primary-button" disabled={saving || resource.status === 'starting' || proxyServer.trim() === (resource.proxyServer || '')}>{t('common.save')}</button></span></label>
-      <p className="browser-setting-copy">{t('app.browserProxyHelp')}</p>
-      <p className="browser-setting-copy">{t('app.browserProxyRestart')}</p>
-      {error && <div className="browser-resource-error" role="alert">{error}</div>}
-      {saved && <p className="browser-setting-copy" role="status">{t('app.browserProxySaved')}</p>}
-    </form>
-  </section>
 }
 
 function BookmarkArchiveImportDialog({ preview, onClose, onImported, onError }: { preview: BookmarkArchivePreview; onClose(): void; onImported(result: { importedConnections: number; importedGroups: number }): void; onError(message: string): void }): React.JSX.Element {

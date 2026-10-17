@@ -116,11 +116,19 @@ Browser Resource 持有“保留浏览器数据”设置，默认关闭。关闭
 
 BrowserRuntimeManager 通过 CDP 让绑定页面的配色跟随应用主题，选择“跟随系统”时由 Chrome 跟随操作系统。截图默认开启元素标注。
 
+复用固定配置目录前，BrowserRuntimeManager 通过原生进程元数据检查是否仍有未关联的 Chrome 主进程使用该目录。匹配限定为完整目录路径，排除其他资源和 Chrome 子进程；发现占用时，在修改配置和启动进程前提示用户关闭旧窗口，保留浏览器数据。清理已退出的旧 Runtime 记录只删除临时目录，不提前写入保留目录的 Preferences。检测只读取进程信息，不接管或关闭未关联窗口。Chrome 在 CDP 就绪前退出时立即返回退出原因；就绪、目标查询和启动标签页清理统一使用禁用代理、有请求时限、不跟随重定向的回环客户端。HTTP 和 WebSocket 初始化错误不返回原始端点或响应内容，WebSocket 连接也设有时限。
+
+Browser TAB 使用概览、浏览器设置和 Agent 工具的分栏导航。概览显示运行状态、地址和配置摘要，摘要行可跳转对应设置；设置使用统一开关和紧凑行，工具说明保持简短。页面切换保留代理编辑组件，离开输入时自动保存。导航支持方向键、Home/End 和清晰的焦点。代理和浏览器数据卡片保持等宽，较窄区域改为单列。
+
+浏览器代理卡片与浏览器配置卡片使用等宽网格，同一行高度一致。Browser Resource 保存代理地址和独立启用开关；关闭开关保留地址，启动时使用系统默认代理设置。开关切换立即保存，地址在失焦或按 Enter 时保存，无需保存按钮；保存失败时保留错误提示并恢复实际开关状态。设置在下次启动浏览器时生效。旧数据库和缺少启用字段的资源 JSON 保持原有已配置代理的行为。
+
 应用负责浏览器生命周期，`agent_browser` 负责页面自动化。自动化绑定 Session 的现有页面，普通导航复用该页面；网页操作不能自行启动或替换浏览器进程。
 
 Browser Resource 按上游 profile 持久化 Agent 工具组选择：Core 始终启用；Network、Debug、Tabs、State/Auth Vault、React、Mobile 与 WebMCP 默认关闭，可在 Browser 页分类勾选。本地和远程 Agent 使用同一选择。保存会更新当前 Runtime 的注册信息，新 MCP 连接立即采用；已运行的 Agent 需重启后重新发现工具，因为当前客户端不会响应工具列表热变更。Browser Runtime 始终启用 Chrome WebMCP 接口，但只有启用 WebMCP 工具组后 Agent 才能发现页面注册的工具。React 检查须在打开页面时启用 `react-devtools`。Luna Mux 不附带上游 skills，以免其 CLI 和具名会话指引与受管浏览器契约冲突。
 
 Agent 注入指引说明可选工具组，以及启用 Debug 后的批量调用、无障碍审计、截图与快照差异比较；Core 的增量观察和输出收窄始终可用。
+
+内置 agent-browser 固定为 0.39.1，下载脚本分别校验 Windows x64、macOS x64/ARM64 的发布 SHA-256。Browser MCP 配置默认启用 `useSystemCa`，让 CLI 自身的 HTTPS 请求信任操作系统证书库，同时保留证书验证；不会改变受管 Chrome 的证书设置。工具的 `caCert` 指向 Luna Mux 主机上的 PEM 文件，WSL/SSH Agent 也使用该主机路径。MCP 桥直接保留上游 `structuredContent.response.code`；返回 `outcome_unknown` 表示操作可能已经执行，Agent 必须先用只读状态检查结果再决定是否重试。作用域快照可以读取所选自定义元素的 Shadow DOM。实验性 Obscura 不接入现有 Chrome/CDP Runtime。
 
 CDP 仅绑定本地回环地址，端口和连接信息属于临时运行状态。远程 Agent 通过经认证的 Runtime 通信桥访问 Session 浏览器，原始 CDP 不转发到远端。远程开发服务使用独立 SSH 隧道，浏览器资源不拥有隧道。
 
