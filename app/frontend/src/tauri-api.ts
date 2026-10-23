@@ -5,6 +5,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import { readImage, readText, writeText } from '@tauri-apps/plugin-clipboard-manager'
 import type { AiSettingsInput, AiShell, AppApi, AppEvent, AppIconId, AppLanguage, BookmarkInput, BrowserRuntimeEvent, ConnectInput, ConflictResolution, ControlStateChangedEvent, DeploymentProfile, LunaRemoteImportSelection, ManagedAgentEvent, ManagedAgentNotificationActivation, NativeMenuLabels, Platform, PortForwardProfile, TerminalSettings, TransferRequest, UiTheme, DatabaseProfileInput, DatabaseConnectionConfig, DatabaseQueryResult, DatabaseSqlExport, DatabaseSqlExportProgress, DatabaseColumnInfo, DatabaseIndexInfo, DatabaseForeignKeyInfo, DatabasePaneUiAction, DatabasePaneUiRequest } from './types'
 import type { TerminalRuntimeEvent } from './terminal-runtime-contract'
+import { createTerminalRuntimeResizer } from './terminal-runtime-resize'
 
 const call = <T>(command: string, args?: Record<string, unknown>): Promise<T> => invoke<T>(command, args).catch((error) => {
   throw new Error(typeof error === 'string' ? error : String(error))
@@ -65,6 +66,8 @@ export async function createTauriApi(): Promise<AppApi> {
   const platform = await call<Platform>('platform')
   const currentWindow = getCurrentWindow()
   let terminalInputSequence = 0
+  const resizeTerminalRuntime = createTerminalRuntimeResizer((runtimeId, cols, rows) =>
+    call<void>('terminal_runtime_resize', { runtimeId, cols, rows }))
   await getCurrentWebview().onDragDropEvent((event) => {
     if (event.payload.type !== 'drop') return
     const scale = window.devicePixelRatio || 1
@@ -200,7 +203,7 @@ export async function createTauriApi(): Promise<AppApi> {
         return call('terminal_runtime_write', { runtimeId, data, clientInputId })
       },
       recordDiagnostic: (runtimeId, event) => call('terminal_runtime_record_ui_diagnostic', { runtimeId, event }),
-      resize: (runtimeId, cols, rows) => call('terminal_runtime_resize', { runtimeId, cols, rows }),
+      resize: resizeTerminalRuntime,
       flow: (runtimeId, paused) => call('terminal_runtime_flow', { runtimeId, paused }),
       interrupt: (runtimeId) => call('terminal_runtime_interrupt', { runtimeId }),
       close: (runtimeId) => call('terminal_runtime_close', { runtimeId })

@@ -1,6 +1,6 @@
 [package]
 name = "luna-mux"
-version = "0.6.0"
+version = "0.6.1"
 description = "Tauri desktop shell for Luna Mux"
 license = "MIT"
 edition = "2024"
@@ -69,8 +69,8 @@ libc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "libc", "NSApplication", "NSImage", "NSResponder", "NSRunningApplication"] }
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSData", "NSThread"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "libc", "NSApplication", "NSImage", "NSResponder", "NSRunningApplication", "NSView", "NSWindow"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSData", "NSThread", "NSNotification"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 ico = "0.5"

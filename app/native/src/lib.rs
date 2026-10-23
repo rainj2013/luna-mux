@@ -30,6 +30,8 @@ mod local_pty_backend;
 mod local_pty_probe;
 mod luna_mcp;
 mod luna_mcp_proxy;
+#[cfg(target_os = "macos")]
+mod macos_window;
 mod models;
 mod product;
 mod runtime_env;
@@ -127,17 +129,14 @@ pub fn run() {
         .on_menu_event(|app, event| desktop::handle_menu(app, event.id().as_ref()))
         .on_window_event(|window, event| {
             #[cfg(target_os = "macos")]
-            if window.label() == "main" {
-                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                    api.prevent_close();
-                    let _ = window.hide();
-                }
-            }
+            macos_window::handle_event(window, event);
             #[cfg(not(target_os = "macos"))]
             let _ = (window, event);
         });
     #[cfg(target_os = "macos")]
-    let builder = builder.menu(|app| desktop::menu(app, &models::NativeMenuLabels::default()));
+    let builder = builder
+        .manage(macos_window::MainWindowState::default())
+        .menu(|app| desktop::menu(app, &models::NativeMenuLabels::default()));
     builder
         .setup(|app| {
             let data_dir = app
@@ -173,6 +172,7 @@ pub fn run() {
                 .map_err(|error| error.to_string())?;
             #[cfg(target_os = "macos")]
             {
+                macos_window::install(&window)?;
                 let notification_window = WebviewWindowBuilder::new(
                     app,
                     "agent-notification",
@@ -669,6 +669,7 @@ pub fn run() {
             }
             #[cfg(target_os = "macos")]
             RunEvent::Reopen { .. } => {
+                macos_window::cancel_pending_close(app);
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
                     let _ = window.unminimize();
@@ -870,6 +871,8 @@ fn activate_agent_notification(
     let main = app
         .get_webview_window("main")
         .ok_or_else(|| "找不到主窗口".to_string())?;
+    #[cfg(target_os = "macos")]
+    macos_window::cancel_pending_close(app);
     main.show().map_err(|error| error.to_string())?;
     main.unminimize().map_err(|error| error.to_string())?;
     main.set_focus().map_err(|error| error.to_string())?;
