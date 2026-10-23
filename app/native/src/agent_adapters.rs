@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use crate::{
     agent_profiles::{
         AgentLaunchProfile, DEFAULT_CLAUDE_CODE_PROFILE_ID, DEFAULT_CODEX_PROFILE_ID,
-        DEFAULT_GROK_BUILD_PROFILE_ID,
+        DEFAULT_DSH_TUI_PROFILE_ID, DEFAULT_GROK_BUILD_PROFILE_ID,
     },
     terminal_runtime_contract::{TerminalManagedAgentContext, TerminalRuntimeContext},
 };
@@ -11,6 +11,7 @@ use crate::{
 pub const CODEX_ADAPTER_ID: &str = "codex";
 pub const CLAUDE_CODE_ADAPTER_ID: &str = "claude-code";
 pub const GROK_BUILD_ADAPTER_ID: &str = "grok-build";
+pub const DSH_TUI_ADAPTER_ID: &str = "dsh-tui";
 
 pub struct ManagedAgentLaunch<'a> {
     pub profile: &'a AgentLaunchProfile,
@@ -48,6 +49,43 @@ trait AgentAdapter: Sync {
 struct CodexAdapter;
 struct ClaudeCodeAdapter;
 struct GrokBuildAdapter;
+struct DshTuiAdapter;
+
+impl AgentAdapter for DshTuiAdapter {
+    fn id(&self) -> &'static str {
+        DSH_TUI_ADAPTER_ID
+    }
+    fn profile(&self) -> AgentLaunchProfile {
+        AgentLaunchProfile {
+            id: DEFAULT_DSH_TUI_PROFILE_ID.into(),
+            label: "DeepSeek Harness TUI".into(),
+            adapter: self.id().into(),
+            command: "dsh-tui".into(),
+            built_in: true,
+        }
+    }
+    fn automatic_profile_id(&self) -> &'static str {
+        "dsh-tui.auto"
+    }
+    fn install_manual_shim(
+        &self,
+        context: &TerminalRuntimeContext,
+        _hook: Option<&str>,
+        _mcp: Option<&str>,
+        command: Option<&Path>,
+    ) -> Result<Option<PathBuf>, String> {
+        crate::dsh_tui_adapter::install(context, command)
+    }
+    fn managed_command(&self, launch: &ManagedAgentLaunch<'_>) -> Result<String, String> {
+        crate::dsh_tui_adapter::managed_command(launch)
+    }
+    fn supports_managed_mcp(&self) -> bool {
+        true
+    }
+    fn requires_remote_hook_helper(&self) -> bool {
+        true
+    }
+}
 
 impl AgentAdapter for CodexAdapter {
     fn id(&self) -> &'static str {
@@ -184,9 +222,15 @@ impl AgentAdapter for GrokBuildAdapter {
 static CODEX_ADAPTER: CodexAdapter = CodexAdapter;
 static CLAUDE_CODE_ADAPTER: ClaudeCodeAdapter = ClaudeCodeAdapter;
 static GROK_BUILD_ADAPTER: GrokBuildAdapter = GrokBuildAdapter;
+static DSH_TUI_ADAPTER: DshTuiAdapter = DshTuiAdapter;
 
-fn adapters() -> [&'static dyn AgentAdapter; 3] {
-    [&CODEX_ADAPTER, &CLAUDE_CODE_ADAPTER, &GROK_BUILD_ADAPTER]
+fn adapters() -> [&'static dyn AgentAdapter; 4] {
+    [
+        &CODEX_ADAPTER,
+        &CLAUDE_CODE_ADAPTER,
+        &GROK_BUILD_ADAPTER,
+        &DSH_TUI_ADAPTER,
+    ]
 }
 
 pub fn command_names() -> Vec<String> {
@@ -305,7 +349,7 @@ mod tests {
             .iter()
             .map(|profile| profile.id.as_str())
             .collect::<std::collections::HashSet<_>>();
-        assert_eq!(profiles.len(), 3);
+        assert_eq!(profiles.len(), 4);
         assert_eq!(ids.len(), profiles.len());
         assert_eq!(automatic_profile_id(CODEX_ADAPTER_ID), "codex.auto");
         assert_eq!(
@@ -322,6 +366,9 @@ mod tests {
         assert!(requires_remote_hook_helper(CODEX_ADAPTER_ID));
         assert!(!requires_remote_hook_helper(CLAUDE_CODE_ADAPTER_ID));
         assert!(requires_remote_hook_helper(GROK_BUILD_ADAPTER_ID));
+        assert!(supports_managed_mcp(DSH_TUI_ADAPTER_ID));
+        assert!(requires_remote_hook_helper(DSH_TUI_ADAPTER_ID));
+        assert_eq!(automatic_profile_id(DSH_TUI_ADAPTER_ID), "dsh-tui.auto");
     }
 
     #[test]
@@ -396,7 +443,11 @@ mod tests {
                 existing_developer_instructions: Some("Keep the remote user rule."),
             })
             .unwrap();
-            if profile.adapter == GROK_BUILD_ADAPTER_ID {
+            if profile.adapter == DSH_TUI_ADAPTER_ID {
+                // Remote configuration is uploaded over SFTP; keep canonical PTY
+                // input short and free of embedded config/credential material.
+                assert_eq!(command, "'/home/user/.luna-mux/bin/dsh-tui-launch'");
+            } else if profile.adapter == GROK_BUILD_ADAPTER_ID {
                 assert!(command.contains("AgentProcessStart"), "{command}");
                 assert!(command.contains("AgentProcessExit"), "{command}");
                 assert!(command.contains("remote-agent"), "{command}");

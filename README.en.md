@@ -42,7 +42,9 @@ Database panes connect to SQLite, MySQL/MariaDB, and PostgreSQL within the curre
 
 ## Agents in the Terminal
 
-Launch a supported agent (currently including Codex and Claude Code) in any pane and Luna Mux detects it, then injects a Hook and MCP servers to extend its capabilities.
+Launch a supported agent (including Codex, Claude Code, and DeepSeek Harness TUI) in any pane and Luna Mux detects it, then injects a Hook and MCP servers to extend its capabilities.
+
+Select DeepSeek Harness TUI from the Agent menu, or run `dsh-tui` / `dst` in a new terminal. Install dsh and the TUI in the target environment first.
 
 ### Status Monitoring (Hook)
 

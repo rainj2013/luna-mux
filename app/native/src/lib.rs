@@ -21,6 +21,8 @@ mod database_pane_ui;
 mod database_runtime;
 mod desktop;
 mod doctor;
+mod dsh_tui_adapter;
+mod dsh_tui_status;
 mod grok_build_adapter;
 mod legacy_agent_hook_cleanup;
 mod local_pty_backend;
@@ -701,7 +703,12 @@ fn exit_confirmation_copy(
 }
 
 fn should_send_agent_desktop_notification(event: &ManagedAgentEvent) -> bool {
-    event.evidence == ManagedAgentEvidence::StructuredHook
+    (event.evidence == ManagedAgentEvidence::StructuredHook
+        || (event.adapter_id == agent_adapters::DSH_TUI_ADAPTER_ID
+            && matches!(
+                event.hook_event_name.as_str(),
+                "DshTuiPermission" | "DshTuiQuestion" | "DshTuiAuth" | "DshTuiDone" | "DshTuiError"
+            )))
         && matches!(
             event.status,
             ManagedAgentStatus::Waiting | ManagedAgentStatus::Completed | ManagedAgentStatus::Error

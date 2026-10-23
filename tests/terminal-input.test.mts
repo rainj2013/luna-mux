@@ -36,6 +36,8 @@ test('managed Codex is known from its launch profile before the first hook event
   assert.equal(agentAdapterId('claude-code', 'codex.default'), 'claude-code')
   assert.equal(agentAdapterId(undefined, 'claude-code.default'), 'claude-code')
   assert.equal(agentAdapterId(undefined, 'grok-build.default'), 'grok-build')
+  assert.equal(agentAdapterId(undefined, 'dsh-tui.default'), 'dsh-tui')
+  assert.equal(agentAdapterId(undefined, 'dsh-tui.auto'), 'dsh-tui')
   assert.equal(agentAdapterId(undefined, 'claude-code.auto'), 'claude-code')
 })
 

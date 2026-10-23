@@ -42,7 +42,9 @@ Luna Mux 是一个面向 Coding Agent 的终端工作台。它以项目目录为
 
 ## 终端里的 Agent
 
-在任意终端窗格里启动受支持的 Agent（目前包括 Codex 和 Claude Code），Luna Mux 会自动发现这个 Agent，并注入 Hook 和 MCP 来扩展它的能力。
+在任意终端窗格里启动受支持的 Agent（包括 Codex、Claude Code 和 DeepSeek Harness TUI），Luna Mux 会自动发现这个 Agent，并注入 Hook 和 MCP 来扩展它的能力。
+
+DeepSeek Harness TUI 可在 Agent 菜单中选择，也可在新终端里运行 `dsh-tui` 或 `dst`。需先在目标环境安装 dsh 和 TUI。
 
 ### 状态监控（Hook）
 

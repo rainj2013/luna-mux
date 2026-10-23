@@ -138,6 +138,7 @@ pub struct AgentHookService {
     events: Mutex<AgentEventBuffer>,
     structured_agents: Mutex<HashSet<String>>,
     terminal_signals: Mutex<HashMap<(String, String), Instant>>,
+    dsh_status: Mutex<HashMap<String, crate::dsh_tui_status::Decoder>>,
     event_sink: RwLock<Option<AgentEventSink>>,
     browser_ensure: RwLock<Option<BrowserEnsure>>,
     persistence_root: Option<PathBuf>,
@@ -163,6 +164,7 @@ impl AgentHookService {
             events: Mutex::new(AgentEventBuffer::default()),
             structured_agents: Mutex::new(HashSet::new()),
             terminal_signals: Mutex::new(HashMap::new()),
+            dsh_status: Mutex::new(HashMap::new()),
             event_sink: RwLock::new(None),
             browser_ensure: RwLock::new(None),
             persistence_root,
@@ -294,6 +296,9 @@ impl AgentHookService {
         }
         if let Ok(mut signals) = self.terminal_signals.lock() {
             signals.retain(|(id, _), _| id != runtime_id);
+        }
+        if let Ok(mut decoders) = self.dsh_status.lock() {
+            decoders.remove(runtime_id);
         }
     }
 
@@ -635,6 +640,49 @@ impl AgentHookService {
         if contexts.is_empty() {
             return;
         }
+        let dsh = contexts
+            .iter()
+            .filter(|context| {
+                agent_adapters::adapter_id_for_profile(&context.launch_profile_id)
+                    == Some(agent_adapters::DSH_TUI_ADAPTER_ID)
+            })
+            .map(|context| (context.agent_id.clone(), context.clone()))
+            .collect::<HashMap<_, _>>();
+        // OSC has no process identity: never apply a report to ambiguous nested
+        // agents. Only an already authenticated lifecycle can establish a target.
+        if dsh.len() == 1 {
+            let context = dsh.into_values().next().expect("one dsh context");
+            let reports = self
+                .dsh_status
+                .lock()
+                .map(|mut decoders| {
+                    decoders
+                        .entry(output.runtime_id.clone())
+                        .or_default()
+                        .feed(&output.data)
+                })
+                .unwrap_or_default();
+            for report in reports {
+                use crate::dsh_tui_status::Status;
+                let hook = match report {
+                    Status::Idle => "DshTuiIdle",
+                    Status::Working => "DshTuiWorking",
+                    Status::Permission => "DshTuiPermission",
+                    Status::Input => "DshTuiQuestion",
+                    Status::External => "DshTuiAuth",
+                    Status::Done => "DshTuiDone",
+                    Status::Error => "DshTuiError",
+                };
+                self.record_event(
+                    context.clone(),
+                    hook.into(),
+                    None,
+                    None,
+                    None,
+                    ManagedAgentEvidence::TerminalHeuristic,
+                );
+            }
+        }
         let structured = self
             .structured_agents
             .lock()
@@ -741,6 +789,15 @@ impl AgentHookService {
         }
         if let Ok(mut agents) = self.structured_agents.lock() {
             agents.insert(context.agent_id.clone());
+        }
+        if matches!(
+            hook_event_name.as_str(),
+            "AgentProcessStart" | "AgentProcessExit"
+        ) && agent_adapters::adapter_id_for_profile(&context.launch_profile_id)
+            == Some(agent_adapters::DSH_TUI_ADAPTER_ID)
+            && let Ok(mut decoders) = self.dsh_status.lock()
+        {
+            decoders.remove(&context.runtime_id);
         }
         self.record_event(
             context,
@@ -1170,6 +1227,20 @@ fn status_for_hook_with_payload(
     payload: Option<&Value>,
 ) -> (ManagedAgentStatus, Option<ManagedAgentWaitingReason>) {
     match hook_event_name {
+        "DshTuiIdle" | "DshTuiQuestion" => (
+            ManagedAgentStatus::Waiting,
+            Some(ManagedAgentWaitingReason::Input),
+        ),
+        "DshTuiPermission" => (
+            ManagedAgentStatus::Waiting,
+            Some(ManagedAgentWaitingReason::Permission),
+        ),
+        "DshTuiAuth" => (
+            ManagedAgentStatus::Waiting,
+            Some(ManagedAgentWaitingReason::External),
+        ),
+        "DshTuiDone" => (ManagedAgentStatus::Completed, None),
+        "DshTuiError" => (ManagedAgentStatus::Error, None),
         "PermissionRequest" => (
             if payload.is_some_and(codex_permission_is_auto_approved)
                 && adapter_id == agent_adapters::CODEX_ADAPTER_ID
@@ -1441,6 +1512,65 @@ fn option_value(args: &[String], name: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn dsh_status_is_scoped_to_registered_runtime_and_survives_render_chatter() {
+        use super::*;
+        let service = AgentHookService::new();
+        let context = TerminalManagedAgentContext {
+            mux_session_id: "mux".into(),
+            pane_id: "pane".into(),
+            runtime_id: "dsh-runtime".into(),
+            agent_id: "dsh-agent".into(),
+            launch_profile_id: "dsh-tui.default".into(),
+        };
+        let report = |runtime: &str, data: &str| {
+            service.record_terminal_output(&TerminalRuntimeOutputEvent::new(runtime, 0, data))
+        };
+        report("unregistered", "\x1b]7501;state=done:app=dsh-tui\x07");
+        assert!(service.events().is_empty());
+        service.issue_token(context.clone()).unwrap();
+        service.record(
+            context.clone(),
+            json!({ "hook_event_name": "AgentProcessStart" }),
+        );
+        report("dsh-runtime", "\x1b]7501;state=work");
+        report("dsh-runtime", "ing:app=dsh-tui\x1b\\");
+        report("other-runtime", "\x1b]7501;state=done:app=dsh-tui\x07");
+        report(
+            "dsh-runtime",
+            "\x1b]7501;state=blocked:app=dsh-tui:kind=permission\x07",
+        );
+        report("dsh-runtime", "render chatter");
+        let latest = service.events().pop().unwrap();
+        assert_eq!(latest.status, ManagedAgentStatus::Waiting);
+        assert_eq!(
+            latest.waiting_reason,
+            Some(ManagedAgentWaitingReason::Permission)
+        );
+        assert_eq!(latest.evidence, ManagedAgentEvidence::TerminalHeuristic);
+        assert_eq!(latest.context.agent_id, "dsh-agent");
+        report("dsh-runtime", "\x1b]7501;state=done:app=dsh-tui\x07");
+        assert_eq!(
+            service.events().last().unwrap().status,
+            ManagedAgentStatus::Completed
+        );
+        service.record(
+            context.clone(),
+            json!({ "hook_event_name": "AgentProcessExit" }),
+        );
+        service.remove_agent_by_id(&context.agent_id);
+        let count = service.events().len();
+        report("dsh-runtime", "\x1b]7501;state=working:app=dsh-tui\x07");
+        assert_eq!(service.events().len(), count);
+        assert!(
+            !service
+                .dsh_status
+                .lock()
+                .unwrap()
+                .contains_key("dsh-runtime")
+        );
+    }
+
     #[test]
     fn title_source_tracks_current_session_without_exposing_transcripts_in_events() {
         let service = super::AgentHookService::new();

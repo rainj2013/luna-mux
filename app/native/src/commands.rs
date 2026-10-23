@@ -1065,8 +1065,20 @@ pub async fn terminal_runtime_create(
                                 return Err(error);
                             }
                         };
+                    let dsh_bootstrap = match crate::dsh_tui_adapter::install_wsl_manual_bootstrap(
+                        &context,
+                        &request.target_id,
+                        environment_path.as_path().to_str(),
+                    ) {
+                        Ok(command) => command,
+                        Err(error) => {
+                            state.agent_hooks.revoke_token(&token);
+                            state.luna_mcp.revoke_token(&mcp_token);
+                            return Err(error);
+                        }
+                    };
                     Some(format!(
-                        "{codex_bootstrap}; {claude_bootstrap}; {grok_bootstrap}"
+                        "{codex_bootstrap}; {claude_bootstrap}; {grok_bootstrap}; {dsh_bootstrap}"
                     ))
                 } else {
                     None
@@ -1233,6 +1245,19 @@ pub async fn terminal_runtime_create(
                             .install_remote_agent_helper(&runtime.runtime_id)
                     })
                     .await?;
+                    if profile.adapter == agent_adapters::DSH_TUI_ADAPTER_ID {
+                        state
+                            .sessions
+                            .install_remote_dsh_support(
+                                &runtime.runtime_id,
+                                &TerminalRuntimeContext {
+                                    mux_session_id: context.mux_session_id.clone(),
+                                    pane_id: context.pane_id.clone(),
+                                    runtime_id: context.runtime_id.clone(),
+                                },
+                            )
+                            .await?;
+                    }
                     let remote_mcp = if let Some((local_mcp_endpoint, mcp_token)) = &mcp {
                         let local_mcp_port = mcp_endpoint_port(local_mcp_endpoint)?;
                         let remote_mcp_port = retry_remote_setup("remote setup", || {
@@ -1587,12 +1612,18 @@ async fn setup_remote_manual_agent_shims(
             launch_profile_id: "manual.remote".into(),
         };
         let mut shim_bin = None;
-        let enabled_commands = remote_agents
+        let mut enabled_commands = remote_agents
             .iter()
             .map(|(profile, _)| profile.command.clone())
             .collect::<Vec<_>>();
         for (base_profile, real_command) in &remote_agents {
             let adapter = base_profile.adapter.as_str();
+            if adapter == agent_adapters::DSH_TUI_ADAPTER_ID {
+                state
+                    .sessions
+                    .install_remote_dsh_support(&runtime.runtime_id, context)
+                    .await?;
+            }
             let profile = AgentLaunchProfile {
                 id: base_profile.id.clone(),
                 label: base_profile.label.clone(),
@@ -1612,8 +1643,20 @@ async fn setup_remote_manual_agent_shims(
                 browser_credentials_file: Some(&environment_file),
                 existing_developer_instructions: existing_developer_instructions.as_deref(),
             })?;
-            let script =
-                remote_manual_agent_script(adapter, &hook_command, &launch, &environment_file);
+            let script = if adapter == agent_adapters::DSH_TUI_ADAPTER_ID {
+                let bin = remote_helper
+                    .rsplit_once('/')
+                    .ok_or("Invalid remote DSH helper path")?
+                    .0;
+                crate::dsh_tui_adapter::posix_script(
+                    &posix_shell_quote(real_command),
+                    &format!("{bin}/{}", crate::dsh_tui_adapter::PATCH_NAME),
+                    &hook_command,
+                    &format!("set -a; . {}; set +a", posix_shell_quote(&environment_file)),
+                )
+            } else {
+                remote_manual_agent_script(adapter, &hook_command, &launch, &environment_file)
+            };
             let (bin, _) = retry_remote_setup("remote setup", || {
                 state.sessions.install_remote_runtime_shim(
                     &runtime.runtime_id,
@@ -1623,6 +1666,18 @@ async fn setup_remote_manual_agent_shims(
                 )
             })
             .await?;
+            if adapter == agent_adapters::DSH_TUI_ADAPTER_ID {
+                retry_remote_setup("remote setup", || {
+                    state.sessions.install_remote_runtime_shim(
+                        &runtime.runtime_id,
+                        &runtime.runtime_id,
+                        "dst",
+                        &script,
+                    )
+                })
+                .await?;
+                enabled_commands.push("dst".into());
+            }
             shim_bin = Some(bin);
         }
         let shim_bin = shim_bin.ok_or_else(|| "没有生成远端 Agent shim".to_string())?;

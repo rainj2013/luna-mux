@@ -1083,6 +1083,35 @@ impl SessionManager {
             .await
     }
 
+    pub async fn install_remote_dsh_support(
+        &self,
+        id: &str,
+        context: &crate::terminal_runtime_contract::TerminalRuntimeContext,
+    ) -> Result<(), String> {
+        use crate::dsh_tui_adapter::{self, BRIDGE_NAME, LAUNCH_NAME, PATCH_NAME};
+        let bridge = self
+            .install_remote_support_file(id, id, BRIDGE_NAME, dsh_tui_adapter::BRIDGE, 0o600)
+            .await?;
+        let bin = bridge
+            .rsplit_once('/')
+            .ok_or("Invalid remote DSH support path")?
+            .0;
+        let helper = format!("{bin}/remote-agent");
+        let patch = dsh_tui_adapter::patch(&bridge, &helper, true, context);
+        let patch_path = self
+            .install_remote_support_file(id, id, PATCH_NAME, &patch, 0o600)
+            .await?;
+        let script = dsh_tui_adapter::posix_script(
+            "command dsh-tui",
+            &patch_path,
+            &format!("{} hook", crate::shell_quoting::shell_quote(&helper)),
+            "",
+        );
+        self.install_remote_support_file(id, id, LAUNCH_NAME, &script, 0o700)
+            .await?;
+        Ok(())
+    }
+
     /// Read only the non-secret helper log and presence marker for diagnostics.
     /// The environment file is intentionally never returned because it contains
     /// hook/MCP credentials.
