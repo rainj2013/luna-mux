@@ -1,6 +1,6 @@
 {
   "name": "luna-mux",
-  "version": "0.5.6",
+  "version": "0.6.0",
   "description": "A local and remote terminal workspace for coding agents",
   "license": "MIT",
   "type": "module",
