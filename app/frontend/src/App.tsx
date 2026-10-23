@@ -139,6 +139,7 @@ function isSshAuthenticationFailure(error?: string): boolean {
 }
 
 function agentAdapterLabel(adapterId: string): string {
+  if (adapterId === 'dsh-tui') return 'DeepSeek Harness TUI'
   if (adapterId === 'codex') return 'Codex'
   if (adapterId === 'claude-code') return 'Claude Code'
   if (adapterId === 'grok-build') return 'Grok Build'
@@ -2008,7 +2009,8 @@ function summarizeManagedAgents(panes: WorkspaceTab[], events: ManagedAgentEvent
 }
 
 function isAgentAttentionEvent(event: ManagedAgentEvent): boolean {
-  return event.evidence === 'structuredHook' && ['waiting', 'completed', 'error'].includes(event.status)
+  const dshReport = event.adapterId === 'dsh-tui' && ['DshTuiPermission', 'DshTuiQuestion', 'DshTuiAuth', 'DshTuiDone', 'DshTuiError'].includes(event.hookEventName)
+  return (event.evidence === 'structuredHook' || dshReport) && ['waiting', 'completed', 'error'].includes(event.status)
 }
 
 function agentAttentionTone(agent?: ManagedAgentSummary): AgentAttentionTone | undefined {
@@ -2603,6 +2605,7 @@ function parseRuntimeEnvironmentDetail(detail: string): DiagnosticsRuntimeEnviro
 }
 
 function agentTypeLabel(adapter: string): string {
+  if (adapter === 'dsh-tui') return 'DeepSeek Harness TUI'
   if (adapter === 'claude-code') return 'Claude Code'
   if (adapter === 'codex') return 'Codex'
   if (adapter === 'grok-build') return 'Grok Build'

@@ -2,6 +2,8 @@ const bracketedPasteStart = '\x1b[200~'
 const bracketedPasteEnd = '\x1b[201~'
 const codexInsertNewline = '\x1b\r'
 const launchProfileAdapters: Record<string, string> = {
+  'dsh-tui.default': 'dsh-tui',
+  'dsh-tui.auto': 'dsh-tui',
   'codex.default': 'codex',
   'claude-code.default': 'claude-code',
   'grok-build.default': 'grok-build',

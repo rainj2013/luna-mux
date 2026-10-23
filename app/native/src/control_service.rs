@@ -1692,19 +1692,41 @@ impl LunaControlService for InProcessControlService {
                         if arguments.task.trim().is_empty() {
                             return Err(invalid_arguments("task 不能为空"));
                         }
-                        let runtime_id = self
+                        let agent = self
                             .agent_hooks
                             .snapshots()
                             .into_iter()
                             .find(|agent| agent.context.agent_id == agent_id)
-                            .map(|agent| agent.context.runtime_id)
                             .ok_or_else(|| ControlError {
                                 code: ControlErrorCode::NotFound,
                                 message: "Managed Agent 不存在".into(),
                                 retryable: false,
                                 details: None,
                             })?;
-                        let payload = format!("{}\r", arguments.task);
+                        let runtime_id = agent.context.runtime_id;
+                        let payload = if crate::agent_adapters::adapter_id_for_profile(
+                            &agent.context.launch_profile_id,
+                        ) == Some(crate::agent_adapters::DSH_TUI_ADAPTER_ID)
+                        {
+                            let latest = self
+                                .agent_hooks
+                                .events()
+                                .into_iter()
+                                .rev()
+                                .find(|event| event.context.agent_id == agent_id);
+                            crate::dsh_tui_adapter::task_payload(
+                                latest.as_ref().map(|event| event.hook_event_name.as_str()),
+                                &arguments.task,
+                            )
+                            .map_err(|message| ControlError {
+                                code: ControlErrorCode::Conflict,
+                                message: message.into(),
+                                retryable: true,
+                                details: None,
+                            })?
+                        } else {
+                            format!("{}\r", arguments.task)
+                        };
                         self.interactions
                             .write(
                                 &runtime_id,
@@ -3927,6 +3949,92 @@ mod tests {
             .unwrap();
         assert!(task_audit.payload["arguments"].get("task").is_none());
         assert_eq!(task_audit.payload["arguments"]["dataBytes"], 17);
+        drop(service);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn dsh_tasks_require_prompt_readiness_and_use_one_bracketed_paste() {
+        let hooks = AgentHookService::new();
+        let target = crate::terminal_runtime_contract::TerminalManagedAgentContext {
+            mux_session_id: "session-1".into(),
+            pane_id: "pane-target".into(),
+            runtime_id: "runtime-target".into(),
+            agent_id: "agent-target".into(),
+            launch_profile_id: "dsh-tui.default".into(),
+        };
+        let token = hooks.issue_token(target).unwrap();
+        hooks.start().unwrap();
+        reqwest::Client::new()
+            .post(hooks.endpoint().unwrap())
+            .bearer_auth(token)
+            .json(&json!({ "hook_event_name": "AgentProcessStart" }))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap();
+        let backend = Arc::new(EmptyBackend::ssh_runtime("runtime-target"));
+        let (service, path) =
+            service_with_agent_hooks(backend.clone(), Arc::new(EmptySideEffects), hooks);
+        let caller = ControlCaller {
+            caller_id: "internal-test".into(),
+            kind: ControlCallerKind::Internal,
+            grants: vec![ControlGrant {
+                resource_kind: ControlResourceKind::Agent,
+                resource_id: Some("agent-target".into()),
+                access: ControlAccess::Control,
+            }],
+        };
+        let request = || ControlRequest {
+            contract_version: CONTROL_CONTRACT_VERSION,
+            request_id: uuid::Uuid::new_v4().to_string(),
+            operation: "agents.send_task".into(),
+            resource: Some(crate::control_contract::ControlResourceRef {
+                kind: ControlResourceKind::Agent,
+                id: "agent-target".into(),
+            }),
+            arguments: json!({ "task": "first\r\n第二行" }),
+            idempotency_key: None,
+            approval_id: None,
+        };
+        for state in [
+            None,
+            Some("working"),
+            Some("blocked:kind=permission"),
+            Some("blocked:kind=question"),
+            Some("blocked:kind=auth"),
+        ] {
+            if let Some(state) = state {
+                service.agent_hooks.record_terminal_output(
+                    &crate::terminal_runtime_contract::TerminalRuntimeOutputEvent::new(
+                        "runtime-target",
+                        0,
+                        format!("\x1b]7501;state={state}:app=dsh-tui\x07"),
+                    ),
+                );
+            }
+            assert_eq!(
+                service.invoke(&caller, request()).await.unwrap_err().code,
+                ControlErrorCode::Conflict
+            );
+            assert!(backend.writes.lock().unwrap().is_empty());
+        }
+        service.agent_hooks.record_terminal_output(
+            &crate::terminal_runtime_contract::TerminalRuntimeOutputEvent::new(
+                "runtime-target",
+                0,
+                "\x1b]7501;state=idle:app=dsh-tui\x07",
+            ),
+        );
+        service.invoke(&caller, request()).await.unwrap();
+        assert_eq!(
+            backend.writes.lock().unwrap().as_slice(),
+            &[(
+                "runtime-target".into(),
+                "\x1b[200~first\n第二行\x1b[201~\r".into()
+            )]
+        );
         drop(service);
         let _ = std::fs::remove_file(path);
     }

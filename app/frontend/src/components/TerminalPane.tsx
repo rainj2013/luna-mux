@@ -8,6 +8,7 @@ import { ChevronDown, ChevronUp, ClipboardPaste, Copy, KeyRound, Palette, Play, 
 import type { TerminalRuntimeEvent, TerminalSettings, TerminalUiDiagnosticEvent, TerminalUiInputPath, TerminalUiKeyCategory } from '../types'
 import { colorWithOpacity } from '../terminal-style'
 import { shouldUseWebglRenderer } from '../terminal-renderer'
+import { configureTerminalUnicode } from '../terminal-unicode'
 import { serializeTerminalSnapshot } from '../terminal-snapshot'
 import { createTerminalOutputWriter, type TerminalOutputWriter } from '../terminal-output-writer'
 import { agentImagePasteInput, codexControlMInput, handleCodexMultilinePasteEvent, routeTerminalPaste } from '../terminal-input'
@@ -364,12 +365,14 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     const snapshot = terminalSnapshots.get(paneId)
     const restorableSnapshot = snapshot && snapshot.runtimeId === runtimeIdRef.current ? snapshot : undefined
     const term = new Terminal({
+      allowProposedApi: true,
       cursorBlink: true, convertEol: false, allowTransparency: true, fontFamily: settings.fontFamily,
       fontSize: settings.fontSize, lineHeight: 1.25, scrollback: 5000,
       linkHandler: { activate: openTerminalLink },
       ...(restorableSnapshot ? { cols: restorableSnapshot.cols, rows: restorableSnapshot.rows } : {}),
       theme: { background: rendererBackground, foreground: settings.foregroundColor, cursor: terminalAccentColor, ...terminalSelectionTheme }
     })
+    configureTerminalUnicode(term)
     const fit = new FitAddon()
     const serialize = new SerializeAddon()
     fitAddon.current = fit

@@ -395,7 +395,7 @@ fn append_powershell_bootstrap(root: &Path, contribution: &str) -> Result<(), St
     Ok(())
 }
 
-fn executable_for_target(executable: &Path, target_id: &str) -> Result<PathBuf, String> {
+pub(crate) fn executable_for_target(executable: &Path, target_id: &str) -> Result<PathBuf, String> {
     let value = executable.to_string_lossy().into_owned();
     if cfg!(windows) && target_id.starts_with("local:wsl:") {
         let bytes = value.as_bytes();

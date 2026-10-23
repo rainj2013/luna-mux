@@ -3,6 +3,7 @@ use serde::Serialize;
 pub const DEFAULT_CODEX_PROFILE_ID: &str = "codex.default";
 pub const DEFAULT_CLAUDE_CODE_PROFILE_ID: &str = "claude-code.default";
 pub const DEFAULT_GROK_BUILD_PROFILE_ID: &str = "grok-build.default";
+pub const DEFAULT_DSH_TUI_PROFILE_ID: &str = "dsh-tui.default";
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
