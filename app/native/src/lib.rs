@@ -23,6 +23,7 @@ mod desktop;
 mod doctor;
 mod dsh_tui_adapter;
 mod dsh_tui_status;
+mod exit_lifecycle;
 mod grok_build_adapter;
 mod legacy_agent_hook_cleanup;
 mod local_pty_backend;
@@ -54,10 +55,7 @@ mod windows_app_icon;
 
 use std::{
     collections::HashSet,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -131,7 +129,13 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             macos_window::handle_event(window, event);
             #[cfg(not(target_os = "macos"))]
-            let _ = (window, event);
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event
+                && window.label() == "main"
+            {
+                // Keep the window alive until the user confirms quitting.
+                api.prevent_close();
+                request_exit(window.app_handle(), 0);
+            }
         });
     #[cfg(target_os = "macos")]
     let builder = builder
@@ -434,7 +438,7 @@ pub fn run() {
                 allowed_imports: Mutex::new(HashSet::new()),
                 pending_archive_imports: Mutex::new(std::collections::HashMap::new()),
                 pending_luna_remote_imports: Mutex::new(std::collections::HashMap::new()),
-                exit_cleanup_started: AtomicBool::new(false),
+                exit_lifecycle: exit_lifecycle::ExitLifecycle::default(),
             });
             Ok(())
         })
@@ -611,55 +615,11 @@ pub fn run() {
         .run(|app, event| match event {
             RunEvent::ExitRequested { api, code, .. } => {
                 let state = app.state::<AppState>();
-                if state.exit_cleanup_started.load(Ordering::Acquire) {
+                if state.exit_lifecycle.can_exit() {
                     return;
                 }
                 api.prevent_exit();
-                let active_runtime_count = state
-                    .terminal_backend
-                    .list()
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter(|runtime| {
-                        matches!(
-                            runtime.status,
-                            TerminalRuntimeStatus::Starting
-                                | TerminalRuntimeStatus::Connecting
-                                | TerminalRuntimeStatus::Running
-                        )
-                    })
-                    .count()
-                    + state
-                        .browser_runtimes
-                        .list()
-                        .unwrap_or_default()
-                        .into_iter()
-                        .filter(|runtime| {
-                            matches!(
-                                runtime.status,
-                                browser_runtime::BrowserRuntimeStatus::Starting
-                                    | browser_runtime::BrowserRuntimeStatus::Running
-                            )
-                        })
-                        .count();
-                if active_runtime_count == 0 {
-                    begin_exit_cleanup(app, code.unwrap_or(0));
-                    return;
-                }
-                let language = state.db.get_setting("language", "zh-CN".to_string());
-                let (title, message, confirm, cancel) =
-                    exit_confirmation_copy(&language, active_runtime_count);
-                let handle = app.clone();
-                app.dialog()
-                    .message(message)
-                    .title(title)
-                    .kind(MessageDialogKind::Warning)
-                    .buttons(MessageDialogButtons::OkCancelCustom(confirm, cancel))
-                    .show(move |confirmed| {
-                        if confirmed {
-                            begin_exit_cleanup(&handle, code.unwrap_or(0));
-                        }
-                    });
+                request_exit(app, code.unwrap_or(0));
             }
             #[cfg(target_os = "macos")]
             RunEvent::Exit => {
@@ -677,6 +637,59 @@ pub fn run() {
                 }
             }
             _ => {}
+        });
+}
+
+fn request_exit(app: &tauri::AppHandle, code: i32) {
+    let state = app.state::<AppState>();
+    if !state.exit_lifecycle.request() {
+        return;
+    }
+    let active_runtime_count = state
+        .terminal_backend
+        .list()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|runtime| {
+            matches!(
+                runtime.status,
+                TerminalRuntimeStatus::Starting
+                    | TerminalRuntimeStatus::Connecting
+                    | TerminalRuntimeStatus::Running
+            )
+        })
+        .count()
+        + state
+            .browser_runtimes
+            .list()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|runtime| {
+                matches!(
+                    runtime.status,
+                    browser_runtime::BrowserRuntimeStatus::Starting
+                        | browser_runtime::BrowserRuntimeStatus::Running
+                )
+            })
+            .count();
+    if active_runtime_count == 0 {
+        begin_exit_cleanup(app, code);
+        return;
+    }
+    let language = state.db.get_setting("language", "zh-CN".to_string());
+    let (title, message, confirm, cancel) = exit_confirmation_copy(&language, active_runtime_count);
+    let handle = app.clone();
+    app.dialog()
+        .message(message)
+        .title(title)
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(confirm, cancel))
+        .show(move |confirmed| {
+            if confirmed {
+                begin_exit_cleanup(&handle, code);
+            } else {
+                handle.state::<AppState>().exit_lifecycle.cancel();
+            }
         });
 }
 
@@ -899,7 +912,7 @@ fn managed_agents_activate_notification(
 
 fn begin_exit_cleanup(app: &tauri::AppHandle, code: i32) {
     let state = app.state::<AppState>();
-    if state.exit_cleanup_started.swap(true, Ordering::AcqRel) {
+    if !state.exit_lifecycle.begin_cleanup() {
         return;
     }
     let sessions = state.sessions.clone();
@@ -929,6 +942,7 @@ fn begin_exit_cleanup(app: &tauri::AppHandle, code: i32) {
         };
         let _ = tokio::time::timeout(Duration::from_secs(5), cleanup).await;
         browser_runtimes.force_cleanup_managed_processes();
+        app.state::<AppState>().exit_lifecycle.complete_cleanup();
         app.exit(code);
     });
 }

@@ -1538,6 +1538,60 @@ mod terminal_environment_tests {
 
     #[cfg(target_os = "macos")]
     #[tokio::test]
+    async fn macos_pty_preserves_sixel_and_capability_queries() {
+        let backend = InProcessLocalPtyTerminalBackend::new();
+        let runtime = backend
+            .create(TerminalRuntimeCreateRequest {
+                runtime_id: None,
+                context: None,
+                target_id: MACOS_SHELL_TARGET.into(),
+                title: Some("image transport test".into()),
+                cwd: None,
+                command: None,
+                authentication: None,
+                managed_agent: None,
+                launch_environment: Default::default(),
+                cols: 100,
+                rows: 30,
+            })
+            .await
+            .expect("create macOS image probe PTY");
+        backend
+            .write(
+                &runtime.runtime_id,
+                "printf '\\033[c\\033P0;1;0q\"1;1;2;6#0;2;100;0;0#0~~\\033\\\\ImageAfter\\n'\r",
+            )
+            .await
+            .expect("write image probe");
+        let mut cursor = 0;
+        let mut collected = String::new();
+        for _ in 0..100 {
+            let output = backend
+                .read_output(&runtime.runtime_id, cursor, 65536)
+                .unwrap();
+            cursor = output.next_cursor;
+            collected.push_str(&output.data);
+            if collected.contains("\u{1b}P0;1;0q\"1;1;2;6#0;2;100;0;0#0~~\u{1b}\\ImageAfter") {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        backend
+            .close(&runtime.runtime_id)
+            .await
+            .expect("cleanup macOS image probe PTY");
+        assert!(
+            collected.contains("\u{1b}P0;1;0q\"1;1;2;6#0;2;100;0;0#0~~\u{1b}\\ImageAfter"),
+            "macOS PTY stripped SIXEL"
+        );
+        assert!(
+            collected.contains("\u{1b}[c"),
+            "macOS PTY intercepted the capability query"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
     async fn macos_zsh_backspace_emits_cursor_controls_without_a_parent_term() {
         let Some(shell) = macos_supported_shell() else {
             return;
@@ -1741,6 +1795,62 @@ mod tests {
         assert!(shell_exit.contains("\"closeRequested\":false"), "{log}");
         assert!(!log.contains("\"event\":\"close_requested\""), "{log}");
         let _ = std::fs::remove_dir_all(log_dir);
+    }
+
+    #[tokio::test]
+    async fn powershell_conpty_preserves_sixel_and_capability_queries() {
+        let mut target_ids = Vec::new();
+        if windows_powershell7_executable().is_some() {
+            target_ids.push(POWERSHELL_TARGET);
+        }
+        if windows_powershell5_executable().is_some() {
+            target_ids.push(POWERSHELL5_TARGET);
+        }
+        assert!(!target_ids.is_empty());
+        let sixel = "\u{1b}P0;1;0q\"1;1;2;6#0;2;100;0;0#0~~\u{1b}\\";
+        for target_id in target_ids {
+            let backend = InProcessLocalPtyTerminalBackend::new();
+            let runtime = backend.create(request_for_target(target_id, Some(
+                "[Console]::Write('ImageBefore'+[char]27+'[c'+[char]27+'P0;1;0q'+[char]34+'1;1;2;6#0;2;100;0;0#0~~'+[char]27+'\\'+'ImageAfter'); exit 0",
+            ))).await.expect("create image probe PTY");
+            let mut cursor = 0;
+            let mut collected = String::new();
+            for _ in 0..160 {
+                let output = backend
+                    .read_output(&runtime.runtime_id, cursor, 65536)
+                    .unwrap();
+                cursor = output.next_cursor;
+                if output.data.contains("\u{1b}[6n") {
+                    let _ = backend.write(&runtime.runtime_id, "\u{1b}[1;1R").await;
+                }
+                if output.data.contains("\u{1b}[c") {
+                    let _ = backend
+                        .write(&runtime.runtime_id, "\u{1b}[?62;4;6;22c")
+                        .await;
+                }
+                collected.push_str(&output.data);
+                if collected.contains(sixel) && collected.contains("ImageAfter") {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            backend
+                .close(&runtime.runtime_id)
+                .await
+                .expect("cleanup image probe PTY");
+            assert!(
+                collected.contains("ImageBefore") && collected.contains("ImageAfter"),
+                "{target_id}: probe did not finish"
+            );
+            assert!(
+                collected.contains(sixel),
+                "{target_id}: ConPTY stripped SIXEL output; ensure the bundled ConPTY resources are present"
+            );
+            assert!(
+                collected.contains("\u{1b}[c"),
+                "{target_id}: ConPTY intercepted the terminal capability query"
+            );
+        }
     }
 
     #[tokio::test]
