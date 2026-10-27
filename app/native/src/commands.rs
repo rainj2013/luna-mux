@@ -3,7 +3,7 @@ use std::{
     fs,
     io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, OnceLock, atomic::AtomicBool},
+    sync::{Arc, Mutex, OnceLock},
     time::UNIX_EPOCH,
 };
 
@@ -87,7 +87,7 @@ pub struct AppState {
     pub allowed_imports: Mutex<HashSet<PathBuf>>,
     pub pending_archive_imports: Mutex<HashMap<String, BookmarkArchive>>,
     pub pending_luna_remote_imports: Mutex<HashMap<String, LunaRemoteSnapshot>>,
-    pub exit_cleanup_started: AtomicBool,
+    pub exit_lifecycle: crate::exit_lifecycle::ExitLifecycle,
 }
 
 // Tauri synchronous commands run on the UI thread. Never wait for database I/O there.

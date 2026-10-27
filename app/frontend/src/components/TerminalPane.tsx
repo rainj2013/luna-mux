@@ -9,6 +9,7 @@ import type { TerminalRuntimeEvent, TerminalSettings, TerminalUiDiagnosticEvent,
 import { colorWithOpacity } from '../terminal-style'
 import { shouldUseWebglRenderer } from '../terminal-renderer'
 import { configureTerminalUnicode } from '../terminal-unicode'
+import { configureTerminalImages } from '../terminal-images'
 import { serializeTerminalSnapshot } from '../terminal-snapshot'
 import { createTerminalOutputWriter, type TerminalOutputWriter } from '../terminal-output-writer'
 import { reconcileTerminalFit } from '../terminal-fit'
@@ -402,6 +403,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
       terminalSnapshots.delete(paneId)
     }
     term.open(container.current)
+    configureTerminalImages(term)
     fit.fit()
     mountedTerminalPanes.add(paneId)
     terminal.current = term

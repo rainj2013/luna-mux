@@ -462,12 +462,13 @@ export function App(): React.JSX.Element {
         const runtime = managedRuntimes.byPane.get(pane.id)
         return { ...pane, key: pane.id, runtimeId: runtime?.runtimeId, agentId: runtime?.managedAgent?.agentId, status: runtime ? terminalRuntimeSessionStatus(runtime) : 'disconnected', error: runtime?.error }
       }))
+      setMinimizedPaneIds(new Set(storedPanes.filter((pane) => !managedRuntimes.byPane.has(pane.id)).map((pane) => pane.id)))
       setBrowserResources(storedBrowserResources.map((resource) => {
         const runtime = storedBrowserRuntimes.find((item) => item.browserResourceId === resource.id && item.muxSessionId === resource.muxSessionId && ['starting', 'running'].includes(item.status))
         return { ...resource, runtime, status: runtime?.status ?? 'stopped', error: runtime?.error }
       }))
       setBrowserRuntimes(storedBrowserRuntimes)
-      setActiveKey(storedPanes.find((pane) => pane.muxSessionId === sessionItems[0]?.id)?.id ?? '')
+      setActiveKey(storedPanes.find((pane) => pane.muxSessionId === sessionItems[0]?.id && managedRuntimes.byPane.has(pane.id))?.id ?? '')
       setBookmarkGroupNames(groups)
       setSidebarCollapsed(collapsed)
       setCollapsedBookmarkGroups(new Set(collapsedGroups))
