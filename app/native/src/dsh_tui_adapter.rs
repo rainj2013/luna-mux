@@ -302,6 +302,108 @@ mod tests {
         assert!(text.contains("Luna Mux tool routing contract"));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn posix_shim_preserves_mcp_environment_arguments_and_process_lifecycle() {
+        use std::{os::unix::fs::PermissionsExt, process::Command};
+        let root = std::env::temp_dir().join(format!("dsh posix {}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let real = root.join("real dsh-tui");
+        let hook = root.join("hook");
+        let environment = root.join("agent.env");
+        let args_file = root.join("args");
+        let hooks_file = root.join("hooks");
+        fs::write(
+            &real,
+            r#"#!/bin/sh
+[ "$LUNA_MUX_MCP_ENDPOINT" = 'http://127.0.0.1:43128/mcp' ] || exit 90
+[ "$LUNA_MUX_MCP_AUTHORIZATION" = 'fixture-only' ] || exit 91
+printf '%s\n' "$@" > "$DSH_TEST_ARGS"
+exit 17
+"#,
+        )
+        .unwrap();
+        fs::write(&hook, "#!/bin/sh\ncat >> \"$DSH_TEST_HOOKS\"\n").unwrap();
+        for path in [&real, &hook] {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        fs::write(&environment, "LUNA_MUX_MCP_ENDPOINT='http://127.0.0.1:43128/mcp'\nLUNA_MUX_MCP_AUTHORIZATION='fixture-only'\n").unwrap();
+        let shim = root.join("dst");
+        // WSL loads exported values before boot; SSH sources its private file.
+        for from_file in [false, true] {
+            let source = if from_file {
+                format!(
+                    "set -a; . {}; set +a",
+                    shell_quote(&environment.to_string_lossy())
+                )
+            } else {
+                String::new()
+            };
+            fs::write(
+                &shim,
+                posix_script(
+                    &shell_quote(&real.to_string_lossy()),
+                    &root.join(PATCH_NAME).to_string_lossy(),
+                    &shell_quote(&hook.to_string_lossy()),
+                    &source,
+                ),
+            )
+            .unwrap();
+            for (arguments, interactive) in [
+                (
+                    vec!["--resume", "session with spaces", "literal $(false)"],
+                    true,
+                ),
+                (vec!["doctor"], false),
+            ] {
+                fs::write(&hooks_file, "").unwrap();
+                let mut command = Command::new("/bin/sh");
+                command
+                    .arg(&shim)
+                    .args(&arguments)
+                    .env("DSH_TEST_ARGS", &args_file)
+                    .env("DSH_TEST_HOOKS", &hooks_file)
+                    .env_remove("LUNA_MUX_MCP_ENDPOINT")
+                    .env_remove("LUNA_MUX_MCP_AUTHORIZATION");
+                if !from_file {
+                    command
+                        .env("LUNA_MUX_MCP_ENDPOINT", "http://127.0.0.1:43128/mcp")
+                        .env("LUNA_MUX_MCP_AUTHORIZATION", "fixture-only");
+                }
+                assert_eq!(command.status().unwrap().code(), Some(17));
+                let actual = fs::read_to_string(&args_file).unwrap();
+                let mut expected = Vec::new();
+                if interactive {
+                    expected.extend([
+                        "--patch".to_string(),
+                        root.join(PATCH_NAME).to_string_lossy().into_owned(),
+                        "--backend".into(),
+                        "dsh".into(),
+                    ]);
+                }
+                expected.extend(arguments.into_iter().map(str::to_string));
+                assert_eq!(actual.lines().collect::<Vec<_>>(), expected);
+                let events = fs::read_to_string(&hooks_file).unwrap();
+                if interactive {
+                    let events = events
+                        .lines()
+                        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+                        .collect::<Vec<_>>();
+                    assert_eq!(events.len(), 2);
+                    assert_eq!(events[0]["hook_event_name"], "AgentProcessStart");
+                    assert_eq!(events[1]["hook_event_name"], "AgentProcessExit");
+                    assert_eq!(
+                        events[0]["luna_mux_process_id"],
+                        events[1]["luna_mux_process_id"]
+                    );
+                } else {
+                    assert!(events.is_empty());
+                }
+            }
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
     // Opt-in fixture export for exercising the real isolated upstream loader.
     #[test]
     #[ignore]

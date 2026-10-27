@@ -1386,14 +1386,13 @@ impl SessionManager {
         runtime_id: &str,
         hook_endpoint: &str,
         hook_token: &str,
-        mcp_token: Option<&str>,
+        mcp: Option<(&str, &str)>,
         browser_bridge: Option<(u16, &str)>,
     ) -> Result<String, String> {
         let runtime_root = self.remote_agent_runtime_root(id, runtime_id).await?;
         let path = format!("{runtime_root}/agent-{}.env", Uuid::new_v4().simple());
         let sftp = self.sftp(id).await?;
-        let contents =
-            agent_environment_contents(hook_endpoint, hook_token, mcp_token, browser_bridge);
+        let contents = agent_environment_contents(hook_endpoint, hook_token, mcp, browser_bridge);
         let mut metadata = FileAttributes::empty();
         metadata.permissions = Some(0o600);
         let mut file = sftp
@@ -1416,14 +1415,14 @@ impl SessionManager {
         runtime_id: &str,
         hook_endpoint: &str,
         hook_token: &str,
-        mcp_token: &str,
+        mcp: (&str, &str),
         browser_bridge: Option<(u16, &str)>,
     ) -> Result<String, String> {
         let runtime_root = self.remote_agent_runtime_root(id, runtime_id).await?;
         let path = format!("{runtime_root}/agent.env");
         let sftp = self.sftp(id).await?;
         let contents =
-            agent_environment_contents(hook_endpoint, hook_token, Some(mcp_token), browser_bridge);
+            agent_environment_contents(hook_endpoint, hook_token, Some(mcp), browser_bridge);
         let mut metadata = FileAttributes::empty();
         metadata.permissions = Some(0o600);
         let mut file = sftp
@@ -1773,7 +1772,7 @@ impl SessionManager {
 fn agent_environment_contents(
     hook_endpoint: &str,
     hook_token: &str,
-    mcp_token: Option<&str>,
+    mcp: Option<(&str, &str)>,
     browser_bridge: Option<(u16, &str)>,
 ) -> String {
     let mut contents = format!(
@@ -1781,9 +1780,10 @@ fn agent_environment_contents(
         shell_quote(hook_endpoint),
         shell_quote(hook_token),
     );
-    if let Some(mcp_token) = mcp_token {
+    if let Some((mcp_endpoint, mcp_token)) = mcp {
         contents.push_str(&format!(
-            "LUNA_MUX_MCP_AUTHORIZATION={}\n",
+            "LUNA_MUX_MCP_ENDPOINT={}\nLUNA_MUX_MCP_AUTHORIZATION={}\n",
+            shell_quote(mcp_endpoint),
             shell_quote(mcp_token),
         ));
     }
@@ -1844,15 +1844,16 @@ mod agent_hook_forwarder_tests {
         let contents = agent_environment_contents(
             "http://127.0.0.1:43127/v1/hooks",
             "lmxh_hook-secret",
-            Some("lmx_control-secret"),
+            Some(("http://127.0.0.1:43128/mcp", "lmx_control-secret")),
             Some((43129, "lmxbm_browser-secret")),
         );
         assert!(contents.contains("LUNA_MUX_HOOK_ENDPOINT='http://127.0.0.1:43127/v1/hooks'"));
         assert!(contents.contains("LUNA_MUX_HOOK_AUTHORIZATION='lmxh_hook-secret'"));
         assert!(contents.contains("LUNA_MUX_MCP_AUTHORIZATION='lmx_control-secret'"));
+        assert!(contents.contains("LUNA_MUX_MCP_ENDPOINT='http://127.0.0.1:43128/mcp'"));
         assert!(contents.contains("LUNA_MUX_BROWSER_BRIDGE_PORT='43129'"));
         assert!(contents.contains("LUNA_MUX_BROWSER_BRIDGE_TOKEN='lmxbm_browser-secret'"));
-        assert_eq!(contents.lines().count(), 5);
+        assert_eq!(contents.lines().count(), 6);
     }
 
     #[test]
@@ -1865,6 +1866,7 @@ mod agent_hook_forwarder_tests {
         );
         assert!(contents.contains("LUNA_MUX_HOOK_AUTHORIZATION='lmxh_hook-secret'"));
         assert!(!contents.contains("LUNA_MUX_MCP_AUTHORIZATION"));
+        assert!(!contents.contains("LUNA_MUX_MCP_ENDPOINT"));
         assert!(!contents.contains("LUNA_MUX_BROWSER_BRIDGE"));
         assert_eq!(contents.lines().count(), 2);
     }

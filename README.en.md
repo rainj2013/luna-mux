@@ -20,7 +20,7 @@
 
 <div align="center">English · <a href="README.md">简体中文</a></div>
 
-Luna Mux is a terminal workspace built for coding agents. It maintains a Session per project directory; each Session holds multiple terminal panes, and each pane can be a local terminal or an SSH remote terminal. When you launch Codex, Claude Code, or another agent in a terminal, Luna Mux automatically injects a Hook and MCP servers to extend it: the Hook monitors status, the Luna Mux MCP lets the agent control Luna Mux itself, and the agent-browser MCP lets it drive the browser. It also ships the complete SSH and SFTP capabilities ported from Luna Remote.
+Luna Mux is a terminal workspace built for coding agents. It maintains a Session per project directory; each Session holds multiple terminal panes, and each pane can be a local terminal or an SSH remote terminal. When you launch Codex, Claude Code, or [DeepSeek Harness TUI (dst)](https://github.com/ccch1mneyyy/dsh-TUI) in a terminal, Luna Mux automatically injects a Hook and MCP servers to extend it: the Hook monitors status, the Luna Mux MCP lets the agent control Luna Mux itself, and the agent-browser MCP lets it drive the browser. It also ships the complete SSH and SFTP capabilities ported from Luna Remote.
 
 ## Project Sessions and Terminal Panes
 
@@ -42,7 +42,7 @@ Database panes connect to SQLite, MySQL/MariaDB, and PostgreSQL within the curre
 
 ## Agents in the Terminal
 
-Launch a supported agent (including Codex, Claude Code, and DeepSeek Harness TUI) in any pane and Luna Mux detects it, then injects a Hook and MCP servers to extend its capabilities.
+Luna Mux supports Codex, Claude Code, and [DeepSeek Harness TUI (dst)](https://github.com/ccch1mneyyy/dsh-TUI). Launch any of these agents in a terminal pane and Luna Mux detects it, then injects a Hook and MCP servers to extend its capabilities.
 
 Select DeepSeek Harness TUI from the Agent menu, or run `dsh-tui` / `dst` in a new terminal. Install dsh and the TUI in the target environment first.
 

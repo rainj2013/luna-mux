@@ -9,8 +9,10 @@ import type { TerminalRuntimeEvent, TerminalSettings, TerminalUiDiagnosticEvent,
 import { colorWithOpacity } from '../terminal-style'
 import { shouldUseWebglRenderer } from '../terminal-renderer'
 import { configureTerminalUnicode } from '../terminal-unicode'
+import { configureTerminalImages } from '../terminal-images'
 import { serializeTerminalSnapshot } from '../terminal-snapshot'
 import { createTerminalOutputWriter, type TerminalOutputWriter } from '../terminal-output-writer'
+import { reconcileTerminalFit } from '../terminal-fit'
 import { agentImagePasteInput, codexControlMInput, handleCodexMultilinePasteEvent, routeTerminalPaste } from '../terminal-input'
 import { useI18n } from '../i18n'
 
@@ -306,7 +308,22 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
     const previous = lastRuntimeSize.current
     if (previous?.runtimeId === next.runtimeId && previous.cols === next.cols && previous.rows === next.rows) return
     lastRuntimeSize.current = next
-    void window.api.terminalRuntimes.resize(next.runtimeId, next.cols, next.rows).catch((error) => {
+    const recordGeometry = (stage: string): void => {
+      if (terminal.current !== term || runtimeIdRef.current !== next.runtimeId) return
+      const rect = container.current?.getBoundingClientRect()
+      const screen = term.element?.querySelector('.xterm-screen')?.getBoundingClientRect()
+      const buffer = term.buffer.active
+      diagnosticRecorder.current?.('heartbeat', undefined, 0, { reason: `resize-${stage}:${JSON.stringify({
+        requestedCols: next.cols, requestedRows: next.rows, cols: term.cols, rows: term.rows,
+        containerWidth: rect?.width, containerHeight: rect?.height, screenHeight: screen?.height,
+        viewportHeight: window.innerHeight, devicePixelRatio: window.devicePixelRatio,
+        viewportY: buffer.viewportY, baseY: buffer.baseY, cursorY: buffer.cursorY
+      })}` })
+    }
+    recordGeometry('requested')
+    void window.api.terminalRuntimes.resize(next.runtimeId, next.cols, next.rows).then(() => {
+      recordGeometry('settled')
+    }).catch((error) => {
       if (lastRuntimeSize.current === next) lastRuntimeSize.current = undefined
       // The rejection reason is the only signal that the backend refused the
       // resize; a poisoned runtime looks idle otherwise.
@@ -386,6 +403,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
       terminalSnapshots.delete(paneId)
     }
     term.open(container.current)
+    configureTerminalImages(term)
     fit.fit()
     mountedTerminalPanes.add(paneId)
     terminal.current = term
@@ -813,6 +831,22 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
         }
       })
     })
+    const fitReconciler = reconcileTerminalFit(term, fit, {
+      visible: () => !disposed && visibleRef.current && terminal.current === term && Boolean(container.current?.offsetParent),
+      screenFits: () => {
+        const box = container.current?.getBoundingClientRect()
+        const screen = term.element?.querySelector('.xterm-screen')?.getBoundingClientRect()
+        return Boolean(box && screen && screen.height > 0 && screen.width > 0
+          && screen.bottom <= box.bottom && screen.right <= box.right)
+      },
+      afterFit: () => {
+        resizeRuntimeIfVisible(term)
+        if (container.current) resyncRendererDefaultSpacing(term, container.current)
+      },
+      requestFrame: (callback) => requestAnimationFrame(callback),
+      cancelFrame: (frame) => cancelAnimationFrame(frame)
+    })
+    fitReconciler.check()
     const scroll = term.onScroll((position) => {
       const baseY = term.buffer.active.baseY
       userScrolled = position < baseY
@@ -861,7 +895,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
       term.element?.removeEventListener('wheel', recordWheel)
       term.element?.removeEventListener('paste', captureCodexMultilinePaste, true)
       cancelImeComposition()
-      stop(); observer.disconnect(); input.dispose(); resize.dispose(); scroll.dispose(); writer.dispose(); webglAddon.current?.dispose(); term.dispose()
+      stop(); observer.disconnect(); fitReconciler.dispose(); input.dispose(); resize.dispose(); scroll.dispose(); writer.dispose(); webglAddon.current?.dispose(); term.dispose()
       webglAddon.current = null; outputWriter.current = null; terminal.current = null; fitAddon.current = null
       // The recorder closes over this mount's refs; leaving it reachable after
       // dispose would let an outside effect report against a dead terminal.

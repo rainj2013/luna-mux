@@ -3,7 +3,7 @@ use std::{
     fs,
     io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, OnceLock, atomic::AtomicBool},
+    sync::{Arc, Mutex, OnceLock},
     time::UNIX_EPOCH,
 };
 
@@ -87,7 +87,7 @@ pub struct AppState {
     pub allowed_imports: Mutex<HashSet<PathBuf>>,
     pub pending_archive_imports: Mutex<HashMap<String, BookmarkArchive>>,
     pub pending_luna_remote_imports: Mutex<HashMap<String, LunaRemoteSnapshot>>,
-    pub exit_cleanup_started: AtomicBool,
+    pub exit_lifecycle: crate::exit_lifecycle::ExitLifecycle,
 }
 
 // Tauri synchronous commands run on the UI thread. Never wait for database I/O there.
@@ -1294,7 +1294,9 @@ pub async fn terminal_runtime_create(
                             &runtime.runtime_id,
                             &remote_endpoint,
                             &token,
-                            remote_mcp.as_ref().map(|(_, token, _, _)| *token),
+                            remote_mcp
+                                .as_ref()
+                                .map(|(endpoint, token, _, _)| (endpoint.as_str(), *token)),
                             remote_mcp
                                 .as_ref()
                                 .map(|(_, _, port, token)| (*port, token.as_str())),
@@ -1598,7 +1600,7 @@ async fn setup_remote_manual_agent_shims(
                 &runtime.runtime_id,
                 &remote_hook_endpoint,
                 hook_token,
-                mcp_token,
+                (&remote_mcp_endpoint, mcp_token),
                 Some((browser_port, &browser_token)),
             )
         })
@@ -2051,7 +2053,13 @@ mod managed_agent_launch_tests {
             &context,
             "/home/user/.luna-mux/runtime/agent.env",
             "/home/user/.luna-mux/runtime/runtime-1/bin",
-            &["codex".into(), "claude".into(), "grok".into()],
+            &[
+                "codex".into(),
+                "claude".into(),
+                "grok".into(),
+                "dsh-tui".into(),
+                "dst".into(),
+            ],
         );
         assert!(command.contains(". '/home/user/.luna-mux/runtime/agent.env'"));
         assert!(!command.contains("rm -f --"));
@@ -2070,6 +2078,11 @@ mod managed_agent_launch_tests {
             command
                 .contains("grok() { '/home/user/.luna-mux/runtime/runtime-1/bin/grok' \"$@\"; }")
         );
+        for name in ["dsh-tui", "dst"] {
+            assert!(command.contains(&format!(
+                "{name}() {{ '/home/user/.luna-mux/runtime/runtime-1/bin/{name}' \"$@\"; }}"
+            )));
+        }
         assert!(!command.contains("lmxbm_"));
         assert!(!command.contains("LUNA_MUX_HOOK_AUTHORIZATION="));
     }

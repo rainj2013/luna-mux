@@ -1,0 +1,10 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "resources": {
+      "binaries/conpty/conpty.dll": "conpty.dll",
+      "binaries/conpty/OpenConsole.exe": "OpenConsole.exe",
+      "windows/conpty-LICENSE.txt": "conpty-LICENSE.txt"
+    }
+  }
+}

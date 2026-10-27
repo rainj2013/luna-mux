@@ -23,6 +23,7 @@ mod desktop;
 mod doctor;
 mod dsh_tui_adapter;
 mod dsh_tui_status;
+mod exit_lifecycle;
 mod grok_build_adapter;
 mod legacy_agent_hook_cleanup;
 mod local_pty_backend;
@@ -30,6 +31,8 @@ mod local_pty_backend;
 mod local_pty_probe;
 mod luna_mcp;
 mod luna_mcp_proxy;
+#[cfg(target_os = "macos")]
+mod macos_window;
 mod models;
 mod product;
 mod runtime_env;
@@ -52,10 +55,7 @@ mod windows_app_icon;
 
 use std::{
     collections::HashSet,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -127,17 +127,20 @@ pub fn run() {
         .on_menu_event(|app, event| desktop::handle_menu(app, event.id().as_ref()))
         .on_window_event(|window, event| {
             #[cfg(target_os = "macos")]
-            if window.label() == "main" {
-                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                    api.prevent_close();
-                    let _ = window.hide();
-                }
-            }
+            macos_window::handle_event(window, event);
             #[cfg(not(target_os = "macos"))]
-            let _ = (window, event);
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event
+                && window.label() == "main"
+            {
+                // Keep the window alive until the user confirms quitting.
+                api.prevent_close();
+                request_exit(window.app_handle(), 0);
+            }
         });
     #[cfg(target_os = "macos")]
-    let builder = builder.menu(|app| desktop::menu(app, &models::NativeMenuLabels::default()));
+    let builder = builder
+        .manage(macos_window::MainWindowState::default())
+        .menu(|app| desktop::menu(app, &models::NativeMenuLabels::default()));
     builder
         .setup(|app| {
             let data_dir = app
@@ -173,6 +176,7 @@ pub fn run() {
                 .map_err(|error| error.to_string())?;
             #[cfg(target_os = "macos")]
             {
+                macos_window::install(&window)?;
                 let notification_window = WebviewWindowBuilder::new(
                     app,
                     "agent-notification",
@@ -434,7 +438,7 @@ pub fn run() {
                 allowed_imports: Mutex::new(HashSet::new()),
                 pending_archive_imports: Mutex::new(std::collections::HashMap::new()),
                 pending_luna_remote_imports: Mutex::new(std::collections::HashMap::new()),
-                exit_cleanup_started: AtomicBool::new(false),
+                exit_lifecycle: exit_lifecycle::ExitLifecycle::default(),
             });
             Ok(())
         })
@@ -611,55 +615,11 @@ pub fn run() {
         .run(|app, event| match event {
             RunEvent::ExitRequested { api, code, .. } => {
                 let state = app.state::<AppState>();
-                if state.exit_cleanup_started.load(Ordering::Acquire) {
+                if state.exit_lifecycle.can_exit() {
                     return;
                 }
                 api.prevent_exit();
-                let active_runtime_count = state
-                    .terminal_backend
-                    .list()
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter(|runtime| {
-                        matches!(
-                            runtime.status,
-                            TerminalRuntimeStatus::Starting
-                                | TerminalRuntimeStatus::Connecting
-                                | TerminalRuntimeStatus::Running
-                        )
-                    })
-                    .count()
-                    + state
-                        .browser_runtimes
-                        .list()
-                        .unwrap_or_default()
-                        .into_iter()
-                        .filter(|runtime| {
-                            matches!(
-                                runtime.status,
-                                browser_runtime::BrowserRuntimeStatus::Starting
-                                    | browser_runtime::BrowserRuntimeStatus::Running
-                            )
-                        })
-                        .count();
-                if active_runtime_count == 0 {
-                    begin_exit_cleanup(app, code.unwrap_or(0));
-                    return;
-                }
-                let language = state.db.get_setting("language", "zh-CN".to_string());
-                let (title, message, confirm, cancel) =
-                    exit_confirmation_copy(&language, active_runtime_count);
-                let handle = app.clone();
-                app.dialog()
-                    .message(message)
-                    .title(title)
-                    .kind(MessageDialogKind::Warning)
-                    .buttons(MessageDialogButtons::OkCancelCustom(confirm, cancel))
-                    .show(move |confirmed| {
-                        if confirmed {
-                            begin_exit_cleanup(&handle, code.unwrap_or(0));
-                        }
-                    });
+                request_exit(app, code.unwrap_or(0));
             }
             #[cfg(target_os = "macos")]
             RunEvent::Exit => {
@@ -669,6 +629,7 @@ pub fn run() {
             }
             #[cfg(target_os = "macos")]
             RunEvent::Reopen { .. } => {
+                macos_window::cancel_pending_close(app);
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
                     let _ = window.unminimize();
@@ -676,6 +637,59 @@ pub fn run() {
                 }
             }
             _ => {}
+        });
+}
+
+fn request_exit(app: &tauri::AppHandle, code: i32) {
+    let state = app.state::<AppState>();
+    if !state.exit_lifecycle.request() {
+        return;
+    }
+    let active_runtime_count = state
+        .terminal_backend
+        .list()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|runtime| {
+            matches!(
+                runtime.status,
+                TerminalRuntimeStatus::Starting
+                    | TerminalRuntimeStatus::Connecting
+                    | TerminalRuntimeStatus::Running
+            )
+        })
+        .count()
+        + state
+            .browser_runtimes
+            .list()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|runtime| {
+                matches!(
+                    runtime.status,
+                    browser_runtime::BrowserRuntimeStatus::Starting
+                        | browser_runtime::BrowserRuntimeStatus::Running
+                )
+            })
+            .count();
+    if active_runtime_count == 0 {
+        begin_exit_cleanup(app, code);
+        return;
+    }
+    let language = state.db.get_setting("language", "zh-CN".to_string());
+    let (title, message, confirm, cancel) = exit_confirmation_copy(&language, active_runtime_count);
+    let handle = app.clone();
+    app.dialog()
+        .message(message)
+        .title(title)
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(confirm, cancel))
+        .show(move |confirmed| {
+            if confirmed {
+                begin_exit_cleanup(&handle, code);
+            } else {
+                handle.state::<AppState>().exit_lifecycle.cancel();
+            }
         });
 }
 
@@ -870,6 +884,8 @@ fn activate_agent_notification(
     let main = app
         .get_webview_window("main")
         .ok_or_else(|| "找不到主窗口".to_string())?;
+    #[cfg(target_os = "macos")]
+    macos_window::cancel_pending_close(app);
     main.show().map_err(|error| error.to_string())?;
     main.unminimize().map_err(|error| error.to_string())?;
     main.set_focus().map_err(|error| error.to_string())?;
@@ -896,7 +912,7 @@ fn managed_agents_activate_notification(
 
 fn begin_exit_cleanup(app: &tauri::AppHandle, code: i32) {
     let state = app.state::<AppState>();
-    if state.exit_cleanup_started.swap(true, Ordering::AcqRel) {
+    if !state.exit_lifecycle.begin_cleanup() {
         return;
     }
     let sessions = state.sessions.clone();
@@ -926,6 +942,7 @@ fn begin_exit_cleanup(app: &tauri::AppHandle, code: i32) {
         };
         let _ = tokio::time::timeout(Duration::from_secs(5), cleanup).await;
         browser_runtimes.force_cleanup_managed_processes();
+        app.state::<AppState>().exit_lifecycle.complete_cleanup();
         app.exit(code);
     });
 }

@@ -318,7 +318,12 @@ unset LUNA_MUX_USER_ZDOTDIR\n",
     );
     let mut bootstrap = String::new();
     let mut posix_bootstrap = String::new();
-    for name in crate::agent_adapters::command_names() {
+    // fnm and other user startup hooks can prepend the real binaries to PATH.
+    // Protect DSH's short alias with the same function as its canonical command.
+    for name in crate::agent_adapters::command_names()
+        .into_iter()
+        .chain(std::iter::once("dst".to_string()))
+    {
         let shim = root.join(&name);
         if shim.is_file() {
             bootstrap.push_str(&format!(
@@ -1466,7 +1471,7 @@ mod macos_tests {
             "export LUNA_MUX_TEST_USER_ZSHRC=loaded\n",
         )
         .unwrap();
-        for name in ["codex", "claude"] {
+        for name in ["codex", "claude", "dsh-tui", "dst"] {
             let real = real_bin.join(name);
             fs::write(&real, format!("#!/bin/sh\necho real-{name}\n")).unwrap();
             fs::set_permissions(&real, fs::Permissions::from_mode(0o700)).unwrap();
@@ -1479,7 +1484,7 @@ mod macos_tests {
         let output = Command::new("/bin/zsh")
             .args([
                 "-lic",
-                "whence -w codex; codex marker; whence -w claude; claude marker; printf 'user-rc:%s\\n' \"$LUNA_MUX_TEST_USER_ZSHRC\"; printf 'zdotdir:%s\\n' \"$ZDOTDIR\"",
+                "whence -w codex; codex marker; whence -w claude; claude marker; whence -w dsh-tui; dsh-tui marker; whence -w dst; dst marker; printf 'user-rc:%s\\n' \"$LUNA_MUX_TEST_USER_ZSHRC\"; printf 'zdotdir:%s\\n' \"$ZDOTDIR\"",
             ])
             .env("HOME", &user_home)
             .env("ZDOTDIR", &startup_root)
@@ -1498,6 +1503,11 @@ mod macos_tests {
         assert!(stdout.contains("claude: function"), "{stdout}");
         assert!(stdout.contains("shim-claude:marker"), "{stdout}");
         assert!(!stdout.contains("real-claude"), "{stdout}");
+        for name in ["dsh-tui", "dst"] {
+            assert!(stdout.contains(&format!("{name}: function")), "{stdout}");
+            assert!(stdout.contains(&format!("shim-{name}:marker")), "{stdout}");
+            assert!(!stdout.contains(&format!("real-{name}")), "{stdout}");
+        }
         assert!(stdout.contains("user-rc:loaded"), "{stdout}");
         assert!(
             stdout.contains(&format!("zdotdir:{}", user_home.display())),
@@ -1510,7 +1520,7 @@ mod macos_tests {
                 "--norc",
                 "-c",
                 &format!(
-                    ". {}; type codex; codex marker; type claude; claude marker",
+                    ". {}; type codex; codex marker; type claude; claude marker; type dsh-tui; dsh-tui marker; type dst; dst marker",
                     shell_quote(&startup_root.join("bootstrap.sh").to_string_lossy())
                 ),
             ])
@@ -1530,6 +1540,20 @@ mod macos_tests {
         );
         assert!(bash_stdout.contains("shim-claude:marker"), "{bash_stdout}");
 
+        for name in ["dsh-tui", "dst"] {
+            assert!(
+                bash_stdout.contains(&format!("{name} is a function")),
+                "{bash_stdout}"
+            );
+            assert!(
+                bash_stdout.contains(&format!("shim-{name}:marker")),
+                "{bash_stdout}"
+            );
+            assert!(
+                !bash_stdout.contains(&format!("real-{name}")),
+                "{bash_stdout}"
+            );
+        }
         let _ = fs::remove_dir_all(root);
     }
 

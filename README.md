@@ -20,7 +20,7 @@
 
 <div align="center"><a href="README.en.md">English</a> · 简体中文</div>
 
-Luna Mux 是一个面向 Coding Agent 的终端工作台。它以项目目录为单位维护会话，一个会话里可以有多个终端窗格，每个窗格既可以是本地终端，也可以是 SSH 远程终端。在这些终端里启动 Codex、Claude Code 等 Agent 时，Luna Mux 会自动注入 Hook 和 MCP 来扩展 Agent 的能力：Hook 负责状态监控，Luna Mux MCP 让 Agent 控制 Luna Mux 自身的各个功能，agent-browser MCP 让 Agent 操作浏览器。此外还内置了移植自 Luna Remote 的完整 SSH 与 SFTP 能力。
+Luna Mux 是一个面向 Coding Agent 的终端工作台。它以项目目录为单位维护会话，一个会话里可以有多个终端窗格，每个窗格既可以是本地终端，也可以是 SSH 远程终端。在这些终端里启动 Codex、Claude Code 或 [DeepSeek Harness TUI（dst）](https://github.com/ccch1mneyyy/dsh-TUI) 时，Luna Mux 会自动注入 Hook 和 MCP 来扩展 Agent 的能力：Hook 负责状态监控，Luna Mux MCP 让 Agent 控制 Luna Mux 自身的各个功能，agent-browser MCP 让 Agent 操作浏览器。此外还内置了移植自 Luna Remote 的完整 SSH 与 SFTP 能力。
 
 ## 项目会话与终端窗格
 
@@ -42,7 +42,7 @@ Luna Mux 是一个面向 Coding Agent 的终端工作台。它以项目目录为
 
 ## 终端里的 Agent
 
-在任意终端窗格里启动受支持的 Agent（包括 Codex、Claude Code 和 DeepSeek Harness TUI），Luna Mux 会自动发现这个 Agent，并注入 Hook 和 MCP 来扩展它的能力。
+Luna Mux 支持 Codex、Claude Code 和 [DeepSeek Harness TUI（dst）](https://github.com/ccch1mneyyy/dsh-TUI)。在任意终端窗格里启动这些 Agent，Luna Mux 会自动发现并注入 Hook 和 MCP 来扩展它们的能力。
 
 DeepSeek Harness TUI 可在 Agent 菜单中选择，也可在新终端里运行 `dsh-tui` 或 `dst`。需先在目标环境安装 dsh 和 TUI。
 

@@ -5,6 +5,7 @@ app/native/target/
 app/native/target-*/
 /target/
 app/native/binaries/agent-browser-*
+app/native/binaries/conpty/
 contracts/rust-tests/target/
 tests/native-core/target/
 app/native/gen/schemas/
