@@ -555,7 +555,19 @@ impl ServerHandler for LunaMcpHandler {
             idempotency_key: input.idempotency_key,
             approval_id: input.approval_id,
         };
-        let result = match self.adapter.invoke(&token, control_request).await {
+        let outcome = if control_request.operation == "transfer.enqueue" {
+            tokio::select! {
+            biased;
+            _ = context.ct.cancelled() => Err(ControlError {
+                code: crate::control_contract::ControlErrorCode::ApprovalDenied,
+                message: "控制请求已取消".into(), retryable: false, details: None,
+            }),
+            result = self.adapter.invoke(&token, control_request) => result,
+            }
+        } else {
+            self.adapter.invoke(&token, control_request).await
+        };
+        let result = match outcome {
             Ok(response) => CallToolResult::structured(
                 serde_json::to_value(response)
                     .map_err(|error| McpError::internal_error(error.to_string(), None))?,
@@ -591,7 +603,9 @@ fn tool_for(descriptor: ControlOperationDescriptor) -> Tool {
         descriptor.name,
         descriptor.resource_kind,
         descriptor.access,
-        if approval {
+        if approval && descriptor.name == "transfer.enqueue" {
+            " This call waits for desktop approval and automatically resumes; no manual approvalId retry is needed."
+        } else if approval {
             " This operation requires approval in the trusted desktop UI; retry with the returned approvalId."
         } else {
             ""
@@ -710,7 +724,10 @@ fn operation_routing_guidance(operation: &str) -> &'static str {
         name if name.starts_with("terminal.runtime.") || name == "terminal.runtimes.list" => {
             " Operates on terminal Runtimes owned by Luna Mux Panes, including another Pane's bounded output/input, size, flow, interrupt, or close state. Use the normal shell tool instead when a command is merely part of the current coding task. This does not control a browser viewport or webpage console."
         }
-        "transfer.enqueue" | "transfers.list" | "transfer.cancel" => {
+        "transfer.enqueue" => {
+            " Enqueues SFTP uploads/downloads for a Luna Mux SSH terminal Runtime, not webpage uploads/downloads. Agent transfers wait for single-use approval in the desktop Agent overview by default; after approval this call automatically continues and returns queued tasks. Rejection, expiry (5 minutes), or request cancellation returns an error. Do not ask the user to retry or provide an approvalId manually. The Skip SFTP transfer approvals switch under Agent > Settings skips per-transfer approval for subsequent requests. Use a stable idempotencyKey when retrying the exact same transfer. sourcePaths for uploads must exist on the computer running Luna Mux; paths on an SSH/WSL Agent host are not automatically local paths. Save generated content locally first, then upload it. destinationDirectory is a directory; each file keeps its source basename. Use transfers.list to observe progress; existing-file conflicts use the transfer queue prompt."
+        }
+        "transfers.list" | "transfer.cancel" => {
             " Operates on Luna Mux's SFTP transfer queue attached to a terminal Runtime. Do not use for webpage uploads/downloads, HTTP requests, package downloads, or ordinary local file copies."
         }
         "tunnel.start" | "tunnels.list" | "tunnel.profiles.list" | "tunnel.stop" => {
@@ -1236,6 +1253,36 @@ mod tests {
     }
 
     #[test]
+    fn agent_sftp_tool_uses_desktop_opt_in_instead_of_approval_tickets() {
+        // The service catalog supplies None for Agent transfer.enqueue.
+        let tool = tool_for(ControlOperationDescriptor {
+            name: "transfer.enqueue".into(),
+            version: 1,
+            access: ControlAccess::Control,
+            resource_kind: ControlResourceKind::TerminalRuntime,
+            mutating: true,
+            supports_idempotency: true,
+            approval: ControlApprovalRequirement::None,
+        });
+        let description = tool.description.unwrap();
+        assert!(!description.contains("This operation requires approval in the trusted desktop UI"));
+        assert!(description.contains("Agent > Settings"));
+        assert!(description.contains("this call automatically continues"));
+        assert!(description.contains("single-use approval"));
+        assert!(description.contains("computer running Luna Mux"));
+        let schema = Value::Object((*tool.input_schema).clone());
+        assert_eq!(schema["required"], json!(["resourceId", "arguments"]));
+        let approval_tool = tool_for(ControlOperationDescriptor {
+            name: "transfer.enqueue".into(), version: 1, access: ControlAccess::Control,
+            resource_kind: ControlResourceKind::TerminalRuntime, mutating: true,
+            supports_idempotency: true, approval: ControlApprovalRequirement::User,
+        });
+        let description = approval_tool.description.unwrap();
+        assert!(description.contains("automatically resumes"));
+        assert!(!description.contains("retry with the returned approvalId"));
+    }
+
+    #[test]
     fn operation_descriptions_disambiguate_luna_mux_resource_domains() {
         let cases = [
             ("settings.theme.set", "webpage CSS/theme"),
@@ -1518,6 +1565,126 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(revoked.status(), http::StatusCode::UNAUTHORIZED);
+        mcp.shutdown();
+        drop(mcp);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[derive(Default)]
+    struct TransferConsentService {
+        policy: Arc<crate::control_approval::ControlApprovalPolicy>,
+        queued: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait]
+    impl LunaControlService for TransferConsentService {
+        fn catalog(&self, _: &ControlCaller) -> ControlCatalog {
+            ControlCatalog {
+                contract_version: CONTROL_CONTRACT_VERSION,
+                operations: vec![ControlOperationDescriptor {
+                    name: "transfer.enqueue".into(),
+                    version: 1,
+                    access: ControlAccess::Control,
+                    resource_kind: ControlResourceKind::TerminalRuntime,
+                    mutating: true,
+                    supports_idempotency: true,
+                    approval: ControlApprovalRequirement::User,
+                }],
+            }
+        }
+        async fn invoke(
+            &self,
+            caller: &ControlCaller,
+            request: ControlRequest,
+        ) -> ControlResult<ControlResponse> {
+            if let Some(id) = request.approval_id.as_deref() {
+                self.policy.consume(caller, &request, id)?;
+                self.queued
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(ControlResponse {
+                    request_id: request.request_id,
+                    result: json!([{ "id": "queued-task" }]),
+                })
+            } else {
+                let approval = self.policy.request(caller, &request)?;
+                Err(ControlError {
+                    code: crate::control_contract::ControlErrorCode::ApprovalRequired,
+                    message: "approval required".into(),
+                    retryable: true,
+                    details: Some(json!({ "approval": approval })),
+                })
+            }
+        }
+        async fn wait_for_transfer_approval(
+            &self,
+            caller: &ControlCaller,
+            request: &ControlRequest,
+            id: &str,
+        ) -> ControlResult<()> {
+            self.policy.wait_for_transfer(caller, request, id).await
+        }
+        fn read_events(
+            &self,
+            _: &ControlCaller,
+            _: u64,
+            _: usize,
+        ) -> ControlResult<crate::control_contract::ControlEventReadResult> {
+            unreachable!()
+        }
+    }
+
+    #[tokio::test]
+    async fn mcp_sftp_call_resumes_after_desktop_consent_and_cancellation_withdraws_it() {
+        use rmcp::{
+            model::{ClientConfig, ClientRequest, Request},
+            service::{ClientServiceExt, PeerRequestOptions},
+            transport::{
+                StreamableHttpClientTransport,
+                streamable_http_client::StreamableHttpClientTransportConfig,
+            },
+        };
+        let service = Arc::new(TransferConsentService::default());
+        let adapter = AuthenticatedControlAdapter::new(service.clone());
+        let (mcp, path) = test_mcp(adapter);
+        mcp.start().unwrap();
+        let token = mcp.issue_runtime_token(&context("runtime-1")).unwrap();
+        let transport = StreamableHttpClientTransport::from_config(
+            StreamableHttpClientTransportConfig::with_uri(mcp.endpoint().unwrap())
+                .auth_header(token),
+        );
+        let client = ClientConfig::default()
+            .serve_with_lifecycle(transport, rmcp::service::ClientLifecycleMode::Initialize)
+            .await
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        for action in ["approve", "deny", "cancel"] {
+            let params = CallToolRequestParams::new("transfer.enqueue").with_arguments(json!({
+                "resourceId": "runtime-1", "idempotencyKey": action,
+                "arguments": { "direction": "upload", "sourcePaths": ["file.txt"], "destinationDirectory": "/tmp" }
+            }).as_object().unwrap().clone());
+            let handle = client.peer().send_cancellable_request(ClientRequest::CallToolRequest(Request::new(params)), PeerRequestOptions::with_timeout(std::time::Duration::from_secs(5))).await.unwrap();
+            let approval = loop {
+                if let Some((approval, _)) = service.policy.pending_transfers().unwrap().into_iter().next() { break approval; }
+                tokio::task::yield_now().await;
+            };
+            if action == "cancel" {
+                handle.cancel(Some("user cancelled".into())).await.unwrap();
+                loop {
+                    if service.policy.pending_transfers().unwrap().is_empty() { break; }
+                    tokio::task::yield_now().await;
+                }
+                assert!(service.policy.resolve(&approval.approval_id, true).is_err());
+            } else {
+                service.policy.resolve(&approval.approval_id, action == "approve").unwrap();
+                let response = handle.await_response().await.unwrap();
+                let value = serde_json::to_value(response).unwrap();
+                if action == "approve" { assert_eq!(value["structuredContent"]["result"][0]["id"], "queued-task"); }
+                else { assert_eq!(value["isError"], true); }
+            }
+        }
+    }).await.expect("MCP consent/cancellation should complete promptly");
+        assert_eq!(service.queued.load(std::sync::atomic::Ordering::SeqCst), 1);
+        client.cancel().await.unwrap();
         mcp.shutdown();
         drop(mcp);
         let _ = std::fs::remove_file(path);

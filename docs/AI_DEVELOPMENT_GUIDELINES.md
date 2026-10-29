@@ -81,6 +81,8 @@ L2/L3 按以下顺序工作：
 
 Agent 权限状态回归须使用客户端实际发送的 Hook 字段和值，而不只使用配置值；例如 Codex 的 `permission_mode: "bypassPermissions"` 应保持 Working 且不发送权限通知，`default` 的 PermissionRequest 应保留等待权限提示，Hook 响应不得替客户端授予权限。
 
+Agent SFTP 审批回归须覆盖请求创建后、等待器注册前撤销身份，以及待审批期间切换免审批开关；同一调用方与幂等键不得换文件或目标路径，最后一个调用取消后不得留下可批准的悬空请求。需通过真实 MCP 取消通知验证撤回，而不只在策略单元测试中中止任务。
+
 终端颜色回归须模拟父进程的 `NO_COLOR=1` 和 `FORCE_COLOR=0`，验证新 Runtime 清除禁色设置、声明颜色能力并保留 ANSI 输出；WSL 桥接不得重新引入禁色变量，SSH 须保留远端 shell 兼容性，不注入假定 shell 语法的颜色命令。
 
 提交前按变更级别执行：

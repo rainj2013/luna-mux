@@ -9,9 +9,21 @@ import '../app/frontend/src/styles.css'
 // A component fixture: the production card uses a mock of the persisted API.
 // Exercise toggles, reload, delayed saves, save/load errors and both themes.
 let stored: AgentLaunchSettings = { codexYolo: false, claudeCodeYolo: false }
+let sftpEnabled = false
+let failSftpLoad = false
 let failSave = false
 let failLoad = false
 window.api = { settings: {
+  async getAgentSftpEnabled() {
+    if (failSftpLoad) { failSftpLoad = false; throw new Error('SFTP load fixture failure') }
+    return sftpEnabled
+  },
+  async saveAgentSftpEnabled(value: boolean) {
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    if (failSave) { failSave = false; throw new Error('save fixture failure') }
+    sftpEnabled = value
+    return sftpEnabled
+  },
   async getAgentLaunch() {
     if (failLoad) { failLoad = false; throw new Error('load fixture failure') }
     return { ...stored }
@@ -34,6 +46,7 @@ function Fixture(): React.JSX.Element {
         <button onClick={() => setRevision((value) => value + 1)}>重新加载设置</button>
         <button onClick={() => { failSave = true }}>下次保存失败</button>
         <button onClick={() => { failLoad = true; setRevision((value) => value + 1) }}>下次加载失败</button>
+        <button onClick={() => { failSftpLoad = true; setRevision((value) => value + 1) }}>下次 SFTP 加载失败</button>
         <button onClick={() => setDark((value) => !value)}>切换主题</button>
       </div>
       <div className="session-toolbar">

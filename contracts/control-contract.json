@@ -537,7 +537,19 @@
       "resource",
       "arguments"
     ],
-    "expiresAfterSeconds": 300
+    "expiresAfterSeconds": 300,
+    "agentTransferEnqueue": {
+      "desktopSetting": "agentSftpEnabled",
+      "default": false,
+      "disabledApproval": "singleUse",
+      "enabledApproval": "none",
+      "transport": "Authenticated Agent calls wait up to 300 seconds for desktop approval, then automatically reauthenticate and retry the identical request with its bound ticket",
+      "cancellation": "Cancelling the last waiting call withdraws the pending request; revoked identity or grants prevent enqueue",
+      "deduplication": "Pending requests with the same caller and nonempty idempotencyKey share one approval; different paths conflict",
+      "scope": "Agent callers only; existing Runtime authorization and remoteFiles capability still apply",
+      "settingChanges": "Apply to subsequent new transfers; queued tasks and completed idempotent results are retained",
+      "desktopPendingList": "Trusted IPC returns approval, TransferRequest, calculated destinationPaths, callerName, targetName and muxSessionId; file paths are never added to the public approval event"
+    }
   },
   "eventStream": {
     "bounded": true,

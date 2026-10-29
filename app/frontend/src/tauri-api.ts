@@ -8,7 +8,7 @@ import type { TerminalRuntimeEvent } from './terminal-runtime-contract'
 import { createTerminalRuntimeResizer } from './terminal-runtime-resize'
 
 const call = <T>(command: string, args?: Record<string, unknown>): Promise<T> => invoke<T>(command, args).catch((error) => {
-  throw new Error(typeof error === 'string' ? error : String(error))
+  throw new Error(typeof error === 'string' ? error : typeof error === 'object' && error && 'message' in error ? String(error.message) : String(error))
 })
 
 const send = (command: string, args?: Record<string, unknown>): void => {
@@ -79,6 +79,10 @@ export async function createTauriApi(): Promise<AppApi> {
   })
   return {
     platform,
+    transferApprovals: {
+      list: () => call('control_transfer_approvals_list'),
+      resolve: async (approvalId, approved) => { await call('control_approval_resolve', { approvalId, approved }) },
+    },
     system: {
       openExternal: (url) => call('system_open_external', { value: url }),
       checkForUpdates: () => call('system_check_for_updates'),
@@ -289,6 +293,8 @@ export async function createTauriApi(): Promise<AppApi> {
       getUiTheme: () => call('settings_get_ui_theme'),
       saveUiTheme: (theme: UiTheme) => call('settings_save_ui_theme', { theme }),
       getRemoteAgentIntegrationEnabled: () => call('settings_get_remote_agent_integration_enabled'),
+      getAgentSftpEnabled: () => call('settings_get_agent_sftp_enabled'),
+      saveAgentSftpEnabled: (enabled) => call('settings_save_agent_sftp_enabled', { enabled }),
       getAgentLaunch: () => call('settings_get_agent_launch'),
       saveAgentLaunch: (settings) => call('settings_save_agent_launch', { settings }),
       saveRemoteAgentIntegrationEnabled: (enabled: boolean) => call('settings_save_remote_agent_integration_enabled', { enabled }),
