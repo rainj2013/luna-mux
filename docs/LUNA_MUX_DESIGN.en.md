@@ -8,6 +8,17 @@ The desktop supports Windows and macOS, with local shells, WSL, and SSH as termi
 
 ## 2. Core Model
 
+```text
+Application
+└── Mux Session
+    ├── Pane
+    │   ├── Terminal Runtime
+    │   │   └── Agent process (optional)
+    │   └── Database Runtime
+    └── Browser Resource
+        └── Browser Runtime (started on demand)
+```
+
 | Object | Responsibility |
 | --- | --- |
 | Session | Project container organizing Panes and browser resources; also the collaboration and authorization boundary |
@@ -19,6 +30,20 @@ The desktop supports Windows and macOS, with local shells, WSL, and SSH as termi
 Resource configuration is separate from running instances. Restoring a workspace preserves the user's arrangement; starting or restarting creates a new Runtime identity. Persisted configuration does not implicitly restore processes or execute commands.
 
 ## 3. Architecture
+
+Functional modules:
+
+```text
+Luna Mux
+├── Workspace: Sessions / Panes / layouts
+├── Terminals: local shells / WSL / SSH
+├── Agent integration: launch / Hook / MCP / status and collaboration
+├── Remote work: connections / SFTP / transfers and deployment / tunnels
+├── Browsers: resource management / page automation
+├── Databases: connections / queries / data operations
+├── AI command assistant
+└── Shared services: approvals / auditing / credentials / settings / diagnostics
+```
 
 | Layer | Responsibility |
 | --- | --- |

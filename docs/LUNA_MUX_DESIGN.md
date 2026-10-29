@@ -8,6 +8,17 @@ Luna Mux 是面向 Coding Agent 的本地与远程终端工作台，以项目级
 
 ## 2. 核心模型
 
+```text
+Application
+└── Mux Session
+    ├── Pane
+    │   ├── Terminal Runtime
+    │   │   └── Agent 进程（可选）
+    │   └── Database Runtime
+    └── Browser Resource
+        └── Browser Runtime（按需启动）
+```
+
 | 对象 | 职责 |
 | --- | --- |
 | Session | 项目容器，组织窗格与浏览器资源，也是协作和授权边界 |
@@ -19,6 +30,20 @@ Luna Mux 是面向 Coding Agent 的本地与远程终端工作台，以项目级
 资源配置与运行实例分离：恢复工作区保留用户安排，启动和重启则创建新的 Runtime 身份。持久化配置不隐含恢复进程或执行命令。
 
 ## 3. 架构分工
+
+功能模块概览：
+
+```text
+Luna Mux
+├── 工作区：Session / Pane / 布局
+├── 终端：本地 Shell / WSL / SSH
+├── Agent 集成：启动 / Hook / MCP / 状态与协作
+├── 远程工作：连接管理 / SFTP / 传输与部署 / 隧道
+├── 浏览器：资源管理 / 页面自动化
+├── 数据库：连接 / 查询 / 数据操作
+├── AI 命令助手
+└── 公共服务：授权审批 / 审计 / 凭据 / 设置 / 诊断
+```
 
 | 层次 | 职责 |
 | --- | --- |
