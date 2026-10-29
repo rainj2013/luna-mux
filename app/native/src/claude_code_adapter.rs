@@ -94,7 +94,8 @@ $env:LUNA_MUX_AGENT_ADAPTER = 'claude-code'\r\n\
 try {{\r\n\
   '{{\"hook_event_name\":\"AgentProcessStart\",\"agent_adapter\":\"claude-code\"}}' | & '{forwarder}' hook | Out-Null\r\n\
   $lunaMuxClaudeArguments = @('--settings', $settings, '--mcp-config', $mcpConfig, '--append-system-prompt', $lunaMuxBrowserInstructions, '--no-chrome')\r\n\
-  foreach ($value in $args) {{\r\n\
+  {launch_defaults}\
+  foreach ($value in (@($lunaMuxDefaultArguments) + @($args))) {{\r\n\
     $lunaMuxClaudeArguments += $value\r\n\
   }}\r\n\
 {process_invocation}\
@@ -108,6 +109,7 @@ $global:LASTEXITCODE = $lunaMuxClaudeExitCode\r\n",
             powershell_literal(&mcp_without_browser),
             powershell_literal(&mcp_with_browser),
             powershell_literal(LUNA_MUX_BROWSER_INSTRUCTIONS),
+            launch_defaults = crate::agent_profiles::powershell_launch_defaults("claude-code"),
         );
         fs::write(root.join("claude.ps1"), ps).map_err(|error| error.to_string())?;
         let shim = root.join("claude.ps1");
@@ -127,6 +129,7 @@ $global:LASTEXITCODE = $lunaMuxClaudeExitCode\r\n",
         let forwarder = shell_quote(&executable.to_string_lossy());
         let script = format!(
             "#!/bin/sh\n\
+{launch_defaults}\
 LUNA_MUX_AGENT_PROCESS_ID=\"$$-$(date +%s)\"\n\
 LUNA_MUX_AGENT_ADAPTER=\"claude-code\"\n\
 export LUNA_MUX_AGENT_PROCESS_ID LUNA_MUX_AGENT_ADAPTER\n\
@@ -142,6 +145,10 @@ exit \"$luna_mux_claude_exit_code\"\n",
             shell_quote(&real.to_string_lossy()),
             shell_quote(&settings),
             shell_quote(LUNA_MUX_BROWSER_INSTRUCTIONS),
+            launch_defaults = crate::agent_profiles::local_posix_launch_defaults(
+                "claude-code",
+                "local:macos-shell"
+            )?,
         );
         let path = root.join("claude");
         fs::write(&path, script).map_err(|error| error.to_string())?;
@@ -255,7 +262,7 @@ pub fn install_wsl_manual_bootstrap(
     let forwarder = shell_quote(&browser_command);
     let script = format!(
         r#"claude() (
-{env_source}LUNA_MUX_AGENT_PROCESS_ID="$$-$(date +%s)"
+{env_source}{launch_defaults}LUNA_MUX_AGENT_PROCESS_ID="$$-$(date +%s)"
 LUNA_MUX_AGENT_ADAPTER="claude-code"
 export LUNA_MUX_AGENT_PROCESS_ID LUNA_MUX_AGENT_ADAPTER
 export WSLENV="LUNA_MUX_AGENT_ADAPTER/w:LUNA_MUX_AGENT_PROCESS_ID/w${{WSLENV:+:$WSLENV}}"
@@ -268,6 +275,8 @@ exit "$luna_mux_claude_exit_code"
         settings = shell_quote(&settings),
         mcp_config = shell_quote(&mcp_config),
         instructions = shell_quote(LUNA_MUX_BROWSER_INSTRUCTIONS),
+        launch_defaults =
+            crate::agent_profiles::local_posix_launch_defaults("claude-code", target_id)?,
     );
     let path = root.join("claude-wsl-bootstrap.sh");
     fs::write(&path, script).map_err(|error| error.to_string())?;

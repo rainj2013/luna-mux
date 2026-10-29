@@ -217,7 +217,8 @@ try {{\r\n\
   foreach ($value in $overrides) {{\r\n\
     $lunaMuxCodexArguments += @('--config', $value)\r\n\
   }}\r\n\
-  foreach ($value in $args) {{\r\n\
+  {launch_defaults}\
+  foreach ($value in (@($lunaMuxDefaultArguments) + @($args))) {{\r\n\
     $lunaMuxCodexArguments += $value\r\n\
   }}\r\n\
 {process_invocation}\
@@ -227,6 +228,7 @@ try {{\r\n\
   if ($null -eq $lunaMuxPreviousAdapter) {{ Remove-Item Env:LUNA_MUX_AGENT_ADAPTER -ErrorAction SilentlyContinue }} else {{ $env:LUNA_MUX_AGENT_ADAPTER = $lunaMuxPreviousAdapter }}\r\n\
 }}\r\n\
 $global:LASTEXITCODE = $lunaMuxCodexExitCode\r\n",
+            launch_defaults = crate::agent_profiles::powershell_launch_defaults("codex"),
         );
         fs::write(root.join("codex.ps1"), ps).map_err(|error| error.to_string())?;
         // PowerShell profiles (notably fnm) may rewrite PATH after the shell starts.
@@ -254,6 +256,7 @@ $global:LASTEXITCODE = $lunaMuxCodexExitCode\r\n",
         );
         let script = format!(
             "#!/bin/sh\n\
+{launch_defaults}\
 LUNA_MUX_AGENT_PROCESS_ID=\"$$-$(date +%s)\"\n\
 LUNA_MUX_AGENT_ADAPTER=\"codex\"\n\
 export LUNA_MUX_AGENT_PROCESS_ID LUNA_MUX_AGENT_ADAPTER\n\
@@ -274,7 +277,9 @@ luna_mux_codex_exit_code=$?\n\
 printf '%s' '{{\"hook_event_name\":\"AgentProcessExit\"}}' | {forwarder} hook >/dev/null 2>&1 || true\n\
 exit \"$luna_mux_codex_exit_code\"\n",
             shell_quote(&real.executable.to_string_lossy()),
-            shell_quote(&real.executable.to_string_lossy())
+            shell_quote(&real.executable.to_string_lossy()),
+            launch_defaults =
+                crate::agent_profiles::local_posix_launch_defaults("codex", "local:macos-shell")?,
         );
         let path = root.join("codex");
         fs::write(&path, script).map_err(|error| error.to_string())?;
@@ -513,6 +518,7 @@ pub fn install_wsl_manual_bootstrap(
     let script = format!(
         "codex() (\n\
 {env_source}\
+{launch_defaults}\
 LUNA_MUX_AGENT_PROCESS_ID=\"$$-$(date +%s)\"\n\
 LUNA_MUX_AGENT_ADAPTER=\"codex\"\n\
 export LUNA_MUX_AGENT_PROCESS_ID LUNA_MUX_AGENT_ADAPTER\n\
@@ -522,7 +528,8 @@ printf '%s' '{{\"hook_event_name\":\"AgentProcessStart\"}}' | {forwarder} hook >
 luna_mux_codex_exit_code=$?\n\
 printf '%s' '{{\"hook_event_name\":\"AgentProcessExit\"}}' | {forwarder} hook >/dev/null 2>&1 || true\n\
 exit \"$luna_mux_codex_exit_code\"\n\
-)\n"
+)\n",
+        launch_defaults = crate::agent_profiles::local_posix_launch_defaults("codex", target_id)?
     );
     let path = root.join("wsl-bootstrap.sh");
     fs::write(&path, script).map_err(|error| error.to_string())?;
