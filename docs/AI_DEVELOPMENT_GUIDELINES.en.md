@@ -14,14 +14,14 @@ Classify the change first. L0/L1 use the fast path; L2/L3 follow the remaining s
 | --- | --- | --- |
 | L0 Documentation/style | docs, copy, pure CSS, no behavior change | Inspect diff; run `npm run web:build` when relevant |
 | L1 Local behavior | one component, pure function, non-shared UI state | Narrowest relevant check or test, usually `npm run typecheck` |
-| L2 Shared contract | Tauri command, Rust module, Runtime/Control contract, database model, MCP/Hook | `npm run check`, `npm test`, and relevant contract/native-core tests |
-| L3 Runtime/platform | PTY, SSH/SFTP, Agent injection, browser, lifecycle, permissions, installers | All L2 checks + end-to-end scenario + affected native platform |
+| L2 Shared contract | Native command interfaces, shared services/state, Runtime/Control contracts, persistence formats, MCP/Hook contracts | `npm run check`, `npm test`, and relevant contract/native-core tests |
+| L3 Runtime/platform | Changes to process lifecycle, authorization boundaries, platform integration, or PTY/SSH/SFTP/browser backend behavior | All L2 checks + end-to-end scenario + affected native platform |
 
-When uncertain, use the higher level. Cross-module calls, persistence formats, public JSON, process lifecycles, and security boundaries are at least L2.
+Classify by behavior and impact, not merely by whether a Rust file or browser component changes. Shared calls, persistence formats, public JSON, process lifecycles, and security boundaries are at least L2. Inspect the relevant call chain when the impact is unclear.
 
 ## 2. L2/L3 Before Coding: Define Architecture Acceptance
 
-Do not ask AI to simply “implement the issue”. Write a short plan answering the items relevant to the change; write “none” for the rest:
+Write a short plan covering the relevant items; do not fill out unrelated items:
 
 1. **Boundary:** Which layer owns the change and which modules may be modified?
 2. **Data ownership:** Which manager/database/contract owns session, pane, Runtime, connection, Agent, transfer, or tunnel state? What is the single source of truth?
@@ -37,7 +37,7 @@ Acceptance criteria must be verifiable, such as “closing a Runtime requires de
 For L2/L3 changes:
 
 1. Read `AGENTS.md`, relevant design sections, and relevant code. Do not read every document by default. First report a short impact, ownership, call-chain, and test plan.
-2. Modify code only after the plan is clear. Reuse existing managers, backends, contracts, i18n, and platform helpers; do not create parallel state or implementations.
+2. Proceed when the user has authorized the work and the objective and plan are clear. Ask only when key information or authorization is missing, or the scope needs to expand. Reuse existing managers, backends, contracts, i18n, and platform helpers; do not create parallel state or implementations.
 3. Run the smallest relevant test after each logical block.
 4. Do not treat compilation as completion. Prove behavior, boundaries, failures, compatibility, and side effects against the acceptance criteria.
 5. AI must not expand scope, delete existing tests, bypass confirmation, expose credentials, or change test expectations merely to make tests pass.
@@ -54,7 +54,6 @@ For L2/L3 changes:
 ### Cross-Platform Runtime
 
 - Terminal, PTY, Agent, Hook, MCP, browser, WSL, and SSH changes must follow the cross-platform requirements in `AGENTS.md` and reuse target-specific helpers.
-- Do not assume stdin closes, pipes reach EOF when a child exits, or signals and paths behave identically. Use bounded reads, files, or complete JSON/line parsing.
 - Lifecycle changes must describe startup, shutdown, crashes, app exit, and idempotency. Keep user confirmation for important side effects.
 - Credentials, private keys, API keys, and raw CDP ports must not enter logs, MCP responses, event payloads, or test fixtures.
 
@@ -62,6 +61,9 @@ For L2/L3 changes:
 
 - Use stable i18n keys instead of inline copy; update every locale and run `npm run i18n:check`.
 - Keep one source for shared UI state. Clean up event subscriptions on unmount and handle stale async results and errors.
+- Follow the desktop design language in `AGENTS.md` and reuse existing styles and components.
+- Show controls appropriate to the current state; do not expose connected-only work views before connection. Check keyboard focus, disabled states, light/dark themes, and narrow pane layouts for new views.
+- Type checking alone does not validate UI changes. Exercise the actual component flow and inspect screenshots when tools are available. Record when visual inspection is unavailable; DOM or type checks are not visual verification.
 
 ## 5. Tests and Evidence
 
@@ -76,25 +78,20 @@ Choose applicable scenarios based on risk; do not mechanically cover unrelated c
 | Architecture | Dependency direction, single ownership, contract fields, and schema checks |
 | Platform | Affected macOS, Windows, PowerShell, WSL, or SSH target, or a recorded coverage risk |
 
-```text
-L0: npm run web:build when relevant
-L1: npm run typecheck + relevant tests
-L2: npm run check + npm test + relevant runtime/native-core tests
-L3: L2 + end-to-end flow + affected native platform verification
-```
+Use the verification scope in the Section 1 classification table. Permission, protocol, and platform tests should use actual client inputs and inherited target-environment conditions. Keep specific fields, environment variables, and reproduction steps in the corresponding regression tests.
 
 ## 6. Risk-Based Independent Review
 
-L3 requires a fresh AI context or human reviewer. L2 requires one only when it changes more than three modules, a public contract/migration, a security boundary, or concurrency behavior. Other L2 changes need a focused diff review by the implementer. L0/L1 do not require independent review.
+L3 requires a fresh AI context or human reviewer. L2 requires independent review for public contracts, migrations, security boundaries, or concurrency behavior. Other L2 changes need a focused diff review by the implementer. L0/L1 do not require independent review.
 
 The independent reviewer receives only the requirement, acceptance criteria, diff, and test results, and checks the applicable dimensions:
 
-- Module boundaries and dependency direction (25%)
-- Data ownership, cohesion, and coupling (20%)
-- Compatibility of old APIs/JSON/configuration/extensions (15%)
-- Locality and maintainability of the change (15%)
-- Failure, concurrency, remote/cluster behavior, and operability (15%)
-- Coverage of happy path, boundaries, failures, and compatibility (10%)
+- Module boundaries and dependency direction
+- Data ownership, cohesion, and coupling
+- Compatibility of old APIs/JSON/configuration/extensions
+- Locality and maintainability of the change
+- Failure, concurrency, remote behavior, and operability
+- Coverage of happy path, boundaries, failures, and compatibility
 
 Turn every “possible issue” into a reproduction step, code location, or missing test. Do not mark it passed without evidence. After fixing findings, recheck the diff scope.
 
@@ -104,4 +101,6 @@ L2/L3 PRs must state the change boundary, data ownership/call chain, compatibili
 
 ## 8. Maintain the Guidelines
 
-When a regression or review finds a recurring pattern, add an acceptance criterion, test template, or rule while fixing the code. Keep the guidelines aligned with the architecture; when documentation conflicts with executable contracts or tests, fix the documentation in the same change.
+Address specific defects and review findings with regression tests; they do not require a new guideline each time. Update these guidelines only when long-term collaboration principles or quality gates change. Update the design document only when product scope, architecture, responsibilities, or key tradeoffs change.
+
+Keep implementation details, test parameters, and repair history in code, tests, and commit descriptions. When documentation conflicts with code, check requirements, contracts, and tests before deciding which is outdated. Do not assume the current implementation defines the intended design.

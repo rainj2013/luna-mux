@@ -1,7 +1,5 @@
 # Luna Mux Design
 
-Last updated: 2026-09-11
-
 ## 1. Product Scope
 
 Luna Mux is a local and remote terminal workspace for coding agents. Project-level Sessions organize terminal Panes, Agents, and browser resources, providing unified terminal operation and controlled collaboration.
@@ -24,7 +22,7 @@ Application
 | Object | Responsibility and ownership |
 | --- | --- |
 | Mux Session | Project container owning the root directory, terminal layout, and browser resources; also the collaboration and authorization boundary |
-| Pane | Stable layout leaf storing the terminal target, working directory, and title |
+| Pane | Stable layout leaf storing its type, associated configuration, and title |
 | Terminal Runtime | One running instance of a Pane, owning its terminal connection, I/O, and process lifecycle |
 | Database Runtime | One running instance of a database Pane, owning its database connection and query state |
 | Agent | A detected coding agent process within a Runtime, integrated through an adapter |
@@ -108,31 +106,17 @@ Output, parsing, and waits have resource limits. Interaction records do not copy
 
 ### 3.5 Browser Resources
 
-Browsers are shared at Session scope so users and Agents working on one project use the same page context. The tradeoff is shared browser state without isolated page permissions between participants. Each Session shares one active Browser Runtime, which can start on the first automation call.
+Browsers are shared at Session scope so users and Agents working on one project use the same page context. The tradeoff is shared browser state without isolated page permissions between participants. A Browser Resource stores configuration; each Session owns at most one active Browser Runtime, which can start on the first automation call.
 
-Browsers run in independent desktop Chrome windows outside the terminal layout, keeping web tabs separate from terminal Pane layout, dimensions, and lifecycle.
+The app owns browser processes and lifecycle; `agent_browser` owns page automation. Chrome runs in an independent desktop window outside the terminal layout. Automation binds to the Session's existing page and reuses it for ordinary navigation; it cannot independently launch or replace the browser process.
 
-Each Browser Resource owns a Keep browser data setting, off by default. When off, every Runtime uses a separate disposable profile that is deleted after Chrome closes. When on, that Browser Resource reuses one stable profile across Runtime starts in the same Session, retaining cookies, sign-in state, and site storage. The setting can change only while Chrome is stopped; turning it off immediately deletes the retained profile. Neither mode copies cookies from the user's local Chrome. Startup sweeps only disposable profiles left after a crash. Deleting a Browser Resource or Session removes its retained profile and Session downloads. Deletion must remain within the product data directory.
+Each resource owns its browser data: disposable profiles are cleaned up with the Runtime, while retained profiles are reused across starts of that resource. Neither mode copies cookies from the user's local Chrome. Retention changes require the browser to be stopped. Removing a resource or disabling retention deletes its corresponding data, with cleanup restricted to the product data directory. Startup checks whether another browser occupies a retained profile without adopting or closing unassociated processes.
 
-BrowserRuntimeManager uses CDP to make the bound page follow the application theme. With the system theme selected, Chrome follows the OS. Screenshots enable element annotations by default.
+Proxy and Agent tool-group settings belong to the Browser Resource and are shared by local and remote Agents. Launch settings apply on the next browser start. Tool selection updates registration; existing clients need to rediscover tools. Configuration models and integration code define specific tools, defaults, and parameters.
 
-Before reusing a retained profile, BrowserRuntimeManager reads native process metadata to check for an unassociated Chrome main process using that exact directory. Matching excludes other resources and Chrome child processes. An occupied profile produces a request to close the old window before preferences are changed or a process is launched, preserving browser data. Cleaning up an exited Runtime only removes disposable directories and does not write retained Preferences first. The probe only reads metadata; it does not adopt or close unassociated windows. Chrome exiting before CDP becomes ready returns an exit error immediately. Readiness probes, target discovery, and bootstrap-tab cleanup share a loopback client with proxies and redirects disabled and a request timeout. HTTP and WebSocket initialization errors do not expose raw endpoints or response contents; WebSocket connections also have a timeout.
+CDP binds only to local loopback, with ports and connection details kept as temporary runtime state. Remote Agents access the Session browser through authenticated Runtime communication bridges; raw CDP is not forwarded remotely. Connections and initialization use time-bounded loopback communication without system proxies, and errors do not expose connection credentials or raw endpoints. When automation cannot determine whether an operation completed, observe current state before deciding whether to retry.
 
-The Browser tab uses a sidebar with Overview, Browser settings and Agent tools. Overview shows runtime status, addresses and configuration summaries with shortcuts to their settings. Settings use consistent switches and compact rows; tool descriptions stay brief. Page changes keep the proxy editor mounted and save on blur. Navigation supports arrow keys, Home/End and visible focus. Proxy and profile cards keep equal widths and stack in narrow workspaces.
-
-Browser proxy and profile cards use equal-width grid columns and share the same row height. Browser Resources persist the proxy address and a separate enabled switch. Turning the switch off retains the address and uses system proxy defaults at launch. Switch changes save immediately; addresses save on blur or Enter without a save button. Failed saves show an error and restore the actual switch state. Changes apply on the next browser launch. Existing databases and resource JSON without the enabled field retain their previous configured-proxy behavior.
-
-The app owns browser lifecycle; `agent_browser` owns page automation. Automation binds to the Session's existing page and reuses it for ordinary navigation. Page operations cannot independently launch or replace the browser process.
-
-Each Browser Resource persists an Agent tool-group selection using upstream profiles. Core is always enabled; Network, Debug, Tabs, State/Auth Vault, React, Mobile, and WebMCP are off by default and can be selected by category on the Browser page. Local and remote Agents share the same selection. Saving updates the current Runtime registry, so new MCP connections use it immediately; an already-running Agent must restart to rediscover tools because current clients do not respond to live tool-list changes. Browser Runtime always enables Chrome WebMCP interfaces, but an Agent can discover page-registered tools only when the WebMCP group is enabled. React inspection requires enabling `react-devtools` when opening the page. Luna Mux does not bundle upstream skills because their CLI and named-session guidance conflicts with the managed browser contract.
-
-Injected Agent instructions describe the optional groups and, when Debug is enabled, batch calls, accessibility audits, and screenshot/snapshot comparisons. Core incremental observation and output filtering remain available.
-
-The bundled agent-browser is pinned to 0.39.1, with release SHA-256 checks for Windows x64 and macOS x64/ARM64. Browser MCP config enables `useSystemCa` by default so the CLI's own HTTPS requests trust the operating system certificate store while retaining certificate verification; managed Chrome's certificate settings are unaffected. A tool's `caCert` is a PEM path on the Luna Mux host, including for WSL/SSH Agents. The MCP bridge preserves upstream `structuredContent.response.code`; `outcome_unknown` means an operation may already have executed, so Agents must inspect read-only state before deciding whether to retry. Scoped snapshots can read the selected custom element's Shadow DOM. The experimental Obscura engine is not integrated into the existing Chrome/CDP Runtime.
-
-CDP binds only to local loopback, with ports and connection details kept as temporary runtime state. Remote Agents access the Session browser through authenticated Runtime communication bridges; raw CDP is not forwarded remotely. Remote development services use separate SSH tunnels, which browser resources do not own.
-
-Tool routing follows resource ownership: Luna MCP controls application resources, `agent_browser` operates web content, and native tools handle development and host work. Terminal Panes and browser tabs are distinct resources.
+Remote development services use separate SSH tunnels, which browser resources do not own. Tool routing follows resource ownership: Luna MCP controls application resources, `agent_browser` operates web content, and native tools handle development and host work. Terminal Panes and browser tabs are distinct resources.
 
 ### 3.6 Database Panes
 
