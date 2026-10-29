@@ -76,8 +76,6 @@ Choose applicable scenarios based on risk; do not mechanically cover unrelated c
 | Architecture | Dependency direction, single ownership, contract fields, and schema checks |
 | Platform | Affected macOS, Windows, PowerShell, WSL, or SSH target, or a recorded coverage risk |
 
-Agent SFTP consent regressions must cover identity revocation after ticket creation but before waiter registration, and toggling automatic approval while a request is pending. A caller/idempotency key must remain bound to the original files and paths. Cancelling the last waiter must remove the actionable request. Exercise a real MCP cancellation notification as well as policy-level task cancellation.
-
 ```text
 L0: npm run web:build when relevant
 L1: npm run typecheck + relevant tests
