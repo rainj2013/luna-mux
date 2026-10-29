@@ -160,6 +160,12 @@ pub fn run() {
                 &data_dir.join(product::DATABASE_FILE),
                 product::CREDENTIAL_SERVICE,
             )?);
+            database
+                .get_setting(
+                    agent_profiles::AGENT_LAUNCH_SETTINGS_KEY,
+                    agent_profiles::AgentLaunchSettings::default(),
+                )
+                .write_launch_defaults()?;
             let browser_runtimes =
                 BrowserRuntimeManager::new(app.handle().clone(), &data_dir, database.clone());
             let database_runtimes = Arc::new(database_runtime::DatabaseRuntimeManager::new());
@@ -589,6 +595,8 @@ pub fn run() {
             settings_save_ui_theme,
             settings_get_language,
             settings_get_remote_agent_integration_enabled,
+            settings_get_agent_launch,
+            settings_save_agent_launch,
             settings_apply_language,
             settings_save_language,
             settings_save_remote_agent_integration_enabled,

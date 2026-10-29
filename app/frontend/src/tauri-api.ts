@@ -289,6 +289,8 @@ export async function createTauriApi(): Promise<AppApi> {
       getUiTheme: () => call('settings_get_ui_theme'),
       saveUiTheme: (theme: UiTheme) => call('settings_save_ui_theme', { theme }),
       getRemoteAgentIntegrationEnabled: () => call('settings_get_remote_agent_integration_enabled'),
+      getAgentLaunch: () => call('settings_get_agent_launch'),
+      saveAgentLaunch: (settings) => call('settings_save_agent_launch', { settings }),
       saveRemoteAgentIntegrationEnabled: (enabled: boolean) => call('settings_save_remote_agent_integration_enabled', { enabled }),
       getTerminal: () => call('settings_get_terminal'),
       saveTerminal: (settings: TerminalSettings) => call('settings_save_terminal', { settings }),

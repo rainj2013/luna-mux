@@ -942,6 +942,10 @@ pub async fn terminal_runtime_create(
     state: State<'_, AppState>,
     mut request: TerminalRuntimeCreateRequest,
 ) -> Result<TerminalRuntime, String> {
+    let launch_settings = state.db.get_setting(
+        agent_profiles::AGENT_LAUNCH_SETTINGS_KEY,
+        agent_profiles::AgentLaunchSettings::default(),
+    );
     let is_remote = request.target_id.starts_with("ssh-bookmark:");
     let remote_agent_integration_enabled =
         !is_remote || state.db.get_setting("remoteAgentIntegrationEnabled", false);
@@ -1214,7 +1218,7 @@ pub async fn terminal_runtime_create(
                     .launch_environment
                     .insert(MCP_AUTHORIZATION_ENV.into(), mcp_token);
             }
-            request.command = Some(launch_command);
+            request.command = Some(launch_settings.apply(&profile.adapter, launch_command));
         }
     }
     match state.terminal_backend.create(request).await {
@@ -1336,6 +1340,7 @@ pub async fn terminal_runtime_create(
                             .map(|_| environment_file.as_str()),
                         existing_developer_instructions: existing_developer_instructions.as_deref(),
                     })?;
+                    let launch_command = launch_settings.apply(&profile.adapter, launch_command);
                     let command = remote_managed_agent_command(
                         &context,
                         &profile.adapter,
@@ -1657,6 +1662,22 @@ async fn setup_remote_manual_agent_shims(
                     &format!("set -a; . {}; set +a", posix_shell_quote(&environment_file)),
                 )
             } else {
+                let settings = state.db.get_setting(
+                    agent_profiles::AGENT_LAUNCH_SETTINGS_KEY,
+                    agent_profiles::AgentLaunchSettings::default(),
+                );
+                let enabled = match adapter {
+                    "codex" => settings.codex_yolo,
+                    "claude-code" => settings.claude_code_yolo,
+                    _ => false,
+                };
+                let launch = format!(
+                    "{}{launch}",
+                    agent_profiles::posix_launch_defaults(
+                        adapter,
+                        if enabled { "true" } else { "false" }
+                    )
+                );
                 remote_manual_agent_script(adapter, &hook_command, &launch, &environment_file)
             };
             let (bin, _) = retry_remote_setup("remote setup", || {
@@ -3422,6 +3443,34 @@ pub fn settings_get_ui_theme(state: State<AppState>) -> UiTheme {
 #[tauri::command]
 pub fn settings_get_language(state: State<AppState>) -> String {
     state.db.get_setting("language", "zh-CN".to_string())
+}
+
+#[tauri::command]
+pub fn settings_get_agent_launch(state: State<AppState>) -> agent_profiles::AgentLaunchSettings {
+    state.db.get_setting(
+        agent_profiles::AGENT_LAUNCH_SETTINGS_KEY,
+        agent_profiles::AgentLaunchSettings::default(),
+    )
+}
+
+#[tauri::command]
+pub fn settings_save_agent_launch(
+    state: State<AppState>,
+    settings: agent_profiles::AgentLaunchSettings,
+) -> Result<agent_profiles::AgentLaunchSettings, String> {
+    static SAVE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _save = SAVE_LOCK.lock().map_err(|error| error.to_string())?;
+    let previous = settings_get_agent_launch(state.clone());
+    state
+        .db
+        .set_setting(agent_profiles::AGENT_LAUNCH_SETTINGS_KEY, &settings)?;
+    if let Err(error) = settings.write_launch_defaults() {
+        state
+            .db
+            .set_setting(agent_profiles::AGENT_LAUNCH_SETTINGS_KEY, &previous)?;
+        return Err(error);
+    }
+    Ok(settings)
 }
 
 #[tauri::command]

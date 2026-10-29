@@ -83,18 +83,20 @@ export function BrowserResourceCard({ resource, sourcePane, chromeInstallation, 
       </section>
       <section className="browser-settings-page" id={`${pageId}-settings`} role="tabpanel" aria-labelledby={`${pageId}-settings-tab`} hidden={page !== 'settings'} tabIndex={0}>
         <header className="browser-page-heading"><h2>{t('app.browserSettings')}</h2><p>{t('app.browserSettingsDescription')}</p></header>
-        <div className="browser-resource-settings">
+        <div className="browser-tools-list">
         <BrowserProxySettings resource={resource} onSave={(server, enabled) => onSaveProxy(resource, server, enabled)} />
-        <section className="browser-setting-block browser-profile-settings">
-          <header><strong>{t('app.retainBrowserData')}</strong>
-            <label className="switch-control" title={profileLocked ? t('app.stopBrowserBeforeProfileChange') : undefined}>
-              <input type="checkbox" role="switch" aria-label={t('app.retainBrowserData')} checked={resource.retainProfile} disabled={profileLocked} onChange={(event) => onRetainProfile(resource, event.target.checked)} /><span aria-hidden="true" />
-            </label>
-          </header>
-          <p className="browser-setting-copy">{resource.retainProfile ? t('app.browserProfileRetained') : t('app.browserProfileDisposable')}</p>
-          {profileLocked && <p className="browser-setting-copy">{t('app.stopBrowserBeforeProfileChange')}</p>}
+        <section className="browser-settings-item browser-tool-row browser-profile-settings">
+          <span className="browser-tool-copy">
+            <strong>{t('app.retainBrowserData')}</strong>
+            <small>{resource.retainProfile ? t('app.browserProfileRetained') : t('app.browserProfileDisposable')}</small>
+            {profileLocked && <small>{t('app.stopBrowserBeforeProfileChange')}</small>}
+          </span>
+          <label className="switch-control" title={profileLocked ? t('app.stopBrowserBeforeProfileChange') : undefined}>
+            <input type="checkbox" role="switch" aria-label={t('app.retainBrowserData')} checked={resource.retainProfile} disabled={profileLocked} onChange={(event) => onRetainProfile(resource, event.target.checked)} /><span aria-hidden="true" />
+          </label>
         </section>
         </div>
+        <p className="browser-setting-copy">{t('app.browserProxyRestart')}</p>
       </section>
       <section className="browser-settings-page" id={`${pageId}-tools`} role="tabpanel" aria-labelledby={`${pageId}-tools-tab`} hidden={page !== 'tools'} tabIndex={0}>
         <header className="browser-page-heading"><h2>{t('app.browserAgentToolSettings')}</h2><p>{t('app.browserAgentToolsDescription')}</p></header>

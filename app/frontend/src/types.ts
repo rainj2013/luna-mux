@@ -150,6 +150,11 @@ export type ManagedAgentStatus = 'working' | 'waiting' | 'completed' | 'error'
 export type ManagedAgentWaitingReason = 'input' | 'permission' | 'external' | 'unknown'
 export type ManagedAgentEvidence = 'structuredHook' | 'terminalHeuristic'
 
+export interface AgentLaunchSettings {
+  codexYolo: boolean
+  claudeCodeYolo: boolean
+}
+
 export interface AgentLaunchProfile {
   id: string
   label: string
@@ -901,6 +906,8 @@ export interface AppApi {
     getUiTheme(): Promise<UiTheme>
     saveUiTheme(theme: UiTheme): Promise<UiTheme>
     getRemoteAgentIntegrationEnabled(): Promise<boolean>
+    getAgentLaunch(): Promise<AgentLaunchSettings>
+    saveAgentLaunch(settings: AgentLaunchSettings): Promise<AgentLaunchSettings>
     saveRemoteAgentIntegrationEnabled(enabled: boolean): Promise<boolean>
     getTerminal(): Promise<TerminalSettings>
     saveTerminal(settings: TerminalSettings): Promise<TerminalSettings>

@@ -12,6 +12,7 @@ import { SftpPane } from './components/SftpPane'
 import { HelpDialog } from './components/HelpDialog'
 import { FileDialog } from './components/FileDialog'
 import { BrowserResourceCard, type BrowserResourceState } from './components/BrowserResourceCard'
+import { AgentWorkbench } from './components/AgentWorkbench'
 import { colorWithOpacity, terminalBackgroundStyle } from './terminal-style'
 import { availableLanguages, getNativeMenuLabels, useI18n, type MessageKey } from './i18n'
 import { PRODUCT_INFO } from './product-info'
@@ -1923,7 +1924,7 @@ function AgentEnvironmentPanel({ agents, panes, bookmarks, agentAttentionByPane,
   const bookmarkMap = new Map(bookmarks.map((bookmark) => [bookmark.id, bookmark]))
   const sessionAgents = agents.filter((agent) => paneMap.has(agent.paneId))
   const actionAgents = sessionAgents.filter((agent) => agentAttentionByPane.has(agent.paneId) || agent.status === 'working')
-  return <div className="agent-environment">
+  return <AgentWorkbench>
     <section className="agent-environment-agents">
       <header><Sparkles size={15} /><strong>{t('app.activeAgentEnvironment')}</strong><span>{t('app.agentNeedsAttentionCount', { value0: actionAgents.filter((agent) => agentAttentionByPane.has(agent.paneId)).length })}</span></header>
       {sessionAgents.length === 0 ? <div className="agent-environment-empty"><Bot size={24} /><span>{t('app.noActiveAgents')}</span></div> : <div className="agent-work-list">{sessionAgents.map((agent) => {
@@ -1947,7 +1948,7 @@ function AgentEnvironmentPanel({ agents, panes, bookmarks, agentAttentionByPane,
         </article>
       })}</div>}
     </section>
-  </div>
+  </AgentWorkbench>
 }
 
 function agentPaneStatusLabel(pane: WorkspaceTab, tone: AgentAttentionTone | undefined, t: (key: MessageKey, params?: Record<string, string | number>) => string): string {
