@@ -61,6 +61,13 @@ impl TransferManager {
         })
     }
 
+    /// Use the connected session snapshot, even if its saved bookmark was later edited.
+    pub fn target_name(&self, runtime_id: &str) -> Option<String> {
+        let session = self.sessions.get(runtime_id).ok()?;
+        let bookmark = &session.bookmark;
+        Some(format!("{} · {}@{}:{}", bookmark.name, bookmark.username, bookmark.host, bookmark.port))
+    }
+
     pub fn list(&self) -> Result<Vec<TransferTask>, String> {
         self.db.list_transfers()
     }
@@ -76,20 +83,8 @@ impl TransferManager {
         let now = Utc::now().to_rfc3339();
         let batch_id = Uuid::new_v4().to_string();
         let mut result = Vec::new();
-        for source in &request.source_paths {
-            let name = if request.direction == TransferDirection::Upload {
-                local_name(source)?
-            } else {
-                remote_name(source)?
-            };
-            let destination = if request.direction == TransferDirection::Upload {
-                remote_join(&request.destination_directory, &name)
-            } else {
-                Path::new(&request.destination_directory)
-                    .join(&name)
-                    .to_string_lossy()
-                    .into_owned()
-            };
+        let entries = transfer_entries(&request)?;
+        for (source, (name, destination)) in request.source_paths.iter().zip(entries) {
             let task = TransferTask {
                 id: Uuid::new_v4().to_string(),
                 session_id: request.session_id.clone(),
@@ -803,6 +798,30 @@ fn validate_entry_name(value: &str, label: &str) -> Result<String, String> {
         return Err(format!("{label}名称无效"));
     }
     Ok(value.to_string())
+}
+
+/// One path calculation shared by consent previews and the actual queue.
+pub(crate) fn transfer_entries(request: &TransferRequest) -> Result<Vec<(String, String)>, String> {
+    request
+        .source_paths
+        .iter()
+        .map(|source| {
+            let name = if request.direction == TransferDirection::Upload {
+                local_name(source)?
+            } else {
+                remote_name(source)?
+            };
+            let destination = if request.direction == TransferDirection::Upload {
+                remote_join(&request.destination_directory, &name)
+            } else {
+                Path::new(&request.destination_directory)
+                    .join(&name)
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            Ok((name, destination))
+        })
+        .collect()
 }
 
 fn local_name(path: &str) -> Result<String, String> {

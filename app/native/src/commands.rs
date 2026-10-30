@@ -769,6 +769,18 @@ pub fn control_read_events(
         .map_err(|error| serde_json::to_value(error).unwrap_or_else(|_| serde_json::json!({"code":"internal","message":"事件读取失败","retryable":false})))
 }
 
+/// File paths are available only to the trusted desktop, never to public events.
+#[tauri::command]
+pub fn control_transfer_approvals_list(
+    state: State<AppState>,
+) -> Result<Vec<control_service::PendingTransferApproval>, serde_json::Value> {
+    state.control.pending_transfer_approvals().map_err(|error| {
+        serde_json::to_value(error).unwrap_or_else(
+            |_| serde_json::json!({"code":"internal","message":"审批读取失败","retryable":false}),
+        )
+    })
+}
+
 /// Only the trusted desktop UI can resolve an approval. External transports
 /// receive approval IDs through the event stream but cannot call this IPC API.
 #[tauri::command]
@@ -3443,6 +3455,24 @@ pub fn settings_get_ui_theme(state: State<AppState>) -> UiTheme {
 #[tauri::command]
 pub fn settings_get_language(state: State<AppState>) -> String {
     state.db.get_setting("language", "zh-CN".to_string())
+}
+
+#[tauri::command]
+pub fn settings_get_agent_sftp_enabled(state: State<AppState>) -> bool {
+    state
+        .db
+        .get_setting(control_service::AGENT_SFTP_ENABLED_SETTING, false)
+}
+
+#[tauri::command]
+pub fn settings_save_agent_sftp_enabled(
+    state: State<AppState>,
+    enabled: bool,
+) -> Result<bool, String> {
+    state
+        .db
+        .set_setting(control_service::AGENT_SFTP_ENABLED_SETTING, &enabled)?;
+    Ok(enabled)
 }
 
 #[tauri::command]

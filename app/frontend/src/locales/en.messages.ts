@@ -1,4 +1,23 @@
 export default {
+  "app.transferApprovals": "Pending file transfers",
+  "app.transferApprovalRetry": "Retry",
+  "app.transferApprovalUpload": "Upload · this computer → remote",
+  "app.transferApprovalDownload": "Download · remote → this computer",
+  "app.transferApprovalSource": "Source",
+  "app.transferApprovalDestination": "Destination",
+  "app.transferApprovalOnce": "Applies only to these files and paths. Expires at {{time}}. Approval automatically queues the transfer; existing-file conflicts still require confirmation.",
+  "app.transferApprovalReject": "Reject",
+  "app.transferApprovalAllow": "Allow once",
+  "app.transferApprovalNotice": "{{count}} Agent file transfer request(s) need approval",
+  "app.transferApprovalView": "Review requests",
+
+  "app.agentSftpTitle": "SFTP file transfers",
+  "app.agentSftpDescription": "Control file transfers requested by Agents in Luna Mux.",
+  "app.agentSftpLabel": "Skip SFTP transfer approvals",
+  "app.agentSftpHelp": "When off, approve each Agent transfer in the overview. When on, all Agents can transfer files through SSH panes they can access without per-transfer approval. Saved globally; applies to subsequent requests. Existing-file conflicts still require confirmation.",
+  "app.agentSftpLoadFailed": "Could not load SFTP access settings. Reopen the Agent tab to retry.",
+  "app.agentSftpSaveFailed": "Could not save SFTP access settings. The previous setting is unchanged.",
+
   "app.agentOverview": "Overview",
   "app.agentOverviewNav": "Status and tasks",
   "app.agentOverviewDescription": "Agent status and pending actions in the current session.",

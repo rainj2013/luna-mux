@@ -1,6 +1,6 @@
 # Luna Mux Development Guide
 
-Luna Mux is built on Tauri 2, React, xterm.js, and Rust. The first release targets macOS and Windows simultaneously. Installers must be built natively on the corresponding target platform.
+This guide covers environment setup, checks, packaging, and releases for Luna Mux. The project uses Tauri 2, React, xterm.js, and Rust, supports macOS and Windows, and builds installers natively on the target platform.
 
 All commands in this document are run from the repository root, the directory that contains `package.json`.
 
@@ -18,8 +18,8 @@ See the "Terminal Backend" section of the [design document](LUNA_MUX_DESIGN.en.m
 
 ## Development Environment
 
-- Node.js 24 and npm, with [fnm](https://github.com/Schniz/fnm) recommended for version management. The `.node-version` in the repo root pins the major version.
-- Rust stable 1.85 or later. The project uses the Rust 2024 edition; install via [rustup](https://rustup.rs/).
+- Node.js 24 and npm, managed by [fnm](https://github.com/Schniz/fnm). Use the version specified in the repository root `.node-version`.
+- The current Rust stable toolchain, installed and updated through [rustup](https://rustup.rs/). The project uses the Rust 2024 edition; the compiler must satisfy the locked dependencies.
 - macOS requires Xcode Command Line Tools.
 - Windows requires Microsoft C++ Build Tools, the Windows SDK, the WebView2 Runtime, and NASM (a native crypto build dependency of `aws-lc-sys`).
 
@@ -92,7 +92,7 @@ rustc --version
 cargo --version
 ```
 
-`node --version` should be `v24.x` and `rustc` should be 1.85 or later. The first dependency install requires access to the npm registry and crates.io.
+`node --version` should match `.node-version`. Run `rustup update stable` if Rust is too old for the dependencies. The first dependency install requires access to the npm registry and crates.io.
 
 ## Starting the Development Environment
 
@@ -113,8 +113,6 @@ Web pages cannot fully use the local database, SSH, SFTP, system credentials, an
 
 Development startup requires no environment variables or API keys. The AI command assistant is optional and can be configured with an OpenAI-compatible service in "Settings → AI".
 
-> Luna Mux uses its own application identifier `com.luna.mux`, database, and system credential namespace, and never reads or modifies Luna Remote data automatically.
-
 ## Internationalization
 
 UI copy is centralized in `app/frontend/src/locales/`; components reference only stable keys and do not store Chinese or English text directly.
@@ -134,7 +132,7 @@ This check verifies that keys, duplicates, and interpolation placeholders match 
 
 ## Checks
 
-For the risk-based workflow, architecture acceptance criteria, test matrix, and review requirements for AI-assisted changes, see the [AI development guidelines](AI_DEVELOPMENT_GUIDELINES.en.md).
+Use the change levels in the [AI development guidelines](AI_DEVELOPMENT_GUIDELINES.en.md) to determine verification scope. The following are the common full-check commands; documentation, styling, and local behavior changes need only the checks required for their level.
 
 ```bash
 npm run check
@@ -142,21 +140,13 @@ npm test
 npm run web:build
 ```
 
-`npm run check` validates product metadata, the terminal Runtime contract, icons, i18n, and TypeScript types in sequence, then runs Rust `cargo check`; `npm test` runs the Rust unit tests; `npm run web:build` verifies the frontend production build. All three commands should pass before committing.
+`npm run check` validates product metadata, the terminal Runtime contract, icons, and i18n, then runs terminal-related script tests, TypeScript checking, and Rust `cargo check`. `npm test` runs the Rust tests; `npm run web:build` verifies the frontend production build.
 
 ## Packaging
 
 Tauri installers must be built natively on the target platform; output lands in `app/native/target/release/bundle/`. Unsigned installers are produced when no certificate is configured. Configure an Apple Developer ID, notarization, and Windows code signing before official distribution.
 
-GitHub Actions and the default development environment use crates.io. Run the following once after the first build or after `package-lock.json` changes.
-
-```bash
-fnm use
-npm ci
-rustup default stable
-```
-
-Everyday re-packaging does not require reinstalling dependencies or temporarily editing Cargo configuration.
+Complete [Installing Project Dependencies](#installing-project-dependencies) before the first build. Run `npm ci` again after `package-lock.json` changes; routine repackaging does not require reinstalling dependencies. GitHub Actions uses crates.io by default; see the FAQ for local mirror configuration.
 
 ### macOS
 
@@ -220,28 +210,12 @@ git push origin v1.0.0
 
 ### Release Note Guidelines
 
-Release notes are written for people who use Luna Mux, not as a commit log or an inventory of implementation details. Start with the problems the upgrade solves and the workflows it improves, then describe the main changes. Include technical detail only when it affects installation, compatibility, data, security, or an action the user must take.
+Release notes explain user-visible features, fixes, and compatibility changes. Include the version heading, a short summary, “Changes and improvements”, installer notes, and a GitHub Compare link from the previous version.
 
-Use this recommended structure:
-
-1. A `# Luna Mux vX.Y.Z` heading.
-2. A short summary of the overall value of the upgrade.
-3. A `### Changes and improvements` section covering every meaningful, user-visible change in the release.
-4. An `### Installer notes` section covering macOS architectures and the choice between the standard and bundled-WebView2 Windows installers.
-5. A GitHub Compare link from the previous version to the current version.
-
-Describe each change objectively, then explain its user-visible effect. For example, write “scrolling keeps working after restoring a pane,” not “serialize the xterm SGR encoding”; write “Agent status is more accurate in full-access mode,” not a list of hook fields and internal state transitions.
-
-Follow these principles when writing:
-
-- Group related commits by user task and experience instead of listing every commit, file, module, function, or test.
-- Do not impose a fixed item count for brevity. A large release may list all relevant changes, while still merging duplicate or closely related items and retaining every important feature, fix, and compatibility change.
-- Prioritize new capabilities, meaningful experience improvements, user-visible fixes, and compatibility changes that require action.
-- Keep the tone restrained, accurate, and factual, using neutral headings such as “Changes and improvements.” Avoid promotional or exaggerated wording such as “Highlights,” “at a glance,” “completely transformed,” or “smoother than ever.”
-- State platform limitations, migration steps, known constraints, and behavior changes that may affect existing workflows explicitly.
-- Use product UI terms and plain language. When a technical term is unavoidable, explain what it means for the user.
-- Do not present refactoring, dependency updates, added tests, or protocol-field changes as standalone highlights unless they directly change the user experience or a security boundary.
-- Do not overstate unverified results. Check every claim against the version diff and test evidence, and verify the version number and Compare link before publishing.
+- Group related changes by user task, covering all meaningful features, fixes, and compatibility effects without reproducing commits or implementation details. Do not impose a fixed item count.
+- Use UI names and restrained, accurate language. Include technical details only when they affect installation, data, security, or user actions.
+- State platform limitations, migration steps, and known constraints. Do not claim unverified benefits.
+- Check the notes, version number, and Compare link against the version diff and test results before publishing.
 
 The tag workflow generates notes automatically when no Release exists, but an official release should use reviewed notes. Create the matching Release immediately after pushing the tag, or edit the generated body after the workflow finishes. When the Release already exists, the workflow uploads installers without replacing its body.
 

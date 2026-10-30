@@ -13,6 +13,7 @@ import { HelpDialog } from './components/HelpDialog'
 import { FileDialog } from './components/FileDialog'
 import { BrowserResourceCard, type BrowserResourceState } from './components/BrowserResourceCard'
 import { AgentWorkbench } from './components/AgentWorkbench'
+import { TransferApprovalCards, TransferApprovalNotice, useTransferApprovals, type TransferApprovalsState } from './components/TransferApprovalCards'
 import { colorWithOpacity, terminalBackgroundStyle } from './terminal-style'
 import { availableLanguages, getNativeMenuLabels, useI18n, type MessageKey } from './i18n'
 import { PRODUCT_INFO } from './product-info'
@@ -169,6 +170,7 @@ export function App(): React.JSX.Element {
   const [transfers, setTransfers] = useState<TransferTask[]>([])
   const [transferView, setTransferView] = useState<'queue' | 'history'>('queue')
   const [workspaceView, setWorkspaceView] = useState<'terminal' | 'agents' | 'browser' | 'files'>('terminal')
+  const transferApprovals = useTransferApprovals()
   const [managedAgentEvents, setManagedAgentEvents] = useState<ManagedAgentEvent[]>([])
   const [readAgentSequences, setReadAgentSequences] = useState<Set<number>>(new Set())
   const [dismissedAgentAttentionSequences, setDismissedAgentAttentionSequences] = useState<Set<number>>(new Set())
@@ -1613,7 +1615,7 @@ export function App(): React.JSX.Element {
           </button></div>
           <div className="view-switcher" role="tablist" aria-label={t('app.sessionView')}>
             <button role="tab" title={t('app.panes')} disabled={!activeMuxSession} aria-selected={workspaceView === 'terminal'} className={workspaceView === 'terminal' ? 'active' : ''} onClick={() => setWorkspaceView('terminal')}><Columns2 size={15} />{t('app.panes')}</button>
-            <button role="tab" title={t('app.agents')} disabled={!activeMuxSession} aria-selected={workspaceView === 'agents'} className={workspaceView === 'agents' ? 'active' : ''} onClick={() => setWorkspaceView('agents')}><Sparkles size={15} />{t('app.agents')}</button>
+            <button role="tab" title={t('app.agents')} disabled={!activeMuxSession} aria-selected={workspaceView === 'agents'} className={workspaceView === 'agents' ? 'active' : ''} onClick={() => setWorkspaceView('agents')}><Sparkles size={15} />{t('app.agents')}{transferApprovals.pending.length > 0 && <span className="transfer-approval-badge">{transferApprovals.pending.length}</span>}</button>
             <button role="tab" title={t('app.browserResources')} disabled={!activeMuxSession} aria-selected={workspaceView === 'browser'} className={workspaceView === 'browser' ? 'active' : ''} onClick={() => setWorkspaceView('browser')}><Globe2 size={15} />{t('app.browserResources')}</button>
             {activeBookmark && <button role="tab" title={t('app.files')} aria-selected={workspaceView === 'files'} className={workspaceView === 'files' ? 'active' : ''} onClick={() => setWorkspaceView('files')}><FolderOpen size={15} />{t('app.files')}</button>}
           </div>
@@ -1644,7 +1646,7 @@ export function App(): React.JSX.Element {
           {!activeMuxSession ? <div className="welcome-state"><div className="welcome-icon"><SquareTerminal size={30} /></div><h2>{t('app.createYourFirstSession')}</h2><div className="welcome-actions"><button className="primary-button" onClick={() => setMuxSessionDialog({ mode: 'create' })}><CirclePlus size={16} />{t('app.newSession')}</button></div></div>
             : sessionTabs.length === 0 && sessionBrowserResources.length === 0 ? <div className="welcome-state"><div className="welcome-icon"><SquareTerminal size={30} /></div><h2>{activeMuxSession.name}</h2>{activeMuxSession.rootPath && <p>{activeMuxSession.rootPath}</p>}<div className="welcome-actions"><button className="primary-button" onClick={() => void openPaneLauncher()}><CirclePlus size={16} />{t('app.addFirstPane')}</button></div></div>
             : workspaceView === 'terminal' && visibleSessionTabs.length === 0 ? <div className="welcome-state pane-empty-state"><div className="welcome-icon"><Minus size={30} /></div><h2>{t('app.minimizedPanes')}</h2><p>{t('app.restoreMinimizedPaneDescription')}</p><div className="welcome-actions">{sessionTabs.filter((pane) => minimizedPaneIds.has(pane.id)).map((pane) => <button key={pane.id} className="secondary-button" onClick={() => void restorePane(pane)}><Eye size={15} />{pane.title}</button>)}</div></div>
-                : workspaceView === 'agents' ? <AgentEnvironmentPanel agents={allAgents} panes={sessionTabs} bookmarks={bookmarks} agentAttentionByPane={agentAttentionByPane} onOpenPane={(agent) => { setActiveKey(agent.paneId); setWorkspaceView('terminal'); markAgentRead(agent.agentId) }} onDismissWaiting={dismissAgentWaitingAttention} />
+                : workspaceView === 'agents' ? <AgentEnvironmentPanel transferApprovals={transferApprovals} agents={allAgents} panes={sessionTabs} bookmarks={bookmarks} agentAttentionByPane={agentAttentionByPane} onOpenPane={(agent) => { setActiveKey(agent.paneId); setWorkspaceView('terminal'); markAgentRead(agent.agentId) }} onDismissWaiting={dismissAgentWaitingAttention} />
                   : workspaceView === 'browser' ? <BrowserResourceManager resources={sessionBrowserResources} panes={sessionTabs} chromeInstallation={chromeInstallation} onRefreshChrome={refreshChromeInstallation} onSaveProxy={saveBrowserProxy} onStart={(resource) => void startBrowserResource(resource)} onFocus={(resource) => { if (resource.runtime) void window.api.browserRuntimes.focusExternal(resource.runtime.id).catch((error) => showError(errorMessage(error))) }} onRestart={(resource) => void restartBrowserResource(resource)} onStop={(resource) => void stopBrowserResource(resource)} onRetainProfile={(resource, retain) => void setBrowserProfileRetention(resource, retain)} onToolProfiles={(resource, profiles) => void setBrowserToolProfiles(resource, profiles)} />
                     : workspaceView === 'files' && activeTab && activeBookmark ? <div className="session-view active files"><div className="sftp-region"><SftpPane sessionId={activeSshRuntimeId} bookmarkId={activeTab.bookmarkId} connected={activeTab.status === 'connected'} visible onError={showError} onConnect={() => reconnectPane(activeTab)} /></div><TransferPanel transfers={transfers} view={transferView} setView={setTransferView} onRetry={(task) => void retryTransfer(task)} onCancel={(task) => void cancelTransfer(task)} onClear={() => void clearCompletedTransfers()} /></div>
                       : null}
@@ -1734,6 +1736,11 @@ export function App(): React.JSX.Element {
     {lunaRemoteSources && <LunaRemoteSourceDialog sources={lunaRemoteSources} onClose={() => setLunaRemoteSources(null)} onChoose={() => void chooseLunaRemoteDatabase()} onSelect={(path) => void previewLunaRemoteSource(path)} />}
     {lunaRemoteImportPreview && <LunaRemoteImportDialog preview={lunaRemoteImportPreview} onClose={() => setLunaRemoteImportPreview(null)} onImported={async (result) => { setLunaRemoteImportPreview(null); await Promise.all([reloadSidebarData(), reloadImportedSettings()]); const credentialText = result.unavailableCredentials ? t('app.importedLunaRemoteWithUnavailableCredentials', { value0: result.unavailableCredentials }) : ''; showToast(`${t('app.importedLunaRemoteData', { value0: result.importedConnections, value1: result.importedGroups, value2: result.importedHostKeys, value3: result.importedSettings, value4: result.importedForwardingProfiles, value5: result.importedCredentials })}${credentialText}`, 'success') }} onConfirm={confirmAction} onError={showError} />}
     {confirmation && <ConfirmationDialog confirmation={confirmation} onDecision={resolveConfirmation} />}
+    {transferApprovals.pending.length > 0 && workspaceView !== 'agents' && <TransferApprovalNotice count={transferApprovals.pending.length} onOpen={() => {
+      const sessionId = transferApprovals.pending[0]?.muxSessionId
+      if (sessionId && muxSessions.some((session) => session.id === sessionId)) setActiveMuxSessionId(sessionId)
+      setWorkspaceView('agents')
+    }} />}
     {toast && <div className={`toast ${toastKind}`}>{toast}</div>}
   </div>
 }
@@ -1918,13 +1925,13 @@ function AiDiagnosticsDialog({ exchange, onClose, onClear }: { exchange: AiRawEx
   </div></Modal>
 }
 
-function AgentEnvironmentPanel({ agents, panes, bookmarks, agentAttentionByPane, onOpenPane, onDismissWaiting }: { agents: ManagedAgentSummary[]; panes: WorkspaceTab[]; bookmarks: Bookmark[]; agentAttentionByPane: Map<string, AgentAttentionTone>; onOpenPane(agent: ManagedAgentSummary): void; onDismissWaiting(agent: ManagedAgentSummary): void }): React.JSX.Element {
+function AgentEnvironmentPanel({ transferApprovals, agents, panes, bookmarks, agentAttentionByPane, onOpenPane, onDismissWaiting }: { transferApprovals: TransferApprovalsState; agents: ManagedAgentSummary[]; panes: WorkspaceTab[]; bookmarks: Bookmark[]; agentAttentionByPane: Map<string, AgentAttentionTone>; onOpenPane(agent: ManagedAgentSummary): void; onDismissWaiting(agent: ManagedAgentSummary): void }): React.JSX.Element {
   const { t } = useI18n()
   const paneMap = new Map(panes.map((pane) => [pane.id, pane]))
   const bookmarkMap = new Map(bookmarks.map((bookmark) => [bookmark.id, bookmark]))
   const sessionAgents = agents.filter((agent) => paneMap.has(agent.paneId))
   const actionAgents = sessionAgents.filter((agent) => agentAttentionByPane.has(agent.paneId) || agent.status === 'working')
-  return <AgentWorkbench>
+  return <AgentWorkbench approvalCount={transferApprovals.pending.length} approvals={<TransferApprovalCards state={transferApprovals} />}>
     <section className="agent-environment-agents">
       <header><Sparkles size={15} /><strong>{t('app.activeAgentEnvironment')}</strong><span>{t('app.agentNeedsAttentionCount', { value0: actionAgents.filter((agent) => agentAttentionByPane.has(agent.paneId)).length })}</span></header>
       {sessionAgents.length === 0 ? <div className="agent-environment-empty"><Bot size={24} /><span>{t('app.noActiveAgents')}</span></div> : <div className="agent-work-list">{sessionAgents.map((agent) => {

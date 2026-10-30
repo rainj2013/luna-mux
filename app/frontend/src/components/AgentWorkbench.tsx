@@ -2,8 +2,9 @@ import { useId, useState, type ReactNode } from 'react'
 import { Bot, Settings } from 'lucide-react'
 import { useI18n } from '../i18n'
 import { AgentLaunchSettingsCard } from './AgentLaunchSettingsCard'
+import { AgentSftpSettingsCard } from './AgentSftpSettingsCard'
 
-export function AgentWorkbench({ children }: { children: ReactNode }): React.JSX.Element {
+export function AgentWorkbench({ children, approvals, approvalCount = 0 }: { children: ReactNode; approvals?: ReactNode; approvalCount?: number }): React.JSX.Element {
   const { t } = useI18n()
   const [page, setPage] = useState<'overview' | 'settings'>('overview')
   const pageId = useId()
@@ -23,15 +24,17 @@ export function AgentWorkbench({ children }: { children: ReactNode }): React.JSX
           setPage(pages[next]!.id)
           event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus()
         }}>
-          {pages.map(({ id, title, detail, icon: Icon }) => <button key={id} type="button" role="tab" id={`${pageId}-${id}-tab`} aria-controls={`${pageId}-${id}`} aria-selected={page === id} tabIndex={page === id ? 0 : -1} onClick={() => setPage(id)}><Icon size={17} /><span><strong>{title}</strong><small>{detail}</small></span></button>)}
+          {pages.map(({ id, title, detail, icon: Icon }) => <button key={id} type="button" role="tab" id={`${pageId}-${id}-tab`} aria-controls={`${pageId}-${id}`} aria-selected={page === id} tabIndex={page === id ? 0 : -1} onClick={() => setPage(id)}><Icon size={17} /><span><strong>{title}{id === 'overview' && approvalCount > 0 && <span className="transfer-approval-badge">{approvalCount}</span>}</strong><small>{detail}</small></span></button>)}
         </nav>
         <div className="browser-page-area">
           <section className="browser-settings-page" id={`${pageId}-overview`} role="tabpanel" aria-labelledby={`${pageId}-overview-tab`} hidden={page !== 'overview'} tabIndex={0}>
             <header className="browser-page-heading"><h2>{t('app.agentOverview')}</h2><p>{t('app.agentOverviewDescription')}</p></header>
+            {approvals}
             {children}
           </section>
           <section className="browser-settings-page" id={`${pageId}-settings`} role="tabpanel" aria-labelledby={`${pageId}-settings-tab`} hidden={page !== 'settings'} tabIndex={0}>
             <AgentLaunchSettingsCard />
+            <AgentSftpSettingsCard />
           </section>
         </div>
       </div>

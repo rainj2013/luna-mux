@@ -1,14 +1,12 @@
 # Luna Mux Design
 
-Last updated: 2026-09-11
-
 ## 1. Product Scope
 
-Luna Mux is a local and remote terminal workspace for coding agents. Project-level Sessions organize terminal Panes, Agents, and browser resources, providing unified terminal operation and controlled collaboration.
+Luna Mux is a local and remote terminal workspace for coding agents. Project-level Sessions organize Panes, Agents, and browser resources.
 
-The desktop supports Windows and macOS, with local shells, WSL, and SSH as terminal targets. Connection management, file transfers, and port forwarding complement the terminal. Code editing, language services, and graphical Git tools are outside the product scope.
+The desktop supports Windows and macOS, with local shells, WSL, and SSH as terminal targets. Connections, file transfers, port forwarding, and database panes support project workflows. Code editing, language services, and graphical Git tools are outside the product scope.
 
-## 2. Domain Model
+## 2. Core Model
 
 ```text
 Application
@@ -16,84 +14,62 @@ Application
     ├── Pane
     │   ├── Terminal Runtime
     │   │   └── Agent process (optional)
-    │   └── Database Runtime (optional)
+    │   └── Database Runtime
     └── Browser Resource
         └── Browser Runtime (started on demand)
 ```
 
-| Object | Responsibility and ownership |
+| Object | Responsibility |
 | --- | --- |
-| Mux Session | Project container owning the root directory, terminal layout, and browser resources; also the collaboration and authorization boundary |
-| Pane | Stable layout leaf storing the terminal target, working directory, and title |
-| Terminal Runtime | One running instance of a Pane, owning its terminal connection, I/O, and process lifecycle |
-| Database Runtime | One running instance of a database Pane, owning its database connection and query state |
-| Agent | A detected coding agent process within a Runtime, integrated through an adapter |
-| Browser Resource | Persistent browser definition within a Session, separate from the terminal layout |
-| Browser Runtime | One running browser instance, owning its process and automation connection |
-| Terminal Target | A local, WSL, or saved SSH launch target |
+| Session | Project container organizing Panes and browser resources; also the collaboration and authorization boundary |
+| Pane | Stable layout unit storing its type, configuration, and title |
+| Runtime | One running terminal, database, or browser instance, owning connections, processes, and live state |
+| Agent | A coding agent running in a terminal, integrated through an adapter |
+| Browser Resource | Browser configuration within a Session, independent of the Pane layout |
 
-Resource definitions are separate from running instances: a Pane stores the user’s workspace arrangement, while a Runtime carries one execution. Restarting a terminal therefore preserves layout, and restoring layout does not implicitly execute commands. Browser Resources and Browser Runtimes follow the same separation.
+Resource configuration is separate from running instances. Restoring a workspace preserves the user's arrangement; starting or restarting creates a new Runtime identity. Persisted configuration does not implicitly restore processes or execute commands.
 
-Stable resource IDs link objects. A Pane owns at most one live Runtime. Restarting creates a new Runtime identity so old execution records and credentials cannot target the new process. Process IDs and display names do not determine authorization.
+## 3. Architecture
 
-## 3. Architecture and State Ownership
-
-React and xterm.js present the terminal, while Tauri connects the interface to Rust native services. Responsibilities have three layers:
-
-- **Presentation**: Sessions, terminals, Agent status, and resource management views.
-- **Services**: Layout, control authorization, terminal interactions, Agent adapters, and browser resources.
-- **Backends**: I/O and lifecycle for local PTYs, SSH, file transfers, tunnels, and browser processes.
-
-The database stores resource definitions and configuration; Runtime backends own live state and output. Views subscribe to changes, control adapters pass requests to services, and services invoke backends. UI and MCP share business rules to keep permissions and behavior consistent across entry points. Shared core modules do not depend on product UI or branding.
-
-| State | Single owner | Lifetime |
-| --- | --- | --- |
-| Sessions, layouts, and resource configuration | Database and owning services | Persisted across app restarts |
-| Connections, processes, and output | Runtime backends | Bound to the running instance |
-| Interaction records and input coordination | Interaction manager | Retained within the app run, bound to a Runtime |
-| Terminal display and scroll position | UI terminal instance | Maintained with the view, never the source of backend state |
-
-### 3.1 Sessions and Layout
-
-Primary navigation organizes work through the Session and Pane tree, with saved connections serving as reusable launch resources. The Session root supplies the default working directory; Panes can override the target and directory. Agents run in ordinary terminals without a dedicated Pane type.
-
-Layouts use recursive split trees: leaves reference Panes, and branches store direction and ratio, allowing arbitrary nested splits in one model. Minimization and maximization are display state and do not alter Runtime ownership. Complete layout updates must contain every Session Pane exactly once; validation and serialized persistence prevent lost Panes and concurrent overwrites.
-
-App restart restores Sessions, layouts, Pane configuration, and browser definitions; running instances start on demand. Runtime and process identities and terminal scrollback do not survive app restart. Closing active terminals requires confirmation, and app shutdown cleans up managed running instances.
-
-### 3.2 Terminal Backends and Data Flow
-
-Local PTY and SSH backends implement a shared `TerminalBackend` contract for input, output, screen observation, resizing, flow control, interruption, and closing. Backend capabilities determine whether file transfer and forwarding are available; platform differences stay within backends.
+Functional modules:
 
 ```text
-Local PTY / SSH
-  → Incremental UTF-8 decoding
-  → Runtime output buffer and text screen model
-  → Events with output cursors
-  → TerminalPane / xterm.js
+Luna Mux
+├── Workspace: Sessions / Panes / layouts
+├── Terminals: local shells / WSL / SSH
+├── Agent integration: launch / Hook / MCP / status and collaboration
+├── Remote work: connections / SFTP / transfers and deployment / tunnels
+├── Browsers: resource management / page automation
+├── Databases: connections / queries / data operations
+├── AI command assistant
+└── Shared services: approvals / auditing / credentials / settings / diagnostics
 ```
 
-Output uses bounded memory and monotonic byte cursors so views and Agents can resume independently without storing separate histories. The memory bound means old output may be lost, so overwrites must explicitly report gaps. The interface applies backpressure by pausing and resuming backend reads. Blocking PTY writes are isolated from asynchronous tasks so input stalls do not hold up other Runtimes.
+| Layer | Responsibility |
+| --- | --- |
+| Presentation | React / xterm.js displays the workspace and accepts user input |
+| Services | Orchestrate resources, Agent integration, authorization, and collaboration |
+| Backends | Own I/O and lifecycle for local PTYs, SSH, databases, file transfers, tunnels, and browsers |
 
-Workspace switches retain terminal instances. Component reconstruction uses display snapshots and output cursors to preserve continuity. xterm.js owns display and terminal query responses; the backend text screen model serves observation without duplicate responses. Rendering falls back to the default renderer if acceleration fails.
+Tauri connects the interface to native services. The database stores resource definitions and configuration; Runtime backends own live state. Views read state through APIs and events. UI and MCP share business rules rather than maintaining separate behavior.
 
-Each backend independently owns its connections and process trees, so closing one Runtime does not affect other Panes. Terminal protocols, signals, and process cleanup adapt to the target environment without assuming identical shell behavior across platforms.
+### 3.1 Terminal Backend
 
-### 3.3 Agent Integration
+Local PTYs and SSH use a shared contract, with platform differences contained in backends. Views and Agents share backend output and screen observation instead of maintaining separate terminal state. The interaction service coordinates input to prevent interleaved automation and allow user takeover.
 
-`AgentAdapter` encapsulates provider launch adaptation, Hook/MCP configuration, and state conversion. Provider protocols remain inside adapters, keeping terminals, authorization, and notifications generic. Runtimes inject Session, Pane, and Runtime context with scoped credentials. Agent identity follows the process lifecycle and is cleared when the process or Runtime exits.
+### 3.2 Agents and Control
 
-Provider events map to working, waiting, completed, and error states. Luna Mux presents status, sends notifications, and focuses terminals; Agent permission requests remain in the Agent's own interface.
+Adapters encapsulate provider-specific launch behavior, Hook/MCP integration, and status conversion. Shared services handle collaboration, authorization, and auditing. Agents run in ordinary terminals; runtime credentials are bound to a Runtime and expire with the instance.
 
-Configuration is scoped to running instances without rewriting global user settings. Remote integration requires explicit enablement. Support files and communication bridges are isolated by Runtime and cleaned up with its lifecycle; ordinary SSH connections do not implicitly install Agent integration.
+Sessions define project collaboration scope. Control requests validate caller and resource permissions, with confirmation policies for side effects. Terminal output is an observation, not proof of command success.
 
-### 3.4 Control and Terminal Collaboration
+### 3.3 Browsers and Databases
 
-`LunaControlService` centralizes application operations, authorization, idempotency, and auditing. The desktop and Luna MCP invoke it through authenticated adapters. Adapters supply caller identity, and operations use versioned contracts and structured errors.
+Browser resources are shared within a Session. The app owns browser processes while automation tools operate pages; browser windows remain outside the terminal layout. Browser data is isolated by resource and may be disposable or retained. Remote access uses authenticated communication bridges.
 
-Sessions combine project context and collaboration authority, avoiding separate permission relationships for every pair of Panes. Membership permits terminal observation, input, and Agent collaboration; it does not provide fine-grained isolation within the Session. Shared targets or process relationships do not imply cross-Session access. Closing Runtimes and starting transfers or tunnels follow separate approval policies. Resource discovery excludes credentials.
+Databases are accessed through Panes. Each running instance owns its connection and query state, and writes require authorization.
 
-Terminal interaction follows an observe → input → wait for new state → decide loop:
+## 4. Constraints and Tradeoffs
 
 - Input is expressed as text, keys, or paste and encoded for the terminal's modes.
 - Raw output supports incremental reads; screen snapshots expose current text, cursor position, and modes.
@@ -147,3 +123,7 @@ Profiles store connection settings and a system credential reference; passwords 
 Persistent resource definitions are separate from temporary runtime state. Configuration migrations are explicit, idempotent transactions. Users select external data imports, with credential imports separately authorized and handled through the system credential store.
 
 The WebView accesses only explicitly registered native capabilities. Credentials remain in the system credential store and are excluded from tool results and logs. Control auditing records caller, target, operation, and result summaries without retaining sensitive input bodies.
+- Participants within a Session share collaboration capabilities without fine-grained isolation. Cross-Session access requires separate authorization.
+- Configuration is persisted while live state belongs to its instance. Closing one Runtime should not affect others.
+- Credentials remain in the system credential store and are excluded from tool results and logs. Cleanup is restricted to app-owned data.
+- Output, interactions, and background tasks have resource limits to support stable long-running operation.

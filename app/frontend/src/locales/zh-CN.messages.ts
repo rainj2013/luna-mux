@@ -1,4 +1,23 @@
 export default {
+  "app.transferApprovals": "待审批文件传输",
+  "app.transferApprovalRetry": "重试",
+  "app.transferApprovalUpload": "上传 · 本机 → 远端",
+  "app.transferApprovalDownload": "下载 · 远端 → 本机",
+  "app.transferApprovalSource": "源路径",
+  "app.transferApprovalDestination": "目标路径",
+  "app.transferApprovalOnce": "仅授权这些文件和路径，有效期至 {{time}}。允许后自动进入传输队列，文件冲突仍需确认。",
+  "app.transferApprovalReject": "拒绝",
+  "app.transferApprovalAllow": "允许本次",
+  "app.transferApprovalNotice": "有 {{count}} 个 Agent 文件传输请求待审批",
+  "app.transferApprovalView": "查看请求",
+
+  "app.agentSftpTitle": "SFTP 文件传输",
+  "app.agentSftpDescription": "管理 Agent 在 Luna Mux 中发起的文件传输。",
+  "app.agentSftpLabel": "SFTP 传输免审批",
+  "app.agentSftpHelp": "关闭时，在概览中逐次确认 Agent 文件传输；开启后，所有 Agent 可在其有权限访问的 SSH 窗格中免审批传输。全局保存，对后续请求生效，文件冲突仍需确认。",
+  "app.agentSftpLoadFailed": "无法加载 SFTP 传输设置，请重新打开 Agent 页重试。",
+  "app.agentSftpSaveFailed": "无法保存 SFTP 传输设置，已保留原有设置。",
+
   "app.agentOverview": "概览",
   "app.agentOverviewNav": "状态与任务",
   "app.agentOverviewDescription": "当前会话中的 Agent 状态与待处理事项。",

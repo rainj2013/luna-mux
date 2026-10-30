@@ -36,6 +36,9 @@ use crate::terminal_runtime_contract::TerminalRuntimeEvent;
 use crate::transfers::TransferManager;
 use crate::tunnels::TunnelManager;
 
+/// Explicit desktop opt-in; read on every request so revocation applies to running Agents.
+pub const AGENT_SFTP_ENABLED_SETTING: &str = "agentSftpEnabled";
+
 const EVENT_CAPACITY: usize = 2048;
 
 #[derive(Default)]
@@ -135,12 +138,23 @@ impl ControlEventBuffer {
     }
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingTransferApproval {
+    pub approval: ControlApproval,
+    pub request: TransferRequest,
+    pub destination_paths: Vec<String>,
+    pub caller_name: String,
+    pub target_name: String,
+    pub mux_session_id: Option<String>,
+}
+
 pub struct InProcessControlService {
     database: Arc<Database>,
     backend: Arc<dyn TerminalBackend>,
     side_effects: Arc<dyn ControlSideEffects>,
     events: Arc<ControlEventBuffer>,
-    approvals: ControlApprovalPolicy,
+    approvals: Arc<ControlApprovalPolicy>,
     agent_hooks: Arc<AgentHookService>,
     luna_mcp: RwLock<Option<Arc<LunaMcpService>>>,
     mux_mutations: tokio::sync::Mutex<()>,
@@ -166,6 +180,8 @@ type IdempotencyCacheKey = (String, String, String);
 
 #[async_trait]
 pub trait ControlSideEffects: Send + Sync {
+    fn transfer_target_name(&self, _runtime_id: &str) -> Option<String> { None }
+
     async fn database_pane_ui_request(
         &self,
         _pane_id: &str,
@@ -288,6 +304,10 @@ impl InProcessControlSideEffects {
 
 #[async_trait]
 impl ControlSideEffects for InProcessControlSideEffects {
+    fn transfer_target_name(&self, runtime_id: &str) -> Option<String> {
+        self.transfers.target_name(runtime_id)
+    }
+
     async fn database_pane_ui_request(
         &self,
         pane_id: &str,
@@ -543,7 +563,7 @@ impl InProcessControlService {
             backend,
             side_effects,
             events: Arc::new(ControlEventBuffer::default()),
-            approvals: ControlApprovalPolicy::default(),
+            approvals: Arc::new(ControlApprovalPolicy::default()),
             agent_hooks,
             luna_mcp: RwLock::new(None),
             mux_mutations: tokio::sync::Mutex::new(()),
@@ -1171,6 +1191,70 @@ impl InProcessControlService {
         Ok(())
     }
 
+    pub fn pending_transfer_approvals(&self) -> ControlResult<Vec<PendingTransferApproval>> {
+        let pending = self.approvals.pending_transfers()?;
+        if pending.is_empty() {
+            return Ok(vec![]);
+        }
+        let runtimes = self.backend.list().map_err(backend_error)?;
+        pending
+            .into_iter()
+            .map(|(approval, arguments)| {
+                let fields: TransferEnqueueArguments = serde_json::from_value(arguments)
+                    .map_err(|error| internal_error(error.to_string()))?;
+                let runtime_id = approval
+                    .resource
+                    .as_ref()
+                    .ok_or_else(|| internal_error("传输审批缺少 Runtime"))?
+                    .id
+                    .clone();
+                let target = runtimes
+                    .iter()
+                    .find(|runtime| runtime.runtime_id == runtime_id);
+                let source = runtimes.iter().find(|runtime| {
+                    format!("agent-runtime:{}", runtime.runtime_id) == approval.caller_id
+                });
+                let target_name = self
+                    .side_effects
+                    .transfer_target_name(&runtime_id)
+                    .or_else(|| target.map(|runtime| runtime.title.clone()))
+                    .unwrap_or_else(|| runtime_id.clone());
+                let request = TransferRequest {
+                    session_id: runtime_id,
+                    direction: fields.direction,
+                    source_paths: fields.source_paths,
+                    destination_directory: fields.destination_directory,
+                };
+                let destination_paths = crate::transfers::transfer_entries(&request)
+                    .map_err(invalid_arguments)?
+                    .into_iter()
+                    .map(|(_, destination)| destination)
+                    .collect();
+                Ok(PendingTransferApproval {
+                    caller_name: source
+                        .map(|runtime| runtime.title.clone())
+                        .unwrap_or_else(|| approval.caller_id.clone()),
+                    mux_session_id: target.and_then(|runtime| {
+                        runtime
+                            .context
+                            .as_ref()
+                            .map(|context| context.mux_session_id.clone())
+                            .or_else(|| {
+                                runtime
+                                    .managed_agent
+                                    .as_ref()
+                                    .map(|context| context.mux_session_id.clone())
+                            })
+                    }),
+                    approval,
+                    request,
+                    destination_paths,
+                    target_name,
+                })
+            })
+            .collect()
+    }
+
     pub fn resolve_approval(
         &self,
         approval_id: &str,
@@ -1239,6 +1323,15 @@ pub trait LunaControlService: Send + Sync {
         request: ControlRequest,
     ) -> ControlResult<ControlResponse>;
 
+    async fn wait_for_transfer_approval(
+        &self,
+        _caller: &ControlCaller,
+        _request: &ControlRequest,
+        _approval_id: &str,
+    ) -> ControlResult<()> {
+        Err(internal_error("当前服务不支持 SFTP 审批等待"))
+    }
+
     fn read_events(
         &self,
         caller: &ControlCaller,
@@ -1257,11 +1350,31 @@ impl LunaControlService for InProcessControlService {
                     || (caller.kind == ControlCallerKind::Agent
                         && descriptor.resource_kind == ControlResourceKind::BrowserRuntime)
             })
+            .map(|mut descriptor| {
+                // The adapter waits for desktop consent unless the user opted out of prompts.
+                if caller.kind == ControlCallerKind::Agent && descriptor.name == "transfer.enqueue" {
+                    descriptor.approval = if self.database.get_setting(AGENT_SFTP_ENABLED_SETTING, false) {
+                        ControlApprovalRequirement::None
+                    } else { ControlApprovalRequirement::User };
+                }
+                descriptor
+            })
             .collect();
         ControlCatalog {
             contract_version: CONTROL_CONTRACT_VERSION,
             operations,
         }
+    }
+
+    async fn wait_for_transfer_approval(
+        &self,
+        caller: &ControlCaller,
+        request: &ControlRequest,
+        approval_id: &str,
+    ) -> ControlResult<()> {
+        self.approvals
+            .wait_for_transfer(caller, request, approval_id)
+            .await
     }
 
     async fn invoke(
@@ -1309,6 +1422,12 @@ impl LunaControlService for InProcessControlService {
                     details: None,
                 });
             }
+            let agent_sftp = caller.kind == ControlCallerKind::Agent
+                && request.operation == "transfer.enqueue";
+            // A pending key remains bound even if the global opt-in changes while waiting.
+            let has_pending_transfer = agent_sftp && self.approvals.matching_transfer(caller, &request)?.is_some();
+            let auto_approve_sftp = agent_sftp && !has_pending_transfer
+                && self.database.get_setting(AGENT_SFTP_ENABLED_SETTING, false);
             // Interactions own durable-in-process reservations and keep only hashes,
             // including across cancelled calls and uncertain backend writes.
             let idempotency_key = request
@@ -1344,7 +1463,23 @@ impl LunaControlService for InProcessControlService {
                     return Ok(response);
                 }
             }
+            if agent_sftp {
+                let runtime_id = required_resource_id(&request)?;
+                require_runtime_capability(&*self.backend, runtime_id, "remoteFiles")?;
+                let arguments: TransferEnqueueArguments = parse_arguments(&request)?;
+                let transfer = TransferRequest {
+                    session_id: runtime_id.into(),
+                    direction: arguments.direction,
+                    source_paths: arguments.source_paths,
+                    destination_directory: arguments.destination_directory,
+                };
+                crate::transfers::transfer_entries(&transfer).map_err(invalid_arguments)?;
+                if transfer.source_paths.is_empty() || transfer.destination_directory.trim().is_empty() {
+                    return Err(invalid_arguments("请选择源文件和目标目录"));
+                }
+            }
             if descriptor.approval == ControlApprovalRequirement::User
+                && (!auto_approve_sftp || (agent_sftp && request.approval_id.is_some()))
                 && !matches!(
                     caller.kind,
                     ControlCallerKind::Ui | ControlCallerKind::Internal
@@ -4161,9 +4296,12 @@ mod tests {
             "enqueue-1",
             None,
         );
-        let first = approve_and_invoke(&service, &runtime_agent, enqueue.clone()).await;
+        // CLI callers retain the existing per-request approval policy.
+        let mut transfer_cli = runtime_agent.clone();
+        transfer_cli.kind = ControlCallerKind::Cli;
+        let first = approve_and_invoke(&service, &transfer_cli, enqueue.clone()).await;
         assert_eq!(first.result, json!([]));
-        let duplicate = service.invoke(&runtime_agent, enqueue).await.unwrap();
+        let duplicate = service.invoke(&transfer_cli, enqueue).await.unwrap();
         assert_eq!(duplicate, first);
         assert_eq!(effects.enqueues.lock().unwrap().len(), 1);
         assert_eq!(effects.enqueues.lock().unwrap()[0].session_id, "runtime-1");
@@ -4256,7 +4394,11 @@ mod tests {
             "same-key",
             None,
         );
-        approve_and_invoke(&service, &agent, first).await;
+        service
+            .database
+            .set_setting(AGENT_SFTP_ENABLED_SETTING, &true)
+            .unwrap();
+        service.invoke(&agent, first).await.unwrap();
         let changed_arguments = resource_request(
             "transfer.enqueue",
             ControlResourceKind::TerminalRuntime,
@@ -4297,6 +4439,346 @@ mod tests {
                 .code,
             ControlErrorCode::Conflict
         );
+        drop(service);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn agent_sftp_opt_in_is_persisted_scoped_and_off_returns_to_single_approval() {
+        let effects = Arc::new(RecordingSideEffects::default());
+        let (service, path) = service_with(
+            Arc::new(EmptyBackend::ssh_runtime("runtime-1")),
+            effects.clone(),
+        );
+        let agent = caller(
+            ControlResourceKind::TerminalRuntime,
+            Some("runtime-1"),
+            ControlAccess::Control,
+        );
+        let mut upload = runtime_request(
+            "transfer.enqueue",
+            json!({
+                "direction": "upload", "sourcePaths": ["C:\\work\\main.rs"], "destinationDirectory": "/tmp/project"
+            }),
+            None,
+        );
+        let denied = service.invoke(&agent, upload.clone()).await.unwrap_err();
+        assert_eq!(denied.code, ControlErrorCode::ApprovalRequired);
+        let ticket = denied.details.unwrap()["approval"]["approvalId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(
+            service.pending_transfer_approvals().unwrap()[0].destination_paths,
+            vec!["/tmp/project/main.rs"]
+        );
+        service.resolve_approval(&ticket, false).unwrap();
+        assert!(effects.enqueues.lock().unwrap().is_empty());
+        assert_eq!(
+            service
+                .catalog(&agent)
+                .operations
+                .iter()
+                .find(|op| op.name == "transfer.enqueue")
+                .unwrap()
+                .approval,
+            ControlApprovalRequirement::User
+        );
+        assert_eq!(
+            service
+                .catalog(&ui_caller())
+                .operations
+                .iter()
+                .find(|op| op.name == "transfer.enqueue")
+                .unwrap()
+                .approval,
+            ControlApprovalRequirement::User
+        );
+
+        service
+            .database
+            .set_setting(AGENT_SFTP_ENABLED_SETTING, &true)
+            .unwrap();
+        let reloaded = Database::open(&path, "sftp-setting-test").unwrap();
+        assert!(reloaded.get_setting(AGENT_SFTP_ENABLED_SETTING, false));
+        drop(reloaded);
+        let first = service.invoke(&agent, upload.clone()).await.unwrap();
+        assert_eq!(service.invoke(&agent, upload.clone()).await.unwrap(), first);
+        assert_eq!(effects.enqueues.lock().unwrap().len(), 1);
+        let mut download = upload.clone();
+        download.idempotency_key = Some("sftp-download".into());
+        download.arguments = json!({ "direction": "download", "sourcePaths": ["/tmp/results.txt"], "destinationDirectory": "C:\\work" });
+        service.invoke(&agent, download).await.unwrap();
+        assert_eq!(effects.enqueues.lock().unwrap().len(), 2);
+
+        let outside_scope = caller(
+            ControlResourceKind::TerminalRuntime,
+            Some("runtime-other"),
+            ControlAccess::Control,
+        );
+        assert_eq!(
+            service
+                .invoke(&outside_scope, upload.clone())
+                .await
+                .unwrap_err()
+                .code,
+            ControlErrorCode::Unauthorized
+        );
+        let read_only = caller(
+            ControlResourceKind::TerminalRuntime,
+            Some("runtime-1"),
+            ControlAccess::Read,
+        );
+        assert_eq!(
+            service
+                .invoke(&read_only, upload.clone())
+                .await
+                .unwrap_err()
+                .code,
+            ControlErrorCode::Unauthorized
+        );
+        let malformed = runtime_request("transfer.enqueue", json!({ "direction": "upload" }), None);
+        // A fresh key avoids the previous successful request's idempotency signature.
+        let mut malformed = malformed;
+        malformed.idempotency_key = None;
+        assert_eq!(
+            service.invoke(&agent, malformed).await.unwrap_err().code,
+            ControlErrorCode::InvalidArguments
+        );
+        let close = runtime_request("terminal.runtime.close", json!({}), None);
+        assert_eq!(
+            service.invoke(&agent, close).await.unwrap_err().code,
+            ControlErrorCode::ApprovalRequired
+        );
+
+        service
+            .database
+            .set_setting(AGENT_SFTP_ENABLED_SETTING, &false)
+            .unwrap();
+        // Completed idempotent retries return the existing task result without a new transfer.
+        assert_eq!(service.invoke(&agent, upload.clone()).await.unwrap(), first);
+        upload.idempotency_key = Some("new-request-needs-consent".into());
+        assert_eq!(
+            service
+                .invoke(&agent, upload.clone())
+                .await
+                .unwrap_err()
+                .code,
+            ControlErrorCode::ApprovalRequired
+        );
+        upload.approval_id = Some("a-ticket-cannot-override-the-setting".into());
+        assert_eq!(
+            service.invoke(&agent, upload).await.unwrap_err().code,
+            ControlErrorCode::ApprovalDenied
+        );
+        assert_eq!(effects.enqueues.lock().unwrap().len(), 2);
+        drop(service);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn enabling_sftp_auto_approval_preserves_pending_idempotency_binding() {
+        let effects = Arc::new(RecordingSideEffects::default());
+        let (service, path) = service_with(
+            Arc::new(EmptyBackend::ssh_runtime("runtime-1")),
+            effects.clone(),
+        );
+        let agent = caller(
+            ControlResourceKind::TerminalRuntime,
+            Some("runtime-1"),
+            ControlAccess::Control,
+        );
+        let request = runtime_request(
+            "transfer.enqueue",
+            json!({ "direction": "upload", "sourcePaths": ["first.txt"], "destinationDirectory": "/tmp" }),
+            None,
+        );
+        let pending = service.invoke(&agent, request.clone()).await.unwrap_err();
+        assert_eq!(pending.code, ControlErrorCode::ApprovalRequired);
+        let id = pending.details.unwrap()["approval"]["approvalId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        service
+            .database
+            .set_setting(AGENT_SFTP_ENABLED_SETTING, &true)
+            .unwrap();
+        let mut changed = request.clone();
+        changed.arguments["sourcePaths"] = json!(["changed.txt"]);
+        assert_eq!(
+            service.invoke(&agent, changed).await.unwrap_err().code,
+            ControlErrorCode::Conflict
+        );
+        let joined = service.invoke(&agent, request.clone()).await.unwrap_err();
+        assert_eq!(joined.code, ControlErrorCode::ApprovalRequired);
+        assert_eq!(joined.details.unwrap()["approval"]["approvalId"], id);
+        assert!(effects.enqueues.lock().unwrap().is_empty());
+        service.resolve_approval(&id, true).unwrap();
+        let mut approved = request;
+        approved.approval_id = Some(id);
+        service.invoke(&agent, approved).await.unwrap();
+        assert_eq!(effects.enqueues.lock().unwrap().len(), 1);
+        drop(service);
+        let _ = std::fs::remove_file(path);
+    }
+
+    async fn wait_for_pending_transfer(
+        service: &InProcessControlService,
+    ) -> PendingTransferApproval {
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if let Some(ticket) = service
+                    .pending_transfer_approvals()
+                    .unwrap()
+                    .into_iter()
+                    .next()
+                {
+                    return ticket;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("pending transfer should become visible")
+    }
+
+    #[tokio::test]
+    async fn agent_sftp_adapter_waits_then_automatically_queues_exact_approved_paths() {
+        let effects = Arc::new(RecordingSideEffects::default());
+        let (service, path) = service_with(
+            Arc::new(EmptyBackend::ssh_runtime("runtime-1")),
+            effects.clone(),
+        );
+        let adapter = crate::control_adapter::AuthenticatedControlAdapter::new(service.clone());
+        let agent = caller(
+            ControlResourceKind::TerminalRuntime,
+            Some("runtime-1"),
+            ControlAccess::Control,
+        );
+        let token = adapter.issue_token(agent).unwrap();
+        for (direction, allow) in [("upload", true), ("download", false)] {
+            let request = resource_request(
+                "transfer.enqueue",
+                ControlResourceKind::TerminalRuntime,
+                "runtime-1",
+                json!({ "direction": direction, "sourcePaths": ["file.txt"], "destinationDirectory": "/tmp" }),
+                direction,
+                None,
+            );
+            let call = {
+                let adapter = adapter.clone();
+                let token = token.clone();
+                let request = request.clone();
+                tokio::spawn(async move { adapter.invoke(&token, request).await })
+            };
+            let pending = wait_for_pending_transfer(&service).await;
+            assert!(!call.is_finished());
+            assert_eq!(pending.request.source_paths, vec!["file.txt"]);
+            assert!(pending.destination_paths[0].ends_with("file.txt"));
+            assert_eq!(
+                effects.enqueues.lock().unwrap().len(),
+                if allow { 0 } else { 1 }
+            );
+            service
+                .resolve_approval(&pending.approval.approval_id, allow)
+                .unwrap();
+            let result = call.await.unwrap();
+            assert_eq!(result.is_ok(), allow);
+            if allow {
+                assert_eq!(
+                    effects.enqueues.lock().unwrap()[0].destination_directory,
+                    "/tmp"
+                );
+                let count = effects.enqueues.lock().unwrap().len();
+                adapter.invoke(&token, request).await.unwrap();
+                assert_eq!(effects.enqueues.lock().unwrap().len(), count);
+            } else {
+                assert_eq!(result.unwrap_err().code, ControlErrorCode::ApprovalDenied);
+            }
+            assert!(service.pending_transfer_approvals().unwrap().is_empty());
+        }
+        drop(adapter);
+        drop(service);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn agent_sftp_cancellation_and_revoked_token_never_enqueue_a_transfer() {
+        let effects = Arc::new(RecordingSideEffects::default());
+        let (service, path) = service_with(
+            Arc::new(EmptyBackend::ssh_runtime("runtime-1")),
+            effects.clone(),
+        );
+        let adapter = crate::control_adapter::AuthenticatedControlAdapter::new(service.clone());
+        let agent = caller(
+            ControlResourceKind::TerminalRuntime,
+            Some("runtime-1"),
+            ControlAccess::Control,
+        );
+        for revoked in [false, true] {
+            let token = adapter.issue_token(agent.clone()).unwrap();
+            let request = resource_request(
+                "transfer.enqueue",
+                ControlResourceKind::TerminalRuntime,
+                "runtime-1",
+                json!({ "direction": "upload", "sourcePaths": ["file.txt"], "destinationDirectory": "/tmp" }),
+                if revoked { "revoked" } else { "cancelled" },
+                None,
+            );
+            let call = {
+                let adapter = adapter.clone();
+                let token = token.clone();
+                tokio::spawn(async move { adapter.invoke(&token, request).await })
+            };
+            let pending = wait_for_pending_transfer(&service).await;
+            if revoked {
+                adapter.revoke_token(&token).unwrap();
+                let result = tokio::time::timeout(std::time::Duration::from_secs(2), call)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(result.unwrap_err().code, ControlErrorCode::Unauthorized);
+            } else {
+                call.abort();
+                assert!(call.await.unwrap_err().is_cancelled());
+            }
+            assert!(service.pending_transfer_approvals().unwrap().is_empty());
+            assert!(
+                service
+                    .resolve_approval(&pending.approval.approval_id, true)
+                    .is_err()
+            );
+            assert!(effects.enqueues.lock().unwrap().is_empty());
+        }
+        drop(adapter);
+        drop(service);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn agent_sftp_opt_in_still_requires_remote_files_capability() {
+        let effects = Arc::new(RecordingSideEffects::default());
+        let mut backend = EmptyBackend::ssh_runtime("runtime-1");
+        backend.runtimes[0].capabilities.remote_files = false;
+        let (service, path) = service_with(Arc::new(backend), effects.clone());
+        service
+            .database
+            .set_setting(AGENT_SFTP_ENABLED_SETTING, &true)
+            .unwrap();
+        let agent = caller(
+            ControlResourceKind::TerminalRuntime,
+            Some("runtime-1"),
+            ControlAccess::Control,
+        );
+        let request = runtime_request(
+            "transfer.enqueue",
+            json!({
+                "direction": "upload", "sourcePaths": ["file.txt"], "destinationDirectory": "/tmp"
+            }),
+            None,
+        );
+        assert!(service.invoke(&agent, request).await.is_err());
+        assert!(effects.enqueues.lock().unwrap().is_empty());
         drop(service);
         let _ = std::fs::remove_file(path);
     }

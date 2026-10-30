@@ -711,7 +711,24 @@ export interface TerminalUiDiagnosticEvent {
   reason?: string
 }
 
+export interface PendingTransferApproval {
+  approval: {
+    approvalId: string
+    callerId: string
+    expiresAt: string
+  }
+  request: TransferRequest
+  destinationPaths: string[]
+  callerName: string
+  targetName: string
+  muxSessionId?: string | null
+}
+
 export interface AppApi {
+  transferApprovals: {
+    list(): Promise<PendingTransferApproval[]>
+    resolve(approvalId: string, approved: boolean): Promise<void>
+  }
   platform: Platform
   system: {
     openExternal(url: string): Promise<void>
@@ -906,6 +923,8 @@ export interface AppApi {
     getUiTheme(): Promise<UiTheme>
     saveUiTheme(theme: UiTheme): Promise<UiTheme>
     getRemoteAgentIntegrationEnabled(): Promise<boolean>
+    getAgentSftpEnabled(): Promise<boolean>
+    saveAgentSftpEnabled(enabled: boolean): Promise<boolean>
     getAgentLaunch(): Promise<AgentLaunchSettings>
     saveAgentLaunch(settings: AgentLaunchSettings): Promise<AgentLaunchSettings>
     saveRemoteAgentIntegrationEnabled(enabled: boolean): Promise<boolean>

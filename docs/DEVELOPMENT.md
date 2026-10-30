@@ -1,6 +1,6 @@
 # Luna Mux 开发文档
 
-Luna Mux 基于 Tauri 2、React、xterm.js 和 Rust 开发，首版同步支持 macOS 和 Windows。安装包需要在对应目标平台原生构建。
+本文说明 Luna Mux 的开发环境、检查命令、打包和发布流程。项目基于 Tauri 2、React、xterm.js 和 Rust，支持 macOS 和 Windows；安装包在对应目标平台原生构建。
 
 本文中的命令均在仓库根目录执行，也就是包含 `package.json` 的目录。
 
@@ -18,8 +18,8 @@ docs/         架构、开发和设计资料
 
 ## 开发环境
 
-- Node.js 24 和 npm，推荐使用 [fnm](https://github.com/Schniz/fnm) 管理。仓库根目录的 `.node-version` 已固定主版本。
-- Rust stable 1.85 或更高版本。项目使用 Rust 2024 edition，推荐通过 [rustup](https://rustup.rs/) 安装。
+- Node.js 24 和 npm，使用 [fnm](https://github.com/Schniz/fnm) 管理，版本以仓库根目录的 `.node-version` 为准。
+- 当前 Rust stable 工具链，通过 [rustup](https://rustup.rs/) 安装和更新。项目使用 Rust 2024 edition，编译器版本须满足锁定依赖的要求。
 - macOS 需要 Xcode Command Line Tools。
 - Windows 需要 Microsoft C++ Build Tools、Windows SDK、WebView2 Runtime 和 NASM（`aws-lc-sys` 的 native crypto 构建依赖）。
 
@@ -92,7 +92,7 @@ rustc --version
 cargo --version
 ```
 
-`node --version` 应为 `v24.x`，`rustc` 应为 1.85 或更高版本。首次安装依赖需要访问 npm registry 和 crates.io。
+`node --version` 应与 `.node-version` 匹配。如果 Rust 版本不满足依赖要求，运行 `rustup update stable`。首次安装依赖需要访问 npm registry 和 crates.io。
 
 ## 启动开发环境
 
@@ -113,8 +113,6 @@ Web 页面离开 Tauri Runtime 后无法完整使用本地数据库、SSH、SFTP
 
 开发启动不需要环境变量或 API Key。AI 命令助手为可选功能，可以在应用的“设置 → AI”中配置 OpenAI 兼容服务。
 
-> Luna Mux 使用独立应用标识 `com.luna.mux`、数据库和系统凭据命名空间，不会自动读取或修改 Luna Remote 数据。
-
 ## 多语言
 
 界面文案集中在 `app/frontend/src/locales/`，组件只引用稳定的词条 key，不直接保存中英文文案。
@@ -134,7 +132,7 @@ npm run i18n:check
 
 ## 检查
 
-AI 协作开发、变更分级、架构验收条件、测试矩阵和独立 Review 要求见 [AI 协作开发规范](AI_DEVELOPMENT_GUIDELINES.md)。涉及跨模块或运行时行为的修改，提交前应按规范执行相应级别的验证。
+验证范围以 [AI 协作开发规范](AI_DEVELOPMENT_GUIDELINES.md) 中的变更分级为准。以下是常用的完整检查入口；文档、样式和局部行为修改按对应级别执行相关检查即可。
 
 ```bash
 npm run check
@@ -142,21 +140,13 @@ npm test
 npm run web:build
 ```
 
-`npm run check` 会依次校验产品元数据、终端 Runtime 契约、图标、多语言、TypeScript 类型并执行 Rust `cargo check`；`npm test` 运行 Rust 单元测试，`npm run web:build` 验证前端生产构建。提交代码前应保证三条命令全部通过。
+`npm run check` 校验产品元数据、终端 Runtime 契约、图标和多语言，运行终端相关脚本测试、TypeScript 类型检查及 Rust `cargo check`；`npm test` 运行 Rust 测试，`npm run web:build` 验证前端生产构建。
 
 ## 打包
 
 Tauri 安装包必须在目标平台原生构建，产物位于 `app/native/target/release/bundle/`。未配置证书时会生成未签名安装包。正式分发前应配置 Apple Developer ID、公证和 Windows 代码签名。
 
-GitHub Actions 和默认开发环境使用 crates.io。首次构建或 `package-lock.json` 变化后执行一次下面的命令。
-
-```bash
-fnm use
-npm ci
-rustup default stable
-```
-
-日常重新打包不需要重复安装依赖，也不需要临时修改 Cargo 配置。
+首次构建前先完成[安装项目依赖](#安装项目依赖)。`package-lock.json` 变化后重新运行 `npm ci`；日常重新打包不需要重复安装依赖。GitHub Actions 默认使用 crates.io，本地镜像配置见常见问题。
 
 ### macOS
 
@@ -220,28 +210,12 @@ git push origin v1.0.0
 
 ### Release Note 规范
 
-Release Note 是写给使用 Luna Mux 的用户看的，不是提交记录或内部实现清单。正文应先说明这次升级能解决什么问题、适合什么使用场景，再介绍主要变化。只有当技术细节会影响安装、兼容性、数据、安全或用户操作时，才需要写入。
+Release Note 面向用户，说明升级带来的功能、修复和兼容性变化。推荐包含版本标题、简短摘要、“新增与改进”、“安装包说明”及上一版本到当前版本的 GitHub Compare 链接。
 
-推荐使用以下结构：
-
-1. `# Luna Mux vX.Y.Z` 标题。
-2. 一段简短摘要，概括这次升级给用户带来的整体价值。
-3. `### 新增与改进`，列出本版本所有有意义、用户可感知的变化。
-4. `### 安装包说明`，说明 macOS 架构、Windows 标准版与 WebView2 兼容版的选择。
-5. 上一版本到当前版本的 GitHub Compare 链接。
-
-每条变化应先客观说明功能或行为，再说明它对用户的影响。例如写“恢复窗格后滚轮仍可正常使用”，而不是“修复 xterm SGR 编码序列化”；写“完全访问模式下 Agent 状态提示更准确”，而不是罗列 Hook 字段和内部状态转换。
-
-编写时遵循以下原则：
-
-- 按用户任务和体验归类多个相关提交，不逐条复述 commit、文件、模块、函数或测试名称。
-- 不为控制篇幅设定固定条数。更新较多时可以完整列出，但应合并重复或高度相关的内容，不遗漏重要功能、修复和兼容性变化。
-- 优先说明新增能力、明显的体验改进、用户可感知的修复，以及需要用户采取行动的兼容性变化。
-- 保持克制、准确、事实导向的语气，沿用“新增与改进”等中性标题。避免“本次亮点”“一眼认出”“全面提升”“更加顺手”等宣传性或夸张表达。
-- 对平台限定、迁移步骤、已知限制或可能影响现有工作流的行为给出明确说明。
-- 使用用户界面中的名称和简洁语言；无法避免的术语应同时说明它对用户意味着什么。
-- 不把“重构、升级依赖、补测试、修改协议字段”单独写成亮点，除非它直接改变用户体验或安全边界。
-- 不夸大未经验证的效果。发布前根据版本 diff 和测试结果核对每条说明，并确认版本号和 Compare 链接正确。
+- 按用户任务合并相关变化，完整覆盖有意义的功能、修复和兼容性影响，不逐条复述提交或内部实现，也不限定条数。
+- 使用界面名称和克制、准确的语言；技术细节仅在影响安装、数据、安全或用户操作时说明。
+- 明确平台限制、迁移步骤和已知限制，不夸大未经验证的效果。
+- 发布前依据版本 diff 和测试结果核对说明、版本号及 Compare 链接。
 
 标签工作流在 Release 尚不存在时会自动生成说明，但正式版本应使用人工审阅的 Release Note：可以在推送标签后立即创建同名 Release，或在工作流完成后编辑自动生成的正文。工作流发现已有 Release 时只上传安装包，不会覆盖正文。
 
