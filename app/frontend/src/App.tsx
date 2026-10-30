@@ -13,7 +13,7 @@ import { HelpDialog } from './components/HelpDialog'
 import { FileDialog } from './components/FileDialog'
 import { BrowserResourceCard, type BrowserResourceState } from './components/BrowserResourceCard'
 import { AgentWorkbench } from './components/AgentWorkbench'
-import { TransferApprovalCards, TransferApprovalDialog, TransferApprovalNotice, useTransferApprovals, type TransferApprovalsState } from './components/TransferApprovalCards'
+import { TransferApprovalCards, TransferApprovalNotice, useTransferApprovals, type TransferApprovalsState } from './components/TransferApprovalCards'
 import { colorWithOpacity, terminalBackgroundStyle } from './terminal-style'
 import { availableLanguages, getNativeMenuLabels, useI18n, type MessageKey } from './i18n'
 import { PRODUCT_INFO } from './product-info'
@@ -1741,7 +1741,6 @@ export function App(): React.JSX.Element {
       if (sessionId && muxSessions.some((session) => session.id === sessionId)) setActiveMuxSessionId(sessionId)
       setWorkspaceView('agents')
     }} />}
-     <TransferApprovalDialog state={transferApprovals} />
     {toast && <div className={`toast ${toastKind}`}>{toast}</div>}
   </div>
 }
