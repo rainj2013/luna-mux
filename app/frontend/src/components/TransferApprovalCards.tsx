@@ -91,7 +91,7 @@ export function TransferApprovalDialog({ state }: { state: TransferApprovalsStat
   const busy = state.busyIds.has(id)
   return <div className="modal-backdrop raised transfer-approval-modal">
     <section className="modal transfer-approval-dialog" role="dialog" aria-modal="true" aria-labelledby="transfer-approval-title">
-      <header><div className="transfer-approval-dialog-title"><span className="transfer-approval-dialog-icon"><ShieldCheck size={17} /></span><div><strong id="transfer-approval-title">{t('app.transferApprovals')}</strong><small>{item.callerName}</small></div></div><span className="transfer-approval-dialog-count">1 / {state.pending.length}</span></header>
+      <header><strong id="transfer-approval-title">{t('app.transferApprovals')}</strong><span>{item.callerName}</span></header>
       <div className="transfer-approval-dialog-body">
         <div className="transfer-approval-dialog-heading"><strong>{t(item.request.direction === 'upload' ? 'app.transferApprovalUpload' : 'app.transferApprovalDownload')}</strong><span>{item.targetName}</span></div>
         <div className="transfer-approval-files">
