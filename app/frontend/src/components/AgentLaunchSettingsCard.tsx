@@ -35,7 +35,7 @@ export function AgentLaunchSettingsCard(): React.JSX.Element {
     }
   }
   return <section className="browser-settings-page agent-launch-settings">
-    <header className="browser-page-heading"><h2>{t('app.agentLaunchDefaults')}</h2><p>{t('app.agentLaunchYoloHelp')}</p></header>
+    <header className="browser-page-heading"><h2>{t('app.agentLaunchTitle')}</h2><p>{t('app.agentLaunchYoloHelp')}</p></header>
     <div className="browser-tools-list">{([
       ['codexYolo', 'Codex', 'app.agentLaunchCodexHelp'],
       ['claudeCodeYolo', 'Claude Code', 'app.agentLaunchClaudeHelp']

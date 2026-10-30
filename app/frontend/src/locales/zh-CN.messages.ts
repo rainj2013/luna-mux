@@ -23,6 +23,7 @@ export default {
   "app.agentOverviewDescription": "当前会话中的 Agent 状态与待处理事项。",
   "app.agentSettingsNav": "默认启动模式",
   "app.agentLaunchDefaults": "Agent 设置",
+  "app.agentLaunchTitle": "Agent 启动模式",
   "app.agentLaunchYoloHelp": "选择在 Luna 终端中启动 Agent 时是否默认使用 YOLO 模式。",
   "app.agentLaunchCodexHelp": "默认以 YOLO 模式启动，跳过审批和沙箱。",
   "app.agentLaunchClaudeHelp": "默认以 YOLO 模式启动，跳过权限确认。",

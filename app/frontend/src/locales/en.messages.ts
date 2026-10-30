@@ -23,6 +23,7 @@ export default {
   "app.agentOverviewDescription": "Agent status and pending actions in the current session.",
   "app.agentSettingsNav": "Default launch mode",
   "app.agentLaunchDefaults": "Agent settings",
+  "app.agentLaunchTitle": "Agent launch mode",
   "app.agentLaunchYoloHelp": "Choose whether agents start in YOLO mode by default in Luna terminals.",
   "app.agentLaunchCodexHelp": "Start in YOLO mode by default, bypassing approvals and sandboxing.",
   "app.agentLaunchClaudeHelp": "Start in YOLO mode by default, skipping permission checks.",
