@@ -1573,10 +1573,20 @@ body.mux-split-resizing { cursor: col-resize; user-select: none; }
 .transfer-approval-file-heading { color: var(--text-muted); font-size: 11px; }
 .transfer-approval-notice { position: fixed; z-index: 85; right: 20px; bottom: 20px; display: flex; align-items: center; gap: 10px; max-width: calc(100vw - 40px); padding: 12px 16px; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-panel); box-shadow: 0 6px 20px var(--shadow); font-size: 12px; }
 .transfer-approval-notice > svg { flex: none; color: var(--text-muted); }
-.transfer-approval-dialog { width: min(560px, 100%); overflow: hidden; }
-.transfer-approval-dialog > header { align-items: baseline; }
-.transfer-approval-dialog > header > span { margin-left: auto; color: var(--text-muted); font-size: 12px; }
-.transfer-approval-dialog-body { display: grid; gap: 14px; padding: 17px; }
-.transfer-approval-dialog-heading { display: grid; gap: 5px; color: var(--text-strong); }
+.transfer-approval-dialog { width: min(640px, 100%); overflow: hidden; border-color: var(--border-strong); }
+.transfer-approval-dialog > header { min-height: 62px; height: auto; padding: 12px 17px; align-items: center; background: var(--surface); }
+.transfer-approval-dialog-title { min-width: 0; display: flex; align-items: center; gap: 10px; }
+.transfer-approval-dialog-title > div { min-width: 0; display: grid; gap: 3px; }
+.transfer-approval-dialog-title strong { color: var(--text-strong); font-size: 14px; }
+.transfer-approval-dialog-title small, .transfer-approval-dialog-count { color: var(--text-muted); font-size: 11px; }
+.transfer-approval-dialog-icon { width: 30px; height: 30px; display: grid; place-items: center; flex: none; color: var(--accent-text); border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--selection-bg); }
+.transfer-approval-dialog-count { margin-left: auto; }
+.transfer-approval-dialog-body { display: grid; gap: 16px; padding: 18px; }
+.transfer-approval-dialog-heading { display: grid; gap: 5px; padding: 2px 1px; color: var(--text-strong); }
+.transfer-approval-dialog-heading > strong { font-size: 15px; }
 .transfer-approval-dialog-heading > span { color: var(--text-muted); font-size: 12px; overflow-wrap: anywhere; }
+.transfer-approval-dialog .transfer-approval-files { gap: 8px; padding: 13px; background: var(--surface-muted); }
+.transfer-approval-dialog .transfer-approval-file { min-height: 28px; align-items: center; }
+.transfer-approval-dialog .transfer-approval-file code { color: var(--text-strong); font-size: 11px; }
+.transfer-approval-dialog .dialog-actions { margin: 2px -18px -18px; padding: 13px 18px 15px; border-top: 1px solid var(--border); background: var(--surface); }
 @media (max-width: 640px) { .transfer-approval-file { grid-template-columns: minmax(0, 1fr); } .transfer-approval-file-heading { display: none; } .transfer-approval-card { padding: 12px; } .transfer-approval-notice { flex-wrap: wrap; } }
