@@ -725,7 +725,7 @@ fn operation_routing_guidance(operation: &str) -> &'static str {
             " Operates on terminal Runtimes owned by Luna Mux Panes, including another Pane's bounded output/input, size, flow, interrupt, or close state. Use the normal shell tool instead when a command is merely part of the current coding task. This does not control a browser viewport or webpage console."
         }
         "transfer.enqueue" => {
-            " Enqueues SFTP uploads/downloads for a Luna Mux SSH terminal Runtime. Agent callers must first enable Agent SFTP authorization in desktop Agent settings; when disabled, this call returns an explanation and does not transfer files. Existing-file conflicts still use the transfer queue prompt. Use a stable idempotencyKey when retrying the exact same transfer. sourcePaths for uploads must exist on the computer running Luna Mux; paths on an SSH/WSL Agent host are not automatically local paths. Save generated content locally first, then upload it. destinationDirectory is a directory; each file keeps its source basename. Use transfers.list to observe progress."
+            " Enqueues SFTP uploads/downloads for a Luna Mux SSH terminal Runtime, not webpage uploads/downloads. Agent callers must first enable Agent SFTP authorization in desktop Agent settings; when disabled, this call returns an explanation and does not transfer files. Existing-file conflicts still use the transfer queue prompt. Use a stable idempotencyKey when retrying the exact same transfer. sourcePaths for uploads must exist on the computer running Luna Mux; paths on an SSH/WSL Agent host are not automatically local paths. Save generated content locally first, then upload it. destinationDirectory is a directory; each file keeps its source basename. Use transfers.list to observe progress."
         }
         "transfers.list" | "transfer.cancel" => {
             " Operates on Luna Mux's SFTP transfer queue attached to a terminal Runtime. Do not use for webpage uploads/downloads, HTTP requests, package downloads, or ordinary local file copies."
@@ -1266,9 +1266,9 @@ mod tests {
         });
         let description = tool.description.unwrap();
         assert!(!description.contains("This operation requires approval in the trusted desktop UI"));
-        assert!(description.contains("Agent > Settings"));
-        assert!(description.contains("this call automatically continues"));
-        assert!(description.contains("single-use approval"));
+        assert!(description.contains("Agent SFTP authorization"));
+        assert!(description.contains("when disabled"));
+        assert!(!description.contains("single-use approval"));
         assert!(description.contains("computer running Luna Mux"));
         let schema = Value::Object((*tool.input_schema).clone());
         assert_eq!(schema["required"], json!(["resourceId", "arguments"]));

@@ -81,21 +81,6 @@ impl ControlApprovalPolicy {
         Ok(approval)
     }
 
-    pub fn matching_transfer(
-        &self,
-        caller: &ControlCaller,
-        request: &ControlRequest,
-    ) -> ControlResult<Option<ControlApproval>> {
-        let mut approvals = self
-            .approvals
-            .lock()
-            .map_err(|_| internal_error("审批策略锁已损坏"))?;
-        for record in approvals.values_mut() {
-            expire(record);
-        }
-        matching_transfer(&approvals, caller, request)
-    }
-
     /// Only the trusted desktop IPC projects file paths; public events carry IDs only.
     pub fn pending_transfers(&self) -> ControlResult<Vec<(ControlApproval, serde_json::Value)>> {
         let mut approvals = self
