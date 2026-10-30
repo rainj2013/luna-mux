@@ -1141,6 +1141,19 @@ body.mux-split-resizing { cursor: col-resize; user-select: none; }
 .dialog-copy dt { color: var(--text-muted); }
 .dialog-copy dd { margin: 0; overflow-wrap: anywhere; font-family: Consolas, monospace; }
 .path-line { padding: 9px; overflow-wrap: anywhere; border: 1px solid var(--border); border-radius: 5px; background: var(--surface-subtle); font-family: Consolas, monospace; }
+.conflict-dialog { width: min(520px, 100%); overflow: hidden; }
+.conflict-dialog-body { display: grid; gap: 16px; padding: 18px; }
+.conflict-heading { display: flex; align-items: flex-start; gap: 11px; }
+.conflict-heading > div { min-width: 0; display: grid; gap: 5px; }
+.conflict-heading strong { color: var(--text-strong); font-size: 14px; }
+.conflict-heading span:not(.conflict-icon) { color: var(--text-muted); font-size: 12px; line-height: 1.5; }
+.conflict-icon { width: 32px; height: 32px; display: grid; place-items: center; flex: none; color: var(--warning); border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--selection-bg); }
+.conflict-path { display: grid; gap: 7px; padding: 11px 12px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface-muted); }
+.conflict-path small { color: var(--text-muted); font-size: 11px; }
+.conflict-path code { color: var(--text-strong); font: 12px/1.5 Consolas, monospace; overflow-wrap: anywhere; }
+.conflict-batch-option { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: 12px; }
+.conflict-batch-option input { accent-color: var(--accent); }
+.conflict-dialog .dialog-actions { margin: 0 -18px -18px; padding: 13px 18px 15px; border-top: 1px solid var(--border); background: var(--surface); }
 .toast { position: fixed; z-index: 200; left: 50%; bottom: 155px; max-width: min(600px, 80vw); padding: 10px 14px; transform: translateX(-50%); color: var(--on-accent); border-radius: var(--radius-panel); background: var(--danger-fill); box-shadow: 0 8px 26px #0004; font-size: 12px; }
 .toast.success { background: var(--success-fill); }
 

@@ -212,6 +212,8 @@ export default {
   "database.testSuccess": "连接测试成功。",
   "database.launcherHint": "SQLite、MySQL / MariaDB、PostgreSQL",
   "app.aFileWithThisNameAlreadyExists": "目标位置已有同名文件",
+  "app.fileConflictDescription": "请选择处理方式，然后继续文件传输。",
+  "app.destinationPath": "目标路径",
   "app.about": "关于",
   "app.aboutDescription": "面向编码 Agent 的本地与远程终端工作台",
   "app.alreadyLatestVersion": "当前已是最新版本（{{value0}}）",

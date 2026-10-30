@@ -212,6 +212,8 @@ export default {
   "database.testSuccess": "Connection test succeeded.",
   "database.launcherHint": "SQLite, MySQL / MariaDB, PostgreSQL",
   "app.aFileWithThisNameAlreadyExists": "A file with this name already exists",
+  "app.fileConflictDescription": "Choose how to handle this file before the transfer continues.",
+  "app.destinationPath": "Destination",
   "app.about": "About",
   "app.aboutDescription": "A local and remote terminal workspace for coding agents",
   "app.alreadyLatestVersion": "You are using the latest version ({{value0}})",
