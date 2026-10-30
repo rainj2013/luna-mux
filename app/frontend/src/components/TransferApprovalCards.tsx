@@ -83,6 +83,29 @@ export function TransferApprovalCards({ state }: { state: TransferApprovalsState
   </section>
 }
 
+export function TransferApprovalDialog({ state }: { state: TransferApprovalsState }): React.JSX.Element | null {
+  const { t } = useI18n()
+  const item = state.pending[0]
+  if (!item) return null
+  const id = item.approval.approvalId
+  const busy = state.busyIds.has(id)
+  return <div className="modal-backdrop raised transfer-approval-modal">
+    <section className="modal transfer-approval-dialog" role="dialog" aria-modal="true" aria-labelledby="transfer-approval-title">
+      <header><strong id="transfer-approval-title">{t('app.transferApprovals')}</strong><span>{item.callerName}</span></header>
+      <div className="transfer-approval-dialog-body">
+        <div className="transfer-approval-dialog-heading"><strong>{t(item.request.direction === 'upload' ? 'app.transferApprovalUpload' : 'app.transferApprovalDownload')}</strong><span>{item.targetName}</span></div>
+        <div className="transfer-approval-files">
+          <div className="transfer-approval-file-heading"><span>{t('app.transferApprovalSource')}</span><span /><span>{t('app.transferApprovalDestination')}</span></div>
+          {item.request.sourcePaths.map((path, index) => <div className="transfer-approval-file" key={index}><code>{path}</code><ArrowRight size={14} aria-hidden="true" /><code>{item.destinationPaths[index]}</code></div>)}
+        </div>
+        <p className="transfer-approval-help">{t('app.transferApprovalOnce', { time: new Date(item.approval.expiresAt).toLocaleTimeString() })}</p>
+        {state.error && <div className="browser-resource-error" role="alert">{state.error}</div>}
+        <div className="dialog-actions"><button type="button" className="secondary-button" disabled={busy} onClick={() => void state.resolve(id, false)}>{t('app.transferApprovalReject')}</button><button type="button" className="primary-button" disabled={busy} onClick={() => void state.resolve(id, true)}>{t('app.transferApprovalAllow')}</button></div>
+      </div>
+    </section>
+  </div>
+}
+
 export function TransferApprovalNotice({ count, onOpen }: { count: number; onOpen(): void }): React.JSX.Element {
   const { t } = useI18n()
   return <div className="transfer-approval-notice" role="status"><ShieldAlert size={18} /><span>{t('app.transferApprovalNotice', { count })}</span><button type="button" className="text-button" onClick={onOpen}>{t('app.transferApprovalView')}</button></div>
