@@ -60,8 +60,9 @@ dmgs=(app/native/target/"$target"/release/bundle/dmg/*.dmg)
 app=${apps[0]}
 dmg=${dmgs[0]}
 codesign --verify --deep --strict "$app"
-codesign -dv "$app" 2>&1 | grep -F -- "Authority=$APPLE_SIGNING_IDENTITY" >/dev/null || fail 'App has an unexpected signing identity.'
-codesign -dv "$app" 2>&1 | grep -E 'flags=.*runtime' >/dev/null || fail 'App is missing hardened runtime.'
+signature_details=$(codesign -dvv "$app" 2>&1)
+grep -Fx -- "Authority=$APPLE_SIGNING_IDENTITY" <<< "$signature_details" >/dev/null || fail 'App has an unexpected signing identity.'
+grep -E 'flags=.*runtime' <<< "$signature_details" >/dev/null || fail 'App is missing hardened runtime.'
 # Check the signed helper without starting a browser.
 "$app/Contents/MacOS/agent-browser" --version
 codesign --force --sign "$APPLE_SIGNING_IDENTITY" --timestamp "$dmg"

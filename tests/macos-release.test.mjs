@@ -49,9 +49,11 @@ if (command === 'npm') {
 }
 if (command === 'codesign') {
   record('codesign ' + sub)
-  if (sub === '-dv') {
-    console.error('Authority=' + process.env.APPLE_SIGNING_IDENTITY)
-    console.error('flags=0x10000(runtime)')
+  if (sub === '-dvv') {
+    console.error('Authority=' + (process.env.MOCK_SIGNER || process.env.APPLE_SIGNING_IDENTITY))
+  }
+  if (sub === '-dv' || sub === '-dvv') {
+    console.error(process.env.MOCK_HARDENED === '0' ? 'flags=0x0(none)' : 'flags=0x10000(runtime)')
   }
 }
 if (command === 'xcrun') {
@@ -130,6 +132,11 @@ releaseTest('accepted notarization verifies and collects only the DMG, then remo
   assert.match(result.events, /security delete-keychain/)
 })
 
+test('native codesign includes certificate authorities at verbosity two', { skip: process.platform !== 'darwin' }, async () => {
+  const { stderr } = await exec('/usr/bin/codesign', ['-dvv', '/usr/bin/true'])
+  assert.match(stderr, /^Authority=/m)
+})
+
 for (const [name, overrides] of [
   ['missing credentials', { APPLE_API_PRIVATE_KEY: '' }],
   ['failed certificate import', { MOCK_IMPORT_FAIL: '1' }],
@@ -137,6 +144,8 @@ for (const [name, overrides] of [
   ['notarization timeout', { MOCK_NOTARY_STATUS: 'In Progress', MOCK_NOTARY_TIMEOUT: '1' }],
   ['cancellation during notarization', { MOCK_NOTARY_BLOCK: '1' }],
   ['signature verification failure', { MOCK_FAIL_TOOL: 'codesign' }],
+  ['unexpected signing identity', { MOCK_SIGNER: 'Developer ID Application: Test (FAKE_TEAM) extra' }],
+  ['missing hardened runtime', { MOCK_HARDENED: '0' }],
   ['ticket validation failure', { MOCK_FAIL_TOOL: 'stapler' }],
   ['Gatekeeper failure', { MOCK_FAIL_TOOL: 'spctl' }],
   ['DMG verification failure', { MOCK_FAIL_TOOL: 'hdiutil' }]
