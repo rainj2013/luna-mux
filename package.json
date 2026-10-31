@@ -28,7 +28,7 @@
     "terminal-renderer:test": "node --experimental-strip-types --test tests/terminal-renderer.test.mts",
     "terminal-snapshot:test": "node --experimental-strip-types --test tests/terminal-snapshot.test.mts",
     "dsh-tui:test": "node --test tests/dsh-tui-bridge.test.mjs tests/dsh-tui-terminal-compat.test.mjs",
-    "macos-release:test": "node --test tests/macos-release.test.mjs",
+    "macos-release:test": "node --test tests/macos-release.test.mjs tests/macos-notarization-source.test.mjs",
     "agent-browser:sync": "node scripts/sync-agent-browser-sidecar.mjs",
     "conpty:sync": "node scripts/sync-windows-conpty.mjs",
     "precheck": "npm run conpty:sync",

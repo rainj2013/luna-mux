@@ -19,3 +19,4 @@ tmp/
 *.p12
 *.pfx
 *.key.pem
+__pycache__/

@@ -15,6 +15,9 @@ jobs:
     runs-on: ${{ matrix.runner }}
     environment: macos-release
     timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read
     strategy:
       fail-fast: false
       matrix:
@@ -42,9 +45,18 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ARCH: ${{ matrix.arch }}
         run: |
           xcodebuild -version
           xcrun notarytool history --help | grep -q 'Individual API Keys'
+          if [[ "$GITHUB_RUN_ATTEMPT" -gt 1 ]]; then
+            artifacts=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" --paginate --jq '.artifacts[].name')
+            if grep -Fx "notarization-pending-macos-$RELEASE_ARCH" <<< "$artifacts" >/dev/null; then
+              echo '::error::A signed checkpoint already exists. Use Resume macOS notarization with this run ID; do not rebuild or resubmit.'
+              exit 1
+            fi
+          fi
           for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_API_KEY APPLE_API_PRIVATE_KEY; do
             if [[ -z "${!name}" ]]; then
               echo "::error::Missing macos-release environment secret: $name"
@@ -81,7 +93,7 @@ jobs:
       - name: Build application
         run: npm run build -- --no-bundle --target "${{ matrix.target }}"
 
-      - name: Sign, notarize, and collect DMG
+      - name: Sign and submit DMG once
         shell: bash
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -91,6 +103,27 @@ jobs:
           APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
         run: bash scripts/release-macos.sh "${{ matrix.target }}" "${{ matrix.arch }}"
 
+      - name: Save signed notarization checkpoint
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: notarization-pending-macos-${{ matrix.arch }}
+          path: |
+            notarization-pending/${{ matrix.arch }}/*.dmg
+            notarization-pending/${{ matrix.arch }}/app.zip
+            notarization-pending/${{ matrix.arch }}/manifest.json
+          if-no-files-found: ignore
+          compression-level: 0
+          retention-days: 14
+
+      - name: Wait for Apple and finalize DMG
+        shell: bash
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+        run: bash scripts/finalize-macos-notarization.sh "${{ matrix.target }}" "${{ matrix.arch }}"
+
       - name: Clean up signing material
         if: always()
         shell: bash
@@ -99,6 +132,10 @@ jobs:
           for directory in "$RUNNER_TEMP"/luna-macos-signing.*; do
             [[ -d "$directory" ]] || continue
             security delete-keychain "$directory/signing.keychain-db" 2>/dev/null || true
+            rm -rf "$directory"
+          done
+          for directory in "$RUNNER_TEMP"/luna-macos-notary.*; do
+            [[ -d "$directory" ]] || continue
             rm -rf "$directory"
           done
 
@@ -212,10 +249,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
+          files=(release-assets/Luna-Mux_macos-x64.dmg release-assets/Luna-Mux_macos-arm64.dmg release-assets/Luna-Mux_windows-x64-setup.exe release-assets/Luna-Mux_windows-x64-with-webview2-setup.exe)
+          for file in "${files[@]}"; do
+            test -s "$file"
+          done
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" release-assets/* --clobber
+            gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber
+            if [[ "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq 'if .isDraft then "draft" else "published" end')" == draft ]]; then
+              gh release edit "$GITHUB_REF_NAME" --draft=false
+            fi
           else
-            gh release create "$GITHUB_REF_NAME" release-assets/* \
+            gh release create "$GITHUB_REF_NAME" "${files[@]}" \
               --verify-tag \
               --generate-notes \
               --title "Luna Mux $GITHUB_REF_NAME"

@@ -10,10 +10,13 @@ fail() { echo "::error::$*" >&2; exit 1; }
 [[ $# -eq 2 ]] || fail 'Usage: release-macos.sh <target> <arch>'
 target=$1
 arch=$2
+script_dir=$(cd "$(dirname "$0")" && pwd)
 case "$target/$arch" in
   x86_64-apple-darwin/x64|aarch64-apple-darwin/arm64) ;;
   *) fail 'Unsupported macOS release target.' ;;
 esac
+checkpoint="notarization-pending/$arch"
+[[ ! -e "$checkpoint/manifest.json" ]] || fail 'A submitted checkpoint already exists; use the notarization resume workflow.'
 for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_API_KEY APPLE_API_PRIVATE_KEY RUNNER_TEMP; do
   [[ -n "${!name:-}" ]] || fail "Missing signing variable: $name"
 done
@@ -67,25 +70,15 @@ grep -E 'flags=.*runtime' <<< "$signature_details" >/dev/null || fail 'App is mi
 "$app/Contents/MacOS/agent-browser" --version
 codesign --force --sign "$APPLE_SIGNING_IDENTITY" --timestamp "$dmg"
 codesign --verify --strict "$dmg"
-
-# Individual API keys must omit --issuer. Do not use shell tracing here.
-xcrun notarytool submit "$dmg" --key "$signing_dir/notary.p8" --key-id "$APPLE_API_KEY" \
-  --wait --timeout 30m --output-format json > "$signing_dir/notary-result.json"
-python3 - "$signing_dir/notary-result.json" <<'PY'
-import json, sys
-with open(sys.argv[1]) as result_file:
-    result = json.load(result_file)
-print(f"Notarization: {result.get('status', 'unknown')} (submission {result.get('id', 'unknown')})")
-if result.get('status') != 'Accepted':
-    raise SystemExit('Apple did not accept this release; no artifact will be uploaded.')
-PY
-rm "$signing_dir/notary.p8"
-xcrun stapler staple "$app"
-xcrun stapler validate "$app"
-xcrun stapler staple "$dmg"
-xcrun stapler validate "$dmg"
-spctl --assess --type execute --verbose=2 "$app"
-spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"
 hdiutil verify "$dmg"
-mkdir -p release-assets
-cp "$dmg" "release-assets/Luna-Mux_macos-$arch.dmg"
+
+# Persist exact signed bytes before waiting; this directory contains no keys.
+mkdir -p "$checkpoint"
+cp "$dmg" "$checkpoint/Luna-Mux_macos-$arch.dmg"
+ditto -c -k --keepParent "$app" "$checkpoint/app.zip"
+# Individual API keys must omit --issuer. Submit exactly once, without --wait.
+xcrun notarytool submit "$checkpoint/Luna-Mux_macos-$arch.dmg" --key "$signing_dir/notary.p8" --key-id "$APPLE_API_KEY" \
+  --output-format json > "$signing_dir/notary-result.json"
+submission_id=$(python3 "$script_dir/macos-notarization-checkpoint.py" create "$checkpoint" "$target" "$arch" "$signing_dir/notary-result.json" "$(basename "$app")")
+echo "Apple notarization submission: $submission_id"
+echo 'Upload the signed checkpoint before waiting for Apple. It contains no signing credentials.'
