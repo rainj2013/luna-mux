@@ -42,6 +42,10 @@ if (command === 'npm') {
   fs.mkdirSync(root + '/dmg', { recursive: true })
   fs.writeFileSync(bin + '/agent-browser', '#!/bin/bash\\necho agent-browser-test\\n', { mode: 0o755 })
   fs.writeFileSync(root + '/dmg/Luna Mux.dmg', 'signed installer fixture')
+  // Tauri removes the intermediate .app when only the DMG was requested.
+  if (!args[args.indexOf('--bundles') + 1].split(',').includes('app')) {
+    fs.rmSync(root + '/macos', { recursive: true })
+  }
 }
 if (command === 'codesign') {
   record('codesign ' + sub)

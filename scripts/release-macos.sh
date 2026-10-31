@@ -50,7 +50,8 @@ rm "$signing_dir/certificate.p12"
 unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_API_PRIVATE_KEY keychain_password
 unset APPLE_API_ISSUER APPLE_API_KEY_PATH APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID
 export APPLE_SIGNING_IDENTITY
-npm exec tauri bundle -- --bundles dmg --target "$target"
+# Request both outputs: a DMG-only bundle deletes its intermediate .app.
+npm exec tauri bundle -- --bundles app,dmg --target "$target"
 
 shopt -s nullglob
 apps=(app/native/target/"$target"/release/bundle/macos/*.app)
