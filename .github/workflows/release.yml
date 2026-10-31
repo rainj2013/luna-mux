@@ -13,6 +13,8 @@ jobs:
   build-macos:
     name: macOS ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
+    environment: macos-release
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -24,31 +26,51 @@ jobs:
             runner: macos-15
             target: aarch64-apple-darwin
     env:
-      APPLE_SIGNING_IDENTITY: "-"
       CARGO_INCREMENTAL: "0"
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Check signing configuration
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+        run: |
+          xcodebuild -version
+          xcrun notarytool history --help | grep -q 'Individual API Keys'
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_API_KEY APPLE_API_PRIVATE_KEY; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Missing macos-release environment secret: $name"
+              exit 1
+            fi
+          done
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 24
           cache: npm
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           targets: ${{ matrix.target }}
 
       - name: Cache agent-browser sidecar
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: app/native/binaries
           key: agent-browser-${{ matrix.target }}-${{ hashFiles('scripts/sync-agent-browser-sidecar.mjs') }}
 
       - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: app/native -> target
           shared-key: ${{ matrix.target }}
@@ -56,23 +78,32 @@ jobs:
       - name: Install dependencies
         run: npm ci --prefer-offline --no-audit --no-fund
 
-      - name: Build DMG
-        run: npm run build:mac -- --target "${{ matrix.target }}"
+      - name: Build application
+        run: npm run build -- --no-bundle --target "${{ matrix.target }}"
 
-      - name: Collect DMG
+      - name: Sign, notarize, and collect DMG
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+        run: bash scripts/release-macos.sh "${{ matrix.target }}" "${{ matrix.arch }}"
+
+      - name: Clean up signing material
+        if: always()
         shell: bash
         run: |
-          shopt -s nullglob
-          files=(app/native/target/${{ matrix.target }}/release/bundle/dmg/*.dmg)
-          if [[ ${#files[@]} -ne 1 ]]; then
-            echo "Expected one DMG, found ${#files[@]}"
-            exit 1
-          fi
-          mkdir -p release-assets
-          cp "${files[0]}" "release-assets/Luna-Mux_macos-${{ matrix.arch }}.dmg"
+          # Also runs if the signing process was cancelled before its EXIT trap.
+          for directory in "$RUNNER_TEMP"/luna-macos-signing.*; do
+            [[ -d "$directory" ]] || continue
+            security delete-keychain "$directory/signing.keychain-db" 2>/dev/null || true
+            rm -rf "$directory"
+          done
 
       - name: Upload macOS artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: release-macos-${{ matrix.arch }}
           path: release-assets/*.dmg

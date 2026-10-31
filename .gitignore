@@ -13,3 +13,9 @@ app/native/gen/schemas/
 tmp/
 *.log
 .DS_Store
+
+# Apple signing credentials belong outside the repository.
+*.p8
+*.p12
+*.pfx
+*.key.pem

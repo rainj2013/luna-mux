@@ -4453,10 +4453,12 @@ mod tests {
             Some("runtime-1"),
             ControlAccess::Control,
         );
+        // Local transfer paths use the host's separators; remote paths remain POSIX.
+        let local_directory = std::env::temp_dir().join("luna-agent-sftp-test");
         let mut upload = runtime_request(
             "transfer.enqueue",
             json!({
-                "direction": "upload", "sourcePaths": ["C:\\work\\main.rs"], "destinationDirectory": "/tmp/project"
+                "direction": "upload", "sourcePaths": [local_directory.join("main.rs")], "destinationDirectory": "/tmp/project"
             }),
             None,
         );
@@ -4497,7 +4499,7 @@ mod tests {
         assert_eq!(effects.enqueues.lock().unwrap().len(), 1);
         let mut download = upload.clone();
         download.idempotency_key = Some("sftp-download".into());
-        download.arguments = json!({ "direction": "download", "sourcePaths": ["/tmp/results.txt"], "destinationDirectory": "C:\\work" });
+        download.arguments = json!({ "direction": "download", "sourcePaths": ["/tmp/results.txt"], "destinationDirectory": local_directory });
         service.invoke(&agent, download).await.unwrap();
         assert_eq!(effects.enqueues.lock().unwrap().len(), 2);
 

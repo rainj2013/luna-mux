@@ -219,7 +219,37 @@ Release notes explain user-visible features, fixes, and compatibility changes. I
 
 The tag workflow generates notes automatically when no Release exists, but an official release should use reviewed notes. Create the matching Release immediately after pushing the tag, or edit the generated body after the workflow finishes. When the Release already exists, the workflow uploads installers without replacing its body.
 
-macOS installers use ad-hoc signing and do not require an Apple developer certificate. They are not notarized, so first-time users still need to confirm in "Privacy & Security" settings. Windows installers are unsigned, so the system may show an unknown publisher or SmartScreen prompt.
+macOS release installers are signed with a Developer ID Application certificate and notarized by Apple. The workflow verifies signatures, notarization tickets, and Gatekeeper before uploading a DMG. Missing credentials or failed verification stop the macOS release; there is no fallback to ad-hoc signing. Windows installers are unsigned, so the system may show an unknown publisher or SmartScreen prompt.
+
+### macOS signing credentials
+
+Create a `macos-release` environment under **Settings → Environments**, restricting deployment sources to the `master` branch and `v*` tags (add separate Branch and Tag rules). Select `master` for manual builds. Add the following environment Secrets; never put them in repository files, ordinary Variables, issues, or logs:
+
+| Secret | Value |
+| --- | --- |
+| `APPLE_CERTIFICATE` | Base64-encoded encrypted `.p12` containing the Developer ID Application certificate and its private key |
+| `APPLE_CERTIFICATE_PASSWORD` | Export password for that `.p12` |
+| `APPLE_SIGNING_IDENTITY` | Full certificate name, such as `Developer ID Application: Your Name (TEAMID)` |
+| `APPLE_API_KEY` | Key ID of an App Store Connect **individual API key** |
+| `APPLE_API_PRIVATE_KEY` | Complete text of that individual key's `.p8` file |
+
+Export the certificate and private key from Keychain Access as a password-protected `.p12`. Generate the Base64 file outside the repository and set Secrets through standard input, keeping their contents out of command arguments and terminal output. For example, with files under `~/keys`:
+
+```bash
+openssl base64 -A -in ~/keys/DeveloperIDApplication.p12 -out ~/keys/certificate-base64.txt
+gh secret set APPLE_CERTIFICATE --env macos-release < ~/keys/certificate-base64.txt
+gh secret set APPLE_CERTIFICATE_PASSWORD --env macos-release
+gh secret set APPLE_SIGNING_IDENTITY --env macos-release
+gh secret set APPLE_API_KEY --env macos-release
+gh secret set APPLE_API_PRIVATE_KEY --env macos-release < ~/keys/ApiKey_EXAMPLE.p8
+gh secret list --env macos-release
+```
+
+Commands without redirection prompt interactively. `gh secret list` shows names and update times, never values. Base64 is an encoding, not encryption; local files should also be readable only by their owner.
+
+The workflow installs dependencies and compiles before `scripts/release-macos.sh` restores credentials under `$RUNNER_TEMP`, imports a dedicated temporary keychain, and bundles the app. This flow uses an individual API key and explicitly selects Xcode 26.3 (individual keys require Xcode 26 or newer). It omits the Issuer ID and bypasses Tauri's built-in team-key notarization path. After Apple accepts the DMG, the script staples tickets to the app and DMG, verifies them, and collects only the DMG. Exit, failure, and cancellation clean up the temporary keychain, `.p12`, and `.p8`; credentials are excluded from caches and uploaded artifacts. Initial notarization can exceed 30 minutes; a timeout stops upload. Check Apple's processing status before rerunning.
+
+GitHub encrypts Secrets at rest, but cannot prevent someone authorized to modify a trusted release workflow from stealing its credentials. Limit repository write access and permission to modify release branches and tags, and review changes to the workflow and its scripts. Third-party Actions in the macOS job are pinned to commit SHAs. Never enable shell tracing or dump environment variables in credential-bearing steps. Developer names, Team IDs, and public certificates in signed artifacts are public information; signing private keys and API private keys must not appear in artifacts.
 
 ## FAQ
 

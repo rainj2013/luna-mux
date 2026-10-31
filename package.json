@@ -1,6 +1,6 @@
 {
   "name": "luna-mux",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "description": "A local and remote terminal workspace for coding agents",
   "license": "MIT",
   "type": "module",
@@ -28,13 +28,14 @@
     "terminal-renderer:test": "node --experimental-strip-types --test tests/terminal-renderer.test.mts",
     "terminal-snapshot:test": "node --experimental-strip-types --test tests/terminal-snapshot.test.mts",
     "dsh-tui:test": "node --test tests/dsh-tui-bridge.test.mjs tests/dsh-tui-terminal-compat.test.mjs",
+    "macos-release:test": "node --test tests/macos-release.test.mjs",
     "agent-browser:sync": "node scripts/sync-agent-browser-sidecar.mjs",
     "conpty:sync": "node scripts/sync-windows-conpty.mjs",
     "precheck": "npm run conpty:sync",
     "pretest": "npm run conpty:sync",
     "i18n:check": "node scripts/check-i18n.mjs",
     "typecheck": "tsc --noEmit",
-    "check": "npm run product:check && npm run runtime:check && npm run icons:check && npm run i18n:check && npm run terminal-input:test && npm run terminal-renderer:test && npm run terminal-snapshot:test && npm run dsh-tui:test && npm run typecheck && cargo check --manifest-path app/native/Cargo.toml",
+    "check": "npm run product:check && npm run runtime:check && npm run icons:check && npm run i18n:check && npm run terminal-input:test && npm run terminal-renderer:test && npm run terminal-snapshot:test && npm run dsh-tui:test && npm run macos-release:test && npm run typecheck && cargo check --manifest-path app/native/Cargo.toml",
     "test": "cargo test --manifest-path app/native/Cargo.toml"
   },
   "dependencies": {
