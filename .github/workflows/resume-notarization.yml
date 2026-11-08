@@ -63,21 +63,44 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+      - name: Find verified installer in original build
+        id: finalized
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ needs.validate.outputs.source_run_id }}
+          RELEASE_ARCH: ${{ matrix.arch }}
+        run: |
+          names=$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/artifacts" --jq '.artifacts[] | select(.expired == false) | .name')
+          if grep -Fxq -- "release-macos-$RELEASE_ARCH" <<< "$names"; then
+            echo 'available=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'available=false' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Reuse verified original installer
+        if: steps.finalized.outputs.available == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: release-macos-${{ matrix.arch }}
+          path: release-assets
+          run-id: ${{ needs.validate.outputs.source_run_id }}
+          github-token: ${{ github.token }}
       - name: Restore exact signed checkpoint
+        if: steps.finalized.outputs.available != 'true'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: notarization-pending-macos-${{ matrix.arch }}
           path: notarization-pending/${{ matrix.arch }}
           run-id: ${{ needs.validate.outputs.source_run_id }}
           github-token: ${{ github.token }}
-      # actions/runner-images#14924: Intel runners drop Apple's HTTP/3 traffic.
-      - name: Use TCP for Apple ticket requests on Intel runners
-        if: matrix.arch == 'x64' && runner.environment == 'github-hosted'
+      # actions/runner-images#14924: Apple's HTTP/3 traffic can drop on hosted Macs.
+      - name: Use TCP for Apple ticket requests
+        if: steps.finalized.outputs.available != 'true' && runner.environment == 'github-hosted'
         run: |
           printf '%s\n' 'block return out quick proto udp from any to any port 443' | sudo pfctl -f -
           sudo pfctl -E
 
       - name: Resume original Apple submission
+        if: steps.finalized.outputs.available != 'true'
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
