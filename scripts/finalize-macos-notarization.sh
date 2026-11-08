@@ -55,10 +55,30 @@ codesign --verify --strict "$dmg"
 dmg_signature=$(codesign -dvv "$dmg" 2>&1)
 grep -Fx -- "Authority=$APPLE_SIGNING_IDENTITY" <<< "$dmg_signature" >/dev/null || fail 'Restored DMG has an unexpected signing identity.'
 "$app/Contents/MacOS/agent-browser" --version
-xcrun stapler staple "$app"
-xcrun stapler validate "$app"
-xcrun stapler staple "$dmg"
-xcrun stapler validate "$dmg"
+# Apple's ticket service can drop a connection after notarization is Accepted.
+# Retry only explicit transient network errors; every validation must still pass.
+stapler_with_retry() {
+  local attempt=1 status
+  while true; do
+    if xcrun stapler "$@" > "$work/stapler.log" 2>&1; then
+      cat "$work/stapler.log"
+      return 0
+    else
+      status=$?
+    fi
+    cat "$work/stapler.log"
+    if [[ "$attempt" -ge 3 ]] || ! grep -Eq 'NSURLErrorDomain Code=-(1001|1004|1005|1006|1009)([^0-9]|$)' "$work/stapler.log"; then
+      return "$status"
+    fi
+    echo "::warning::Apple ticket service network error; retrying stapler ($attempt/3)."
+    sleep "$((attempt * 10))"
+    attempt=$((attempt + 1))
+  done
+}
+stapler_with_retry staple "$app"
+stapler_with_retry validate "$app"
+stapler_with_retry staple "$dmg"
+stapler_with_retry validate "$dmg"
 spctl --assess --type execute --verbose=2 "$app"
 spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"
 hdiutil verify "$dmg"

@@ -22,6 +22,7 @@ const sub = args[0]
 if (process.env.MOCK_FAIL_TOOL === command ||
     (process.env.MOCK_FAIL_TOOL === 'stapler' && command === 'xcrun' && sub === 'stapler')) process.exit(14)
 if (command === 'uname') console.log('Darwin')
+if (command === 'sleep') record('sleep ' + sub)
 if (command === 'security') {
   record('security ' + sub)
   if (sub === 'list-keychains' && !args.includes('-s')) console.log('    "/tmp/Original Keychain.keychain-db"')
@@ -66,6 +67,19 @@ if (command === 'ditto') {
 }
 if (command === 'xcrun') {
   record('xcrun ' + args.slice(0, 2).join(' '))
+  if (sub === 'stapler' && args[1] === 'validate') {
+    if (process.env.MOCK_STAPLER_INVALID === '1') {
+      console.error('The ticket is invalid. The validate action failed! Error 68.')
+      process.exit(68)
+    }
+    const counter = process.env.MOCK_EVENTS + '.stapler-attempts'
+    const count = Number(fs.existsSync(counter) ? fs.readFileSync(counter, 'utf8') : 0) + 1
+    fs.writeFileSync(counter, String(count))
+    if (count <= Number(process.env.MOCK_STAPLER_NETWORK_FAILURES || 0)) {
+      console.error('Error Domain=NSURLErrorDomain Code=-1005 "The network connection was lost."')
+      process.exit(68)
+    }
+  }
   if (sub === 'stapler' && args[1] === 'staple' && args[2].endsWith('.dmg')) {
     fs.appendFileSync(args[2], '.ticket')
   }
@@ -99,7 +113,7 @@ async function scenario(t, overrides = {}) {
   const mockPath = path.join(bin, 'mock.mjs')
   await writeFile(mockPath, mock)
   await chmod(mockPath, 0o755)
-  for (const name of ['uname', 'security', 'npm', 'codesign', 'xcrun', 'spctl', 'hdiutil', 'ditto']) {
+  for (const name of ['uname', 'security', 'npm', 'codesign', 'xcrun', 'spctl', 'hdiutil', 'ditto', 'sleep']) {
     await symlink(mockPath, path.join(bin, name))
   }
   const localScript = path.join(directory, 'release-macos.sh')
@@ -168,6 +182,37 @@ releaseTest('a timed-out submission resumes original signed bytes without buildi
   assert.match(events, /notarytool wait/)
   assert.deepEqual(await readFile(path.join(checkpoint, 'Luna-Mux_macos-x64.dmg')), before)
   assert.deepEqual(await readFile(path.join(result.directory, 'release-assets/Luna-Mux_macos-x64.dmg')), Buffer.concat([before, Buffer.from('.ticket')]))
+})
+
+releaseTest('transient Apple ticket network errors retry validation before publishing', async (t) => {
+  const result = await scenario(t, { MOCK_STAPLER_NETWORK_FAILURES: '2' })
+  assert.ifError(result.error)
+  assert.equal((result.events.match(/xcrun stapler validate/g) || []).length, 4)
+  assert.match(result.events, /sleep 10[\s\S]*sleep 20/)
+  assert.match(result.events, /spctl/)
+  assert.match(result.events, /hdiutil/)
+  assert.equal((result.events.match(/notarytool submit/g) || []).length, 1)
+  assert.equal((await readdir(path.join(result.directory, 'release-assets'))).length, 1)
+})
+
+releaseTest('persistent Apple ticket network errors stop after three attempts and preserve the checkpoint', async (t) => {
+  const result = await scenario(t, { MOCK_STAPLER_NETWORK_FAILURES: '10' })
+  assert.equal(result.error?.code, 68)
+  assert.equal((result.events.match(/xcrun stapler validate/g) || []).length, 3)
+  assert.equal((result.events.match(/sleep /g) || []).length, 2)
+  assert.doesNotMatch(result.events, /spctl/)
+  assert.equal((result.events.match(/hdiutil/g) || []).length, 1, 'only the pre-submission disk check runs')
+  await assert.rejects(readdir(path.join(result.directory, 'release-assets')), { code: 'ENOENT' })
+  assert.equal((await readFile(path.join(result.directory, 'notarization-pending/x64/Luna-Mux_macos-x64.dmg'))).toString(), 'signed installer fixture')
+})
+
+releaseTest('invalid Apple tickets fail immediately without network retries', async (t) => {
+  const result = await scenario(t, { MOCK_STAPLER_INVALID: '1' })
+  assert.equal(result.error?.code, 68)
+  assert.equal((result.events.match(/xcrun stapler validate/g) || []).length, 1)
+  assert.doesNotMatch(result.events, /sleep |spctl/)
+  assert.equal((result.events.match(/hdiutil/g) || []).length, 1, 'only the pre-submission disk check runs')
+  await assert.rejects(readdir(path.join(result.directory, 'release-assets')), { code: 'ENOENT' })
 })
 
 releaseTest('failure after stapling preserves an immutable checkpoint for another recovery', async (t) => {

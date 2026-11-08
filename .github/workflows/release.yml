@@ -93,6 +93,13 @@ jobs:
       - name: Build application
         run: npm run build -- --no-bundle --target "${{ matrix.target }}"
 
+      # actions/runner-images#14924: Intel runners drop Apple's HTTP/3 traffic.
+      - name: Use TCP for Apple ticket requests on Intel runners
+        if: matrix.arch == 'x64' && runner.environment == 'github-hosted'
+        run: |
+          printf '%s\n' 'block return out quick proto udp from any to any port 443' | sudo pfctl -f -
+          sudo pfctl -E
+
       - name: Sign and submit DMG once
         shell: bash
         env:
