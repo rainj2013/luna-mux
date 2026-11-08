@@ -33,6 +33,7 @@ export function AgentWorkbench({ children, approvals, approvalCount = 0 }: { chi
             {children}
           </section>
           <section className="browser-settings-page" id={`${pageId}-settings`} role="tabpanel" aria-labelledby={`${pageId}-settings-tab`} hidden={page !== 'settings'} tabIndex={0}>
+            <header className="browser-page-heading"><h2>{t('app.agentLaunchDefaults')}</h2><p>{t('app.agentSettingsNav')}</p></header>
             <AgentLaunchSettingsCard />
             <AgentSftpSettingsCard />
           </section>

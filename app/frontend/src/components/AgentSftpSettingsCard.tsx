@@ -36,7 +36,7 @@ export function AgentSftpSettingsCard(): React.JSX.Element {
   }
 
   return <section className="browser-settings-page">
-    <header className="browser-page-heading"><h2>{t('app.agentSftpTitle')}</h2><p>{t('app.agentSftpDescription')}</p></header>
+    <header className="browser-page-heading"><h3>{t('app.agentSftpTitle')}</h3><p>{t('app.agentSftpDescription')}</p></header>
     <div className="browser-tools-list"><div className="browser-tool-row">
       <span className="browser-tool-copy"><strong>{t('app.agentSftpLabel')}</strong><small id={descriptionId}>{t('app.agentSftpHelp')}</small></span>
       <label className="switch-control">

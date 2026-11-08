@@ -3,25 +3,25 @@ import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import process from 'node:process'
 
-const version = '0.39.1'
+const version = '0.41.2'
 const releases = {
   'win32-x64': {
     asset: 'agent-browser-win32-x64.exe',
     target: 'x86_64-pc-windows-msvc',
     extension: '.exe',
-    sha256: 'af1ff5f2afd5c187fb50ac3bbc1e7114baadc180d67cef63f644af9031be5049'
+    sha256: 'c2eadee7b67e326dfff02d5dd51a16ce7673eb165699d134b3ea5f05b4a7a9d0'
   },
   'darwin-x64': {
     asset: 'agent-browser-darwin-x64',
     target: 'x86_64-apple-darwin',
     extension: '',
-    sha256: '339cb9aa6dfd404856cf938df34cd3b4779c61dfd57fc257be11b14fd1a885f9'
+    sha256: 'fc55608c2222650e6e0d0154f9edebd203b63bf853b85d22240bfbddbb006ea1'
   },
   'darwin-arm64': {
     asset: 'agent-browser-darwin-arm64',
     target: 'aarch64-apple-darwin',
     extension: '',
-    sha256: 'cc18fac41d9dc9821918340a136e643286ea05544c4dd35671b796f1a874cdef'
+    sha256: '19680f06cf87d0095c318a2e80bea6b71523d95d3b651cd18d81885cd182477a'
   }
 }
 

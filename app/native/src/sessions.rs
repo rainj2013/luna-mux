@@ -1988,7 +1988,7 @@ mod ssh_compatibility_tests {
         async fn auth_publickey(
             &mut self,
             _user: &str,
-            _public_key: &russh::keys::PublicKey,
+            _public_key: server::VerifiedPublicKey<'_>,
         ) -> Result<server::Auth, Self::Error> {
             Ok(server::Auth::Accept)
         }
