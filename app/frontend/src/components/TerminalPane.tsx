@@ -13,7 +13,7 @@ import { configureTerminalImages } from '../terminal-images'
 import { serializeTerminalSnapshot } from '../terminal-snapshot'
 import { createTerminalOutputWriter, type TerminalOutputWriter } from '../terminal-output-writer'
 import { reconcileTerminalFit } from '../terminal-fit'
-import { agentImagePasteInput, codexControlMInput, handleCodexMultilinePasteEvent, routeTerminalPaste } from '../terminal-input'
+import { agentImagePasteInput, codexControlMInput, codexInsertNewline, codexPasteMode, handleCodexPasteEvent, routeTerminalPaste } from '../terminal-input'
 import { useI18n } from '../i18n'
 
 const terminalHighWaterMark = 1024 * 1024
@@ -90,13 +90,6 @@ export function discardTerminalSnapshot(paneId: string): void {
 }
 
 const fullWidthPunctuationPattern = /^[\u00b7\u2014\u2018\u2019\u201c\u201d\u2026\u3000-\u303f\uff01-\uff0f\uff1a-\uff20\uff3b-\uff40\uff5b-\uff65\uffe5]+$/u
-
-function shiftEnterInput(platform: string, targetId: string, codexTui: boolean): string {
-  const nativeWindowsPowershell = platform === 'win32' && (targetId === 'local:powershell' || targetId === 'local:powershell5')
-  // In ConPTY Win32 input mode LF becomes Ctrl+Enter, which Codex does not
-  // bind. ESC+CR becomes Alt+Enter, one of Codex's newline bindings.
-  return nativeWindowsPowershell && codexTui ? '\x1b\r' : '\n'
-}
 
 function terminalKeyCategory(event: KeyboardEvent): TerminalUiKeyCategory {
   if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) return 'printable'
@@ -499,8 +492,9 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
       }
     }
 
+    const currentCodexPasteMode = () => codexPasteMode(activeAgentAdapterIdRef.current, window.api.platform, targetIdRef.current)
     const pasteTerminalText = (text: string): void => {
-      routeTerminalPaste(text, activeAgentAdapterIdRef.current === 'codex', writeTerminalInput, (payload) => term.paste(payload))
+      routeTerminalPaste(text, currentCodexPasteMode(), writeTerminalInput, (payload) => term.paste(payload))
     }
 
     const pasteClipboard = async (): Promise<void> => {
@@ -520,11 +514,11 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
       }
     }
     pasteClipboardRef.current = pasteClipboard
-    const captureCodexMultilinePaste = (event: ClipboardEvent): void => {
+    const captureCodexPaste = (event: ClipboardEvent): void => {
       const text = event.clipboardData?.getData('text/plain')
-      handleCodexMultilinePasteEvent(
+      handleCodexPasteEvent(
         text,
-        activeAgentAdapterIdRef.current === 'codex',
+        currentCodexPasteMode(),
         () => event.preventDefault(),
         () => event.stopImmediatePropagation(),
         (payload) => {
@@ -533,7 +527,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
         }
       )
     }
-    term.element?.addEventListener('paste', captureCodexMultilinePaste, true)
+    term.element?.addEventListener('paste', captureCodexPaste, true)
 
     term.attachCustomKeyEventHandler((event) => {
       if (event.type === 'keydown') recordUiDiagnostic('keydown', terminalKeyCategory(event), 250)
@@ -557,7 +551,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
           event.stopPropagation()
           onAgentActionRef.current?.()
           writer.markInteractive()
-          writeTerminalInput(shiftEnterInput(window.api.platform, targetIdRef.current, activeAgentAdapterIdRef.current === 'codex'))
+          writeTerminalInput(currentCodexPasteMode() === 'windows' ? codexInsertNewline : '\n')
         } else if (event.type === 'keypress') {
           event.preventDefault()
           event.stopPropagation()
@@ -893,7 +887,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(fu
       textarea?.removeEventListener('blur', recordBlur)
       term.element?.removeEventListener('pointerdown', recordPointerDown)
       term.element?.removeEventListener('wheel', recordWheel)
-      term.element?.removeEventListener('paste', captureCodexMultilinePaste, true)
+      term.element?.removeEventListener('paste', captureCodexPaste, true)
       cancelImeComposition()
       stop(); observer.disconnect(); fitReconciler.dispose(); input.dispose(); resize.dispose(); scroll.dispose(); writer.dispose(); webglAddon.current?.dispose(); term.dispose()
       webglAddon.current = null; outputWriter.current = null; terminal.current = null; fitAddon.current = null

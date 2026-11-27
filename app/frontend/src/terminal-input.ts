@@ -1,6 +1,6 @@
 const bracketedPasteStart = '\x1b[200~'
 const bracketedPasteEnd = '\x1b[201~'
-const codexInsertNewline = '\x1b\r'
+export const codexInsertNewline = '\x1b\r'
 const launchProfileAdapters: Record<string, string> = {
   'dsh-tui.default': 'dsh-tui',
   'dsh-tui.auto': 'dsh-tui',
@@ -33,10 +33,21 @@ export function agentImagePasteInput(adapterId: string | undefined, platform: st
   return '\x16'
 }
 
-export function codexMultilinePastePayload(text: string): string | undefined {
-  if (!/[\r\n]/.test(text)) return undefined
-  const normalized = text.replace(/\r\n|\r|\n/g, '\r')
-  return `${bracketedPasteStart}${normalized}${bracketedPasteEnd}`
+export type CodexPasteMode = 'windows' | 'bracketed'
+
+export function codexPasteMode(adapterId: string | undefined, platform: string, targetId: string): CodexPasteMode | undefined {
+  if (adapterId !== 'codex') return undefined
+  return platform === 'win32' && (targetId === 'local:powershell' || targetId === 'local:powershell5') ? 'windows' : 'bracketed'
+}
+
+export function codexPastePayload(text: string, mode: CodexPasteMode): string | undefined {
+  const sanitized = text.replace(/\r\n|[\r\n\u0085\u2028\u2029]/g, '\n').replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, '')
+  if (mode === 'windows') {
+    const payload = sanitized.replace(/\n/g, codexInsertNewline).replace(/\t/g, '    ')
+    return payload === text ? undefined : payload
+  }
+  if (!sanitized.includes('\n')) return sanitized === text ? undefined : sanitized
+  return `${bracketedPasteStart}${sanitized.replace(/\n/g, '\r')}${bracketedPasteEnd}`
 }
 
 /**
@@ -50,30 +61,30 @@ export function codexControlMInput(codexTui: boolean): string | undefined {
 
 export function routeTerminalPaste(
   text: string,
-  codexTui: boolean,
+  mode: CodexPasteMode | undefined,
   writeDirect: (payload: string) => void,
   pasteWithTerminal: (payload: string) => void
 ): 'direct' | 'terminal' {
-  const codexPayload = codexTui ? codexMultilinePastePayload(text) : undefined
+  const codexPayload = mode ? codexPastePayload(text, mode) : undefined
   if (codexPayload !== undefined) {
-    writeDirect(codexPayload)
+    if (codexPayload) writeDirect(codexPayload)
     return 'direct'
   }
   pasteWithTerminal(text)
   return 'terminal'
 }
 
-export function handleCodexMultilinePasteEvent(
+export function handleCodexPasteEvent(
   text: string | undefined,
-  codexTui: boolean,
+  mode: CodexPasteMode | undefined,
   preventDefault: () => void,
   stopImmediatePropagation: () => void,
   writeDirect: (payload: string) => void
 ): boolean {
-  const payload = text !== undefined && codexTui ? codexMultilinePastePayload(text) : undefined
+  const payload = text !== undefined && mode ? codexPastePayload(text, mode) : undefined
   if (payload === undefined) return false
   preventDefault()
   stopImmediatePropagation()
-  writeDirect(payload)
+  if (payload) writeDirect(payload)
   return true
 }
