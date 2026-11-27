@@ -80,7 +80,7 @@ An interaction records its execution and captures the output cursor before sendi
 
 Raw output preserves temporal order, while the screen model represents current state after overwrites and clearing. They serve incremental reading and state assessment respectively. The model is derived from backend output, making hidden Panes observable independently of display rendering without creating a second output history. Prompt rules remain program-independent and must exclude prompts predating the interaction.
 
-Output, parsing, and waits have resource limits. Interaction records do not copy output history, and deduplication applies within the current app run. A PTY combines input echo, program output, and background output in one stream, so prompt matches and silence establish observation conditions rather than command success. Cancelling a wait does not interrupt a process.
+Output, parsing, and waits have resource limits. Interaction records do not copy output history. At capacity, completed records and records for exited Runtimes can be reclaimed; only digests of their deduplication keys remain until the app exits. Expired records cannot be read, but retries with the same key do not resend input. A PTY combines input echo, program output, and background output in one stream, so prompt matches and silence establish observation conditions rather than command success. Cancelling a wait does not interrupt a process.
 
 ### 3.5 Browser Resources
 

@@ -1,6 +1,6 @@
 //! Transport-neutral interaction observations. A match is not a command exit status.
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{Arc, Mutex, Weak},
     time::{Duration, Instant},
 };
@@ -14,7 +14,9 @@ use crate::{
     terminal_backend::TerminalBackend,
     terminal_cli::{CliObservation, PromptWait},
     terminal_runtime_contract::{TERMINAL_SCREEN_MAX_BYTES, TerminalScreenModes},
-    terminal_runtime_contract::{TerminalRuntimeOutputReadResult, TerminalRuntimeStatus},
+    terminal_runtime_contract::{
+        TerminalRuntime, TerminalRuntimeOutputReadResult, TerminalRuntimeStatus,
+    },
 };
 
 const MAX_RECORDS: usize = 1024;
@@ -391,7 +393,88 @@ struct Execution {
 #[derive(Default)]
 struct Registry {
     executions: HashMap<String, Arc<Execution>>,
+    retired_keys: HashSet<[u8; 32]>,
     gates: HashMap<String, Weak<AsyncMutex<()>>>,
+}
+
+impl Registry {
+    fn retry(
+        &self,
+        key_hash: [u8; 32],
+        runtime: &str,
+        signature: [u8; 32],
+    ) -> ControlResult<Option<String>> {
+        if self.retired_keys.contains(&key_hash) {
+            return Err(error(
+                ControlErrorCode::Conflict,
+                "The interaction record has expired; this idempotency key cannot resend input",
+            ));
+        }
+        match self
+            .executions
+            .values()
+            .find(|entry| entry.key_hash == key_hash)
+        {
+            Some(entry) if entry.signature == signature && entry.runtime == runtime => {
+                Ok(Some(entry.id.clone()))
+            }
+            Some(_) => Err(error(
+                ControlErrorCode::Conflict,
+                "Idempotency key belongs to a different interaction",
+            )),
+            None => Ok(None),
+        }
+    }
+
+    fn retire_one(
+        &mut self,
+        runtimes: &[TerminalRuntime],
+        snapshot_started: Instant,
+    ) -> ControlResult<()> {
+        let oldest = |eligible: &dyn Fn(&Execution) -> bool| {
+            self.executions
+                .values()
+                .filter(|entry| eligible(entry))
+                .min_by_key(|entry| entry.created)
+                .map(|entry| (entry.id.clone(), entry.key_hash))
+        };
+        let finished = oldest(&|entry| {
+            let state = entry.state.lock().expect("execution state");
+            state.finish.is_some() && state.input != InputState::Sending
+        });
+        let candidate = if finished.is_some() {
+            finished
+        } else {
+            let live: HashSet<_> = runtimes
+                .iter()
+                .filter(|runtime| runtime_is_live(&runtime.status))
+                .map(|runtime| runtime.runtime_id.as_str())
+                .collect();
+            oldest(&|entry| {
+                entry.created < snapshot_started
+                    && !live.contains(entry.runtime.as_str())
+                    && entry.state.lock().expect("execution state").input != InputState::Sending
+            })
+        };
+        let Some((id, key_hash)) = candidate else {
+            return Err(error(
+                ControlErrorCode::Unavailable,
+                "Interaction capacity is occupied by active records; finish or cancel an interaction",
+            ));
+        };
+        self.retired_keys.insert(key_hash);
+        self.executions.remove(&id);
+        Ok(())
+    }
+}
+
+fn runtime_is_live(status: &TerminalRuntimeStatus) -> bool {
+    matches!(
+        status,
+        TerminalRuntimeStatus::Running
+            | TerminalRuntimeStatus::Starting
+            | TerminalRuntimeStatus::Connecting
+    )
 }
 
 pub struct TerminalInteractionManager {
@@ -430,15 +513,9 @@ impl TerminalInteractionManager {
 
     fn running(&self, runtime: &str) -> ControlResult<bool> {
         let runtimes = self.backend.list().map_err(unavailable)?;
-        Ok(runtimes.iter().any(|r| {
-            r.runtime_id == runtime
-                && matches!(
-                    r.status,
-                    TerminalRuntimeStatus::Running
-                        | TerminalRuntimeStatus::Starting
-                        | TerminalRuntimeStatus::Connecting
-                )
-        }))
+        Ok(runtimes
+            .iter()
+            .any(|entry| entry.runtime_id == runtime && runtime_is_live(&entry.status)))
     }
 
     fn get(&self, owner: &str, runtime: &str, id: &str) -> ControlResult<Arc<Execution>> {
@@ -535,24 +612,19 @@ impl TerminalInteractionManager {
         }
         let signature: [u8; 32] =
             Sha256::digest(serde_json::to_vec(args).expect("serializable input")).into();
-        let key_hash: [u8; 32] = Sha256::digest(key.as_bytes()).into();
+        let key_hash: [u8; 32] = Sha256::new()
+            .chain_update(Sha256::digest(owner.as_bytes()))
+            .chain_update(key.as_bytes())
+            .finalize()
+            .into();
         // Recovery must not wait for an outstanding transport write to finish.
         if let Some(existing) = self
             .registry
             .lock()
             .expect("interaction registry")
-            .executions
-            .values()
-            .find(|e| e.owner == owner && e.key_hash == key_hash)
+            .retry(key_hash, runtime, signature)?
         {
-            return if existing.signature == signature && existing.runtime == runtime {
-                Ok(existing.id.clone())
-            } else {
-                Err(error(
-                    ControlErrorCode::Conflict,
-                    "Idempotency key belongs to a different interaction",
-                ))
-            };
+            return Ok(existing);
         }
         // Reservation and detached spawn have no await between them. Dropping an MCP
         // request after reservation cannot leave a retry free to send the input again.
@@ -562,22 +634,16 @@ impl TerminalInteractionManager {
             .map_err(|_| error(ControlErrorCode::Conflict, "Runtime input is busy"))?;
         {
             let registry = self.registry.lock().expect("interaction registry");
-            if let Some(existing) = registry
-                .executions
-                .values()
-                .find(|e| e.owner == owner && e.key_hash == key_hash)
-            {
-                return if existing.signature == signature && existing.runtime == runtime {
-                    Ok(existing.id.clone())
-                } else {
-                    Err(error(
-                        ControlErrorCode::Conflict,
-                        "Idempotency key belongs to a different interaction",
-                    ))
-                };
+            if let Some(existing) = registry.retry(key_hash, runtime, signature)? {
+                return Ok(existing);
             }
         }
-        if !self.running(runtime)? {
+        let snapshot_started = Instant::now();
+        let runtimes = self.backend.list().map_err(unavailable)?;
+        if !runtimes
+            .iter()
+            .any(|entry| entry.runtime_id == runtime && runtime_is_live(&entry.status))
+        {
             return Err(error(
                 ControlErrorCode::Unavailable,
                 "Runtime is not running",
@@ -629,21 +695,11 @@ impl TerminalInteractionManager {
         {
             let mut registry = self.registry.lock().expect("interaction registry");
             // Check globally again: callers may race the same key on different Runtimes.
-            if registry
-                .executions
-                .values()
-                .any(|e| e.owner == owner && e.key_hash == key_hash)
-            {
-                return Err(error(
-                    ControlErrorCode::Conflict,
-                    "Idempotency key is already reserved",
-                ));
+            if let Some(existing) = registry.retry(key_hash, runtime, signature)? {
+                return Ok(existing);
             }
             if registry.executions.len() >= MAX_RECORDS {
-                return Err(error(
-                    ControlErrorCode::Unavailable,
-                    "Interaction record limit reached for this application run",
-                ));
+                registry.retire_one(&runtimes, snapshot_started)?;
             }
             registry
                 .executions
@@ -1272,34 +1328,105 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn capacity_rejects_new_records_without_evicting_retry_reservations() {
+    async fn capacity_reuses_finished_slots_without_resending_retired_input() {
         let backend = Backend::new(MAX_BYTES);
         let manager = TerminalInteractionManager::new(backend.clone());
-        let mut first = String::new();
-        for index in 0..MAX_RECORDS {
+        *backend.response.lock().unwrap() = "mysql> ".into();
+        let first = manager.start("owner", "r", "first", &args()).await.unwrap();
+        assert_eq!(
+            wait(&manager, &first, 500, 64).await["observation"]["reason"],
+            "matched"
+        );
+        assert_eq!(
+            manager.start("owner", "r", "first", &args()).await.unwrap(),
+            first
+        );
+
+        let mut recent = String::new();
+        for index in 0..MAX_RECORDS + 4 {
             let id = manager
                 .start("owner", "r", &index.to_string(), &args())
                 .await
                 .unwrap();
-            if index == 0 {
-                first = id.clone();
-            }
             manager.cancel("owner", "r", &id).unwrap();
             tokio::task::yield_now().await;
+            recent = id;
+        }
+        assert_eq!(
+            manager.registry.lock().unwrap().executions.len(),
+            MAX_RECORDS
+        );
+        assert_eq!(
+            manager.get("owner", "r", &first).err().unwrap().code,
+            ControlErrorCode::NotFound
+        );
+        let retry = manager
+            .start("owner", "r", "first", &args())
+            .await
+            .unwrap_err();
+        assert_eq!(retry.code, ControlErrorCode::Conflict);
+        assert!(!retry.retryable);
+        assert_eq!(
+            manager
+                .start("owner", "r", &(MAX_RECORDS + 3).to_string(), &args())
+                .await
+                .unwrap(),
+            recent
+        );
+        let other = manager.start("other", "r", "first", &args()).await.unwrap();
+        manager.cancel("other", "r", &other).unwrap();
+        tokio::task::yield_now().await;
+        assert_eq!(backend.writes.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn retirement_preserves_live_interactions_and_reclaims_unobserved_exits() {
+        let backend = Backend::new(MAX_BYTES);
+        let manager = TerminalInteractionManager::new(backend.clone());
+        let stale_snapshot_started = Instant::now();
+        let id = manager.start("owner", "r", "key", &args()).await.unwrap();
+        let snapshot_started = Instant::now();
+        let live_runtimes = backend.list().unwrap();
+        {
+            let mut registry = manager.registry.lock().unwrap();
+            assert_eq!(
+                registry
+                    .retire_one(&backend.list().unwrap(), snapshot_started)
+                    .unwrap_err()
+                    .code,
+                ControlErrorCode::Unavailable
+            );
+            assert!(registry.executions.contains_key(&id));
+            backend.running.store(false, Ordering::SeqCst);
+            assert_eq!(
+                registry
+                    .retire_one(&backend.list().unwrap(), snapshot_started)
+                    .unwrap_err()
+                    .code,
+                ControlErrorCode::Unavailable
+            );
+            assert!(registry.executions.contains_key(&id));
+        }
+        let gate = manager.gate("r");
+        assert!(gate.try_lock().is_err());
+        drop(gate.lock().await);
+        {
+            let mut registry = manager.registry.lock().unwrap();
+            assert!(registry.retire_one(&live_runtimes, Instant::now()).is_err());
+            assert!(registry.retire_one(&[], stale_snapshot_started).is_err());
+            registry
+                .retire_one(&backend.list().unwrap(), Instant::now())
+                .unwrap();
+            assert!(!registry.executions.contains_key(&id));
         }
         assert_eq!(
             manager
-                .start("owner", "r", "overflow", &args())
+                .start("owner", "r", "key", &args())
                 .await
                 .unwrap_err()
                 .code,
-            ControlErrorCode::Unavailable
+            ControlErrorCode::Conflict
         );
-        assert_eq!(
-            manager.start("owner", "r", "0", &args()).await.unwrap(),
-            first
-        );
-        assert!(backend.writes.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
